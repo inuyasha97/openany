@@ -15,6 +15,8 @@ These steps are mandatory. Before editing, you **MUST**:
    those skills.
 3. Read the nearest `DOCUMENTATION.md` and package `README.md` when present.
 4. Follow local code and test precedent.
+5. For agent-host work in this fork, load the `agent-host-fork` skill before
+   editing: branch model, upstream sync, and code placement.
 
 If these sources materially conflict, stop and resolve the conflict instead of silently choosing one.
 Do not start editing when a matching skill or required reference has not been
