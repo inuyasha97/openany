@@ -1295,7 +1295,7 @@ export async function resyncBlockingRequestsForDirectory(
     const beforeSignatures = new Map(
       candidates.map((sessionId) => [sessionId, requestSignature(before.form[sessionId])]),
     )
-    const pendingForms = await opencodeClient.listPendingForms({ directories: [directory] })
+    const pendingForms = await getAgentRuntime().listPendingForms({ directories: [directory] })
     const grouped: Record<string, FormRequest[]> = {}
     for (const form of pendingForms) {
       if (!form?.id || !form.sessionID) continue
