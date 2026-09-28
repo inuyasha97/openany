@@ -39,6 +39,7 @@ import type {
   SyncEvent,
   ToolTransition,
 } from "@/lib/agent/events"
+import { GLOBAL_EVENT_DIRECTORY } from "@/lib/agent/events"
 
 // ---------------------------------------------------------------------------
 // Event vocabulary (defined in @/lib/agent/events, re-exported for consumers)
@@ -55,7 +56,7 @@ export type {
   ToolTransition,
 } from "@/lib/agent/events"
 
-export const GLOBAL_EVENT_DIRECTORY = "global"
+export { GLOBAL_EVENT_DIRECTORY, syncEventMessageID, syncEventSessionID } from "@/lib/agent/events"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -770,55 +771,4 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
 export function routeWireEvent(event: OpenCodeEvent): RoutedSyncEvent[] {
   const directory = eventDirectory(event)
   return translateWireEvent(event).map((translated) => ({ directory, event: translated }))
-}
-
-/** Session an event addresses, when it addresses one. */
-export function syncEventSessionID(event: SyncEvent): string | undefined {
-  switch (event.type) {
-    case "session.created":
-      return event.properties.info.id
-    case "message.updated":
-      return event.properties.info.sessionID
-    case "permission.asked":
-      return event.properties.sessionID
-    case "form.created":
-      return event.properties.form.sessionID
-    case "session.patched":
-    case "session.deleted":
-    case "session.forked":
-    case "session.revert.committed":
-    case "session.status":
-    case "session.idle":
-    case "session.error":
-    case "message.patched":
-    case "message.removed":
-    case "message.part.updated":
-    case "message.part.delta":
-    case "message.tool.transition":
-    case "message.parts.replaced":
-    case "message.compaction.delta":
-    case "permission.replied":
-    case "form.settled":
-      return event.properties.sessionID
-    default:
-      return undefined
-  }
-}
-
-/** Message an event addresses, when it addresses one. */
-export function syncEventMessageID(event: SyncEvent): string | undefined {
-  switch (event.type) {
-    case "message.updated":
-      return event.properties.info.id
-    case "message.part.updated":
-      return event.properties.part.messageID
-    case "message.patched":
-    case "message.removed":
-    case "message.part.delta":
-    case "message.tool.transition":
-    case "message.parts.replaced":
-      return event.properties.messageID
-    default:
-      return undefined
-  }
 }

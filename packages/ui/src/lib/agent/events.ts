@@ -152,3 +152,60 @@ export type RoutedSyncEvent = {
   directory: string
   event: SyncEvent
 }
+
+/** Routing key for an event that names no directory. */
+export const GLOBAL_EVENT_DIRECTORY = "global"
+
+/** The canonical name for a routed event. `RoutedSyncEvent` is kept as the existing name. */
+export type RoutedAgentEvent = RoutedSyncEvent
+
+/** Session an event addresses, when it addresses one. */
+export function syncEventSessionID(event: SyncEvent): string | undefined {
+  switch (event.type) {
+    case "session.created":
+      return event.properties.info.id
+    case "message.updated":
+      return event.properties.info.sessionID
+    case "permission.asked":
+      return event.properties.sessionID
+    case "form.created":
+      return event.properties.form.sessionID
+    case "session.patched":
+    case "session.deleted":
+    case "session.forked":
+    case "session.revert.committed":
+    case "session.status":
+    case "session.idle":
+    case "session.error":
+    case "message.patched":
+    case "message.removed":
+    case "message.part.updated":
+    case "message.part.delta":
+    case "message.tool.transition":
+    case "message.parts.replaced":
+    case "message.compaction.delta":
+    case "permission.replied":
+    case "form.settled":
+      return event.properties.sessionID
+    default:
+      return undefined
+  }
+}
+
+/** Message an event addresses, when it addresses one. */
+export function syncEventMessageID(event: SyncEvent): string | undefined {
+  switch (event.type) {
+    case "message.updated":
+      return event.properties.info.id
+    case "message.part.updated":
+      return event.properties.part.messageID
+    case "message.patched":
+    case "message.removed":
+    case "message.part.delta":
+    case "message.tool.transition":
+    case "message.parts.replaced":
+      return event.properties.messageID
+    default:
+      return undefined
+  }
+}
