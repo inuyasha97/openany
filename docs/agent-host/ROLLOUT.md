@@ -82,10 +82,10 @@ Definition of done for phases 1 to 3: the agent-domain path (chat, session, mess
 | M5 | Migrate the agent-domain callers | Chat, session and message callers move through the seam, area by area. | Medium |
 | M6 | Canonical `AgentSession` | Session becomes first-class with a runtime id and a native id; session projection moves into the adapter. | Medium |
 | M7 | Canonical `AgentMessage` and `AgentPart` | Message and part projection move into the adapter; stores consume the canonical model. | High |
-| M8 | Bucket 2 cleanup | Orchestration and policy leave `client.ts`. | High |
-| M9 | Bucket 3 and 4 cleanup | OpenChamber-owned routes leave the client; OpenCode-specific calls sit behind capability flags. | Medium |
+| M8 | Bucket 2 cleanup | Orchestration and policy leave `client.ts`. Deferred. | High |
+| M9 | Bucket 3 and 4 cleanup | OpenChamber-owned routes leave the client; OpenCode-specific calls sit behind capability flags. Deferred. | Medium |
 
-Order: M3, then M4, then M5, then M6 and M7, then M8 and M9. Every milestone follows the rules above: fork-owned code first, thin edits to shared files, sync often.
+Order: M3, then M4, then M5, then M6 and M7. M8 and M9 are deferred (2026-09-27): the definition of done for phases 1 to 3 is met at M7, and both are internal cleanups with regression risk and no observable change. Pick them up when a second runtime needs the policy split or the capability flags. Every milestone follows the rules above: fork-owned code first, thin edits to shared files, sync often.
 
 ## Milestone M1 (done)
 
