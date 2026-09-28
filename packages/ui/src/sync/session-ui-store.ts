@@ -18,7 +18,9 @@ import type { Metadata, ModelRef, Part, Session, TextPart } from "@/lib/opencode
 import type { AttachedFile, SessionContextUsage, SessionWorktreeAttachment } from "@/stores/types/sessionTypes"
 import type { PermissionMode } from "@/stores/utils/permissionAutoAccept"
 import type { WorktreeMetadata } from "@/types/worktree"
-import { opencodeClient, type SkillMentions } from "@/lib/opencode/client"
+import { opencodeClient } from "@/lib/opencode/client"
+import { getAgentRuntime } from "@/lib/agent/registry"
+import type { SkillMentions } from "@/lib/agent/contract"
 import { buildSkillMentionInstruction } from "@/lib/skillMentionInstruction"
 import { runtimeFetch } from "@/lib/runtime-fetch"
 import { useConfigStore } from "@/stores/useConfigStore"
@@ -243,7 +245,7 @@ export async function routeMessage(params: {
     // precedence when both lookups match.
     if (!matchedCommand && !matchedSkill) {
       const [liveCommands, skillsLoaded] = await Promise.all([
-        opencodeClient.listCommands(requestDirectory),
+        getAgentRuntime().listCommands(requestDirectory),
         useSkillsStore.getState().loadSkills(requestDirectory),
       ])
       matchedCommand = liveCommands.find((c) => c.name === cmdName)
@@ -268,7 +270,7 @@ export async function routeMessage(params: {
       // through the stream instead.
       params.appendSubmissions?.()
       const commandContext = [...contextItems, ...skillInstructionContext()]
-      await opencodeClient.sendCommand({
+      await getAgentRuntime().sendCommand({
         runtimeKey: params.runtimeKey,
         id: params.sessionId,
         model: selection.model,
@@ -301,7 +303,7 @@ export async function routeMessage(params: {
     directory: requestDirectory,
     files: sendFiles,
     appendSubmissions: params.appendSubmissions,
-    send: (messageID) => opencodeClient.sendMessage({
+    send: (messageID) => getAgentRuntime().sendPrompt({
       runtimeKey: params.runtimeKey,
       id: params.sessionId,
       providerID: params.providerID,
