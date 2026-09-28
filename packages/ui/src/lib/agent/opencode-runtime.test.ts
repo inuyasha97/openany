@@ -49,6 +49,9 @@ const recordingClient = (calls: Call[]): SessionClient => ({
   commitRevert: async (...args) => { calls.push({ method: "commitRevert", args }) },
   clearRevert: async (...args) => { calls.push({ method: "clearRevert", args }) },
   getSessionTurnDiff: async (...args) => { calls.push({ method: "getSessionTurnDiff", args }); return [] },
+  sendMessage: async (...args) => { calls.push({ method: "sendMessage", args }); return "msg_1" },
+  sendCommand: async (...args) => { calls.push({ method: "sendCommand", args }) },
+  listSessionsPage: async (...args) => { calls.push({ method: "listSessionsPage", args }); return { sessions: [], cursor: {} } },
 })
 
 const methodsOf = (calls: Call[]): string[] => calls.map((call) => call.method)
@@ -145,5 +148,14 @@ describe("OpenCodeRuntime", () => {
     const routed: RoutedSyncEvent[] = [{ directory: "global", event: { type: "server.connected", properties: {} } }]
     const runtime = new OpenCodeRuntime(recordingClient([]), () => routed)
     expect(runtime.translateEvent({ anything: true })).toBe(routed)
+  })
+
+  test("routes prompt, command and session page to the client", async () => {
+    const calls: Call[] = []
+    const runtime = new OpenCodeRuntime(recordingClient(calls))
+    await runtime.sendPrompt({ id: "ses_1", providerID: "p", text: "hi" })
+    await runtime.sendCommand({ id: "ses_1", command: "help" })
+    await runtime.listSessionsPage({ directory: "/repo" })
+    expect(methodsOf(calls)).toEqual(["sendMessage", "sendCommand", "listSessionsPage"])
   })
 })

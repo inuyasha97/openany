@@ -61,12 +61,30 @@ import {
   type Skill,
   type Vcs,
 } from "./model"
-import type { FetchPermissionResult, MessagePage } from "@/lib/agent/contract"
+import type {
+  FetchPermissionResult,
+  FileInputLite,
+  MessagePage,
+  SendCommandParams,
+  SendPromptParams,
+  SessionListOptions,
+  SessionPage,
+  SkillMentions,
+} from "@/lib/agent/contract"
 import { ascendingId } from "./ids"
 import { mergeConfigDocuments, projectAgent, projectMessages, projectProject, projectSession, projectVcs } from "./projection"
 
 export type { OpenCodeClient }
-export type { FetchPermissionResult, MessagePage }
+export type {
+  FetchPermissionResult,
+  FileInputLite,
+  MessagePage,
+  SendCommandParams,
+  SendPromptParams,
+  SessionListOptions,
+  SessionPage,
+  SkillMentions,
+}
 
 // Use relative path by default (works with both dev and nginx proxy server)
 // Can be overridden with VITE_OPENCODE_URL for absolute URLs in special deployments
@@ -175,17 +193,6 @@ export function normalizeOpencodeError(operation: string, error: unknown): Openc
     return wrapped
   }
   return new OpencodeApiError(operation, String(error), { cause: error })
-}
-
-/**
- * Skills the user named inline with `/name`, in order of appearance. They are
- * attached to the prompt by id so OpenCode loads each one with the message,
- * whatever the session is doing; a name that cannot be attached falls back to
- * the instruction the caller builds for it.
- */
-export type SkillMentions = {
-  names: readonly string[]
-  instructionFor: (names: readonly string[]) => string | null
 }
 
 type SkillAttachmentRef = { id: string; name: string }
@@ -379,43 +386,14 @@ export type ProjectFileSearchHit = {
   extension?: string
 }
 
-export type FileInputLite = {
-  id?: string
-  type: "file"
-  mime: string
-  filename?: string
-  url: string
-}
-
 type DirectorySwitchResult = {
   success: boolean
   restarted: boolean
   path: string
 }
 
-export type SessionPage = {
-  sessions: Session[]
-  cursor: { previous?: string; next?: string }
-  /**
-   * The isolated spaces the host merged into a global page, one mark per space, when the
-   * feature is on. Absent on a per-directory page and while the feature is off.
-   */
-  spaces?: SpaceMark[]
-}
-
 // The global list carries the mark beside the SDK's own fields; the SDK types do not know it.
 const sessionPageSpacesSchema = z.object({ spaces: z.array(spaceMarkSchema).optional() })
-
-export type SessionListOptions = {
-  directory?: string | null
-  /** No directory filter at all: every session the server knows. */
-  global?: boolean
-  limit?: number
-  order?: "asc" | "desc"
-  search?: string
-  cursor?: string
-  parentID?: string | null
-}
 
 export type ProviderCatalog = {
   providers: Provider[]
@@ -1052,27 +1030,7 @@ class OpencodeService {
    * Returns the user message id (client-generated so the optimistic message
    * reconciles in place when the server echoes it).
    */
-  async sendMessage(params: {
-    runtimeKey?: string
-    id: string
-    /** Switch the session to this model before sending; omit when unchanged. */
-    model?: ModelRef
-    /** Switch the session to this agent before sending; omit when unchanged. */
-    agent?: string
-    /** Provider the prompt will run on, for the provider circuit breaker. */
-    providerID: string
-    text: string
-    files?: Array<FileInputLite>
-    /** Context items sent ahead of the prompt as synthetic messages. */
-    context?: Array<{ text: string; metadata?: ContextPartMetadata; description?: string }>
-    messageId?: string
-    agentMentions?: Array<{ name: string; source?: { value: string; start: number; end: number } }>
-    metadata?: Metadata
-    delivery?: SessionInboxDelivery
-    directory?: string | null
-    /** Skills named inline; attached to the prompt so OpenCode loads them with it. */
-    skills?: SkillMentions
-  }): Promise<string> {
+  async sendMessage(params: SendPromptParams): Promise<string> {
     this.assertRuntimeUnchanged(params.runtimeKey)
 
     const messageId = params.messageId ?? ascendingId("msg")
@@ -1157,18 +1115,7 @@ class OpencodeService {
    * synthetic messages that do not start execution, so the command template
    * still expands on the server with the context already in the transcript.
    */
-  async sendCommand(params: {
-    runtimeKey?: string
-    id: string
-    model?: ModelRef
-    agent?: string
-    command: string
-    arguments?: string
-    files?: Array<FileInputLite>
-    context?: Array<{ text: string; metadata?: ContextPartMetadata; description?: string }>
-    delivery?: SessionInboxDelivery
-    directory?: string | null
-  }): Promise<void> {
+  async sendCommand(params: SendCommandParams): Promise<void> {
     this.assertRuntimeUnchanged(params.runtimeKey)
     const files = await Promise.all((params.files ?? []).map((file) => this.toPromptFile(file)))
     await this.applySendSelection(params.id, { model: params.model, agent: params.agent }, params.directory, params.runtimeKey)

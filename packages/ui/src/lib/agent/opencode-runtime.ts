@@ -20,6 +20,10 @@ import type {
   MessagePage,
   MoveSessionOptions,
   PendingRequestListOptions,
+  SendCommandParams,
+  SendPromptParams,
+  SessionListOptions,
+  SessionPage,
 } from "./contract"
 import type { RoutedAgentEvent, RoutedSyncEvent } from "./events"
 
@@ -31,6 +35,7 @@ export type SessionClient = Pick<
   | "forkSession" | "listAgents" | "listCommands" | "listMcpServers" | "connectMcpServer" | "disconnectMcpServer" | "listSkills"
   | "replyToForm" | "cancelForm" | "listPendingForms"
   | "stageRevert" | "commitRevert" | "clearRevert" | "getSessionTurnDiff"
+  | "sendMessage" | "sendCommand" | "listSessionsPage"
 >
 
 export type TranslateWirePayload = (payload: unknown) => RoutedSyncEvent[]
@@ -168,6 +173,18 @@ export class OpenCodeRuntime implements AgentRuntime {
 
   getSessionTurnDiff(sessionId: string, options?: { from?: string; to?: string; context?: number; directory?: string | null }): Promise<FileDiffInfo[]> {
     return this.client.getSessionTurnDiff(sessionId, options)
+  }
+
+  sendPrompt(params: SendPromptParams): Promise<string> {
+    return this.client.sendMessage(params)
+  }
+
+  sendCommand(params: SendCommandParams): Promise<void> {
+    return this.client.sendCommand(params)
+  }
+
+  listSessionsPage(options?: SessionListOptions): Promise<SessionPage> {
+    return this.client.listSessionsPage(options)
   }
 
   translateEvent(payload: unknown): RoutedAgentEvent[] {
