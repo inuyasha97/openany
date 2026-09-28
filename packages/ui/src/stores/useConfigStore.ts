@@ -6,6 +6,7 @@ import { devtools, persist } from "zustand/middleware";
 import { findCatalogModel, type Provider, type Model, type Agent, type Config } from "@/lib/opencode/model";
 import type { DesktopSettings } from "@/lib/desktop";
 import { opencodeClient, type OpencodeHealthProbe } from "@/lib/opencode/client";
+import { getAgentRuntime } from "@/lib/agent/registry";
 import { isSameProjectConfigError, readProjectConfigError, type ProjectConfigError } from "@/lib/opencode/configError";
 import { scopeMatches, subscribeToConfigChanges } from "@/lib/configSync";
 import type { ModelMetadata } from "@/types";
@@ -2391,7 +2392,7 @@ export const useConfigStore = create<ConfigStore>()(
                             const [agents, defaultsLoaded] = await Promise.all([
                                 measureStartupTrace(
                                     'loadAgents:api',
-                                    () => opencodeClient.listAgents(configDirectoryPath),
+                                    () => getAgentRuntime().listAgents(configDirectoryPath),
                                     { directoryKey, source, requestedDirectory, effectiveDirectory, attempt: attempt + 1 },
                                 ),
                                 get().loadSessionDefaults(),

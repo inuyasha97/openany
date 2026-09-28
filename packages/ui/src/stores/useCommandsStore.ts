@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { StoreApi, UseBoundStore } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import { opencodeClient } from "@/lib/opencode/client";
+import { getAgentRuntime } from "@/lib/agent/registry";
 import {
   startConfigUpdate,
   finishConfigUpdate,
@@ -311,7 +312,7 @@ export const useCommandsStore = create<CommandsStore>()(
 
                 // Ensure the list is scoped to the same directory we use for config source detection.
                 // v2 keeps skills in their own catalog, so every command here is a real command file.
-                const commands = await readCommandMetadata(generation, (signal) => opencodeClient.listCommands(directory, signal));
+                const commands = await readCommandMetadata(generation, (signal) => getAgentRuntime().listCommands(directory, signal));
                 if (generation !== commandsGeneration) return false;
 
                 const commandsWithScope = await Promise.all(

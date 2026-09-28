@@ -1,5 +1,6 @@
 import type { Project } from "@/lib/opencode/model"
 import { opencodeClient } from "@/lib/opencode/client"
+import { getAgentRuntime } from "@/lib/agent/registry"
 import { retry } from "./retry"
 import type { GlobalState, State } from "./types"
 import { runtimeFetch } from "../lib/runtime-fetch"
@@ -139,7 +140,7 @@ async function initializeDirectory(input: DirectoryBootstrapInput): Promise<Boot
   const critical = Promise.allSettled([
     read(async () => {
       const session_status = await readDirectoryStatusSnapshot(store, async () => {
-        const statuses = await opencodeClient.getActiveSessionStatuses(directory)
+        const statuses = await getAgentRuntime().getActiveStatus(directory)
         if (statuses === null) throw new Error("session.active failed")
         return statuses
       })
@@ -147,13 +148,13 @@ async function initializeDirectory(input: DirectoryBootstrapInput): Promise<Boot
     }),
     read(async () => {
       const form = await readDirectoryFormSnapshot(store, () => (
-        opencodeClient.listPendingForms({ directories: [directory], includeGlobal: false })
+        getAgentRuntime().listPendingForms({ directories: [directory], includeGlobal: false })
       ))
       commit({ form })
     }),
     read(async () => {
       const permission = await readDirectoryPermissionSnapshot(store, () => (
-        opencodeClient.listPendingPermissions({ directories: [directory], includeGlobal: false })
+        getAgentRuntime().listPermissions({ directories: [directory], includeGlobal: false })
       ))
       commit({ permission })
     }),

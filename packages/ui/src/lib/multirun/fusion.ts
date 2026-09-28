@@ -1,4 +1,5 @@
 import { opencodeClient } from '@/lib/opencode/client';
+import { getAgentRuntime } from '@/lib/agent/registry';
 import type { Session } from '@/lib/opencode/model';
 import type { GitWorktreeSnapshotResult } from '@/lib/api/types';
 import { getGitRangeDiff, snapshotGitWorktree } from '@/lib/gitApi';
@@ -83,7 +84,7 @@ async function loadFusionSources(
   const sources = await Promise.all(sourceIds.map(async (sessionId): Promise<FusionSource | null> => {
     const cached = sessionById.get(sessionId);
     if (!cached) throw new Error('Fusion source membership changed');
-    const session = await opencodeClient.getSession(sessionId, cached.directory);
+    const session = await getAgentRuntime().getSession(sessionId, cached.directory);
     assertCurrent();
     const location = await resolveRunMemberLocation(session, run);
     assertCurrent();
@@ -248,7 +249,7 @@ export async function startRunFusion(input: {
   }
 
   assertCurrent();
-  await opencodeClient.sendMessage({
+  await getAgentRuntime().sendPrompt({
     runtimeKey,
     id: fusionSession.id,
     providerID: judge.providerID,

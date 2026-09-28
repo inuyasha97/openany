@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Session } from '@/lib/opencode/model';
 import { opencodeClient } from '@/lib/opencode/client';
+import { getAgentRuntime } from '@/lib/agent/registry';
 import { filterManagedChatsForRuntime, listGlobalSessionPages, splitGlobalSessionsByArchived, type SessionPageLister } from '@/stores/globalSessions';
 import { getReviewTransferDirection, type ReviewTransferDirection } from '@/lib/reviewFlow';
 import { getOriginalSessionID, getReviewSessionID } from '@/lib/sessionReviewMetadata';
@@ -219,7 +220,7 @@ type DirectoryPageResult = {
 };
 
 /** The session-list transport, bound once so paging code stays testable. */
-const listSessionPage: SessionPageLister = (options) => opencodeClient.listSessionsPage(options);
+const listSessionPage: SessionPageLister = (options) => getAgentRuntime().listSessionsPage(options);
 
 const fetchDirectoryPages = async (
   directories: Set<string>,

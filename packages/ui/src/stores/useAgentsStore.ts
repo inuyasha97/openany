@@ -3,6 +3,7 @@ import type { StoreApi, UseBoundStore } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import type { Agent } from "@/lib/opencode/model";
 import { opencodeClient } from "@/lib/opencode/client";
+import { getAgentRuntime } from "@/lib/agent/registry";
 import { emitConfigChange, scopeMatches, subscribeToConfigChanges, type ConfigChangeScope } from "@/lib/configSync";
 import {
   startConfigUpdate,
@@ -451,7 +452,7 @@ export const useAgentsStore = create<AgentsStore>()(
                 // Ensure we list agents using the correct project context. Pass the
                 // directory directly so this shares the in-flight request with the config
                 // store instead of issuing a duplicate agents fetch at startup.
-                const agents = await opencodeClient.listAgents(configDirectory);
+                const agents = await getAgentRuntime().listAgents(configDirectory);
 
                 const agentsWithScope = await Promise.all(
                   agents.map(async (agent) => {
