@@ -14,10 +14,11 @@
  * Abort controller created once at init, cleaned up via returned cleanup fn.
  */
 
-import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client"
+import type { OpenCodeClient } from "@opencode/client"
 import { z } from "zod"
 import { opencodeClient } from "@/lib/opencode/client"
-import { GLOBAL_EVENT_DIRECTORY, routeWireEvent, syncEventSessionID, type SyncEvent } from "@/lib/opencode/events"
+import { GLOBAL_EVENT_DIRECTORY, syncEventSessionID, type SyncEvent } from "@/lib/agent/events"
+import { getAgentRuntime } from "@/lib/agent/registry"
 import type { Metadata } from "@/lib/opencode/model"
 import { getRuntimeUrlResolver } from "@/lib/runtime-url"
 import { clearRuntimeUrlAuthToken, refreshRuntimeUrlAuthToken } from "@/lib/runtime-auth"
@@ -180,15 +181,6 @@ const openchamberAutoAcceptSchema = z.object({
   }),
 })
 
-// The wire event contract is generated from the server; the stream is trusted
-// once its shape matches. Only the discriminator and location are checked here
-// because the translator narrows on `type` for everything else.
-const wireEventSchema = z.object({
-  id: z.string(),
-  type: z.string(),
-  location: z.object({ directory: z.string() }).partial().optional(),
-})
-
 function translateOpenchamberArchived(payload: unknown): SyncEvent | null {
   const parsed = openchamberArchivedSchema.safeParse(payload)
   if (!parsed.success) return null
@@ -235,11 +227,7 @@ function translateOpenchamberStatus(payload: unknown): SyncEvent | null {
 function translatePayload(payload: unknown, frameDirectory: string | undefined): Array<{ directory: string; event: SyncEvent }> {
   const bridged = translateOpenchamberStatus(payload) ?? translateOpenchamberArchived(payload) ?? translateOpenchamberNative(payload)
   if (bridged) return [{ directory: frameDirectory ?? GLOBAL_EVENT_DIRECTORY, event: bridged }]
-  if (!wireEventSchema.safeParse(payload).success) return []
-  // SAFETY: the discriminator and location were validated above; the rest of
-  // the shape is the server's generated contract, narrowed per `type` by the
-  // translator.
-  const routed = routeWireEvent(payload as OpenCodeEvent)
+  const routed = getAgentRuntime().translateEvent(payload)
   if (!frameDirectory) return routed
   return routed.map((entry) => (entry.directory === GLOBAL_EVENT_DIRECTORY ? { ...entry, directory: frameDirectory } : entry))
 }
