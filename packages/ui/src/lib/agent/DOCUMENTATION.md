@@ -14,4 +14,5 @@ Fork-owned agent runtime seam. See `docs/agent-host/DESIGN.md` and `docs/agent-h
 - Callers use `getAgentRuntime()`, not `opencodeClient`, for agent-domain operations.
 - The adapter is the only file here that imports `opencodeClient`.
 - The event vocabulary is defined here and re-exported from `lib/opencode/events.ts`. Do not define event types in the OpenCode module.
+- The runtime owns wire translation: the adapter exposes `translateEvent`, and the sync pipeline calls it instead of importing `lib/opencode/events`.
 - The contract grows only when a caller migrates; do not add methods no one uses.
