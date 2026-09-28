@@ -7,7 +7,7 @@ Fork-owned agent runtime seam. See `docs/agent-host/DESIGN.md` and `docs/agent-h
 - `contract.ts` holds `AgentRuntime`, `AgentCapabilities`, and the parameter types. Runtime-neutral. It also defines `AgentSession`, a `Session` that names its runtime and native session id.
 - `events.ts` holds the canonical event vocabulary: `AgentEvent` (alias `SyncEvent`) and the payload types. Runtime-neutral; the OpenCode adapter translates wire events into these in `lib/opencode/events.ts`.
 - `opencode-runtime.ts` holds `OpenCodeRuntime`, the adapter over `opencodeClient`, and `SessionClient`, the structural client type it depends on.
-- `registry.ts` holds `getAgentRuntime()` and `setAgentRuntime()`. The active runtime is resolved at call time, never cached across endpoints.
+- `registry.ts` holds the runtime manager: `getAgentRuntime(runtimeId?)`, `registerAgentRuntime()`, `clearAgentRuntimes()`. A registered runtime wins by id; otherwise the OpenCode runtime is built once. Resolved at call time, never cached across endpoints.
 - `use-agent-runtime.ts` holds `useAgentRuntime()`, the React access to the active runtime.
 
 ## Rules
