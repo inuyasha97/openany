@@ -19,4 +19,5 @@ Fork-owned agent runtime seam. See `docs/agent-host/DESIGN.md` and `docs/agent-h
 - `contract.ts` carries the session, message, permission, form, revert and catalog operations. Every method is required; `AgentCapabilities` gates which ones a caller uses.
 - React callers use `useAgentRuntime()`; plain modules use `getAgentRuntime()`. Agent-domain calls go through the runtime; OpenChamber-owned and OpenCode-specific calls stay on `opencodeClient`.
 - A projected session carries `runtimeId` and `nativeSessionId`. Stores keep the base `Session` type; code that needs the runtime identity types as `AgentSession`.
+- `AgentMessage` and `AgentPart` are the contract's names for messages and parts. They equal the domain model while one runtime exists.
 - The contract grows only when a caller migrates; do not add methods no one uses.
