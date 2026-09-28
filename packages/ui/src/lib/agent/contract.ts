@@ -1,5 +1,5 @@
 import type { SessionInboxDelivery } from "@opencode/client"
-import type { Metadata, ModelRef, Session } from "@/lib/opencode/model"
+import type { Message, Metadata, ModelRef, Part, PermissionRequest, Session } from "@/lib/opencode/model"
 import type { RoutedAgentEvent } from "./events"
 
 export type AgentCapabilities = {
@@ -21,6 +21,16 @@ export type CreateSessionParams = {
 }
 
 export type MoveSessionOptions = { delivery?: SessionInboxDelivery }
+
+export type MessagePage = {
+  items: Array<{ info: Message; parts: Part[] }>
+  cursor: { previous?: string; next?: string }
+}
+
+export type FetchPermissionResult =
+  | { state: "ok"; permission: PermissionRequest }
+  | { state: "resolved" }
+  | { state: "unknown" }
 
 export type AgentRuntime = {
   readonly id: string

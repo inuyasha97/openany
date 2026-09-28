@@ -61,10 +61,12 @@ import {
   type Skill,
   type Vcs,
 } from "./model"
+import type { FetchPermissionResult, MessagePage } from "@/lib/agent/contract"
 import { ascendingId } from "./ids"
 import { mergeConfigDocuments, projectAgent, projectMessages, projectProject, projectSession, projectVcs } from "./projection"
 
 export type { OpenCodeClient }
+export type { FetchPermissionResult, MessagePage }
 
 // Use relative path by default (works with both dev and nginx proxy server)
 // Can be overridden with VITE_OPENCODE_URL for absolute URLs in special deployments
@@ -391,11 +393,6 @@ type DirectorySwitchResult = {
   path: string
 }
 
-export type MessagePage = {
-  items: Array<{ info: Message; parts: Part[] }>
-  cursor: { previous?: string; next?: string }
-}
-
 export type SessionPage = {
   sessions: Session[]
   cursor: { previous?: string; next?: string }
@@ -425,16 +422,6 @@ export type ProviderCatalog = {
   models: Model[]
   default?: ModelRef
 }
-
-/**
- * Tagged result of `OpencodeService.fetchPermission()`. The caller can
- * distinguish a server-confirmed "no longer pending" permission (HTTP
- * 404) from a fetch failure (network error, malformed response).
- */
-export type FetchPermissionResult =
-  | { state: "ok"; permission: PermissionRequest }
-  | { state: "resolved" }
-  | { state: "unknown" }
 
 type DirectoryAvailability = "available" | "missing" | "unknown"
 type PendingRequestListOptions = {
