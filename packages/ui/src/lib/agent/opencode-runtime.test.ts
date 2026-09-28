@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Session } from "@/lib/opencode/model"
+import type { MessagePage } from "./contract"
 import type { RoutedSyncEvent } from "./events"
 import { OpenCodeRuntime, type SessionClient } from "./opencode-runtime"
 
@@ -13,22 +14,48 @@ const sessionFixture: Session = {
   time: { created: 1, updated: 1 },
 }
 
-const recordingClient = (): { client: SessionClient; seen: string[] } => {
-  const seen: string[] = []
-  const client: SessionClient = {
-    createSession: async () => { seen.push("createSession"); return sessionFixture },
-    getSession: async () => { seen.push("getSession"); return sessionFixture },
-    listSessions: async () => { seen.push("listSessions"); return [sessionFixture] },
-    deleteSession: async () => { seen.push("deleteSession"); return true },
-    renameSession: async () => { seen.push("renameSession") },
-    moveSession: async () => { seen.push("moveSession") },
-  }
-  return { client, seen }
-}
+const emptyPage: MessagePage = { items: [], cursor: {} }
+
+type Call = { method: string; args: readonly unknown[] }
+
+const recordingClient = (calls: Call[]): SessionClient => ({
+  createSession: async (...args) => { calls.push({ method: "createSession", args }); return sessionFixture },
+  getSession: async (...args) => { calls.push({ method: "getSession", args }); return sessionFixture },
+  listSessions: async (...args) => { calls.push({ method: "listSessions", args }); return [sessionFixture] },
+  deleteSession: async (...args) => { calls.push({ method: "deleteSession", args }); return true },
+  renameSession: async (...args) => { calls.push({ method: "renameSession", args }) },
+  moveSession: async (...args) => { calls.push({ method: "moveSession", args }) },
+  getSessionMessages: async (...args) => { calls.push({ method: "getSessionMessages", args }); return emptyPage },
+  abortSession: async (...args) => { calls.push({ method: "abortSession", args }); return true },
+  replyToPermission: async (...args) => { calls.push({ method: "replyToPermission", args }); return true },
+  fetchPermission: async (...args) => { calls.push({ method: "fetchPermission", args }); return { state: "resolved" } },
+  listPendingPermissions: async (...args) => { calls.push({ method: "listPendingPermissions", args }); return [] },
+  switchSessionModel: async (...args) => { calls.push({ method: "switchSessionModel", args }) },
+  switchSessionAgent: async (...args) => { calls.push({ method: "switchSessionAgent", args }) },
+  getActiveSessionStatuses: async (...args) => { calls.push({ method: "getActiveSessionStatuses", args }); return null },
+  forkSession: async (...args) => { calls.push({ method: "forkSession", args }); return sessionFixture },
+  listAgents: async (...args) => { calls.push({ method: "listAgents", args }); return [] },
+  listCommands: async (...args) => { calls.push({ method: "listCommands", args }); return [] },
+  listMcpServers: async (...args) => { calls.push({ method: "listMcpServers", args }); return [] },
+  connectMcpServer: async (...args) => { calls.push({ method: "connectMcpServer", args }) },
+  disconnectMcpServer: async (...args) => { calls.push({ method: "disconnectMcpServer", args }) },
+  listSkills: async (...args) => { calls.push({ method: "listSkills", args }); return [] },
+  replyToForm: async (...args) => { calls.push({ method: "replyToForm", args }); return true },
+  cancelForm: async (...args) => { calls.push({ method: "cancelForm", args }); return true },
+  listPendingForms: async (...args) => { calls.push({ method: "listPendingForms", args }); return [] },
+  // SessionRevert carries branded id types the fake cannot build cheaply, so
+  // this method is compiler-covered and not exercised here.
+  stageRevert: async () => { throw new Error("stageRevert not exercised") },
+  commitRevert: async (...args) => { calls.push({ method: "commitRevert", args }) },
+  clearRevert: async (...args) => { calls.push({ method: "clearRevert", args }) },
+  getSessionTurnDiff: async (...args) => { calls.push({ method: "getSessionTurnDiff", args }); return [] },
+})
+
+const methodsOf = (calls: Call[]): string[] => calls.map((call) => call.method)
 
 describe("OpenCodeRuntime", () => {
   test("declares the OpenCode capability set", () => {
-    const runtime = new OpenCodeRuntime(recordingClient().client)
+    const runtime = new OpenCodeRuntime(recordingClient([]))
     expect(runtime.id).toBe("opencode")
     expect(runtime.capabilities).toEqual({
       fork: true,
@@ -38,40 +65,85 @@ describe("OpenCodeRuntime", () => {
       permissions: true,
       modelSelection: true,
       agentSelection: true,
+      forms: true,
+      revert: true,
+      turnDiff: true,
+      skills: true,
     })
   })
 
   test("delegates every session method to the same client method", async () => {
-    const { client, seen } = recordingClient()
-    const runtime = new OpenCodeRuntime(client)
+    const calls: Call[] = []
+    const runtime = new OpenCodeRuntime(recordingClient(calls))
     await runtime.createSession({ title: "t" }, "/repo")
     await runtime.getSession("ses_1", "/repo")
     await runtime.listSessions("/repo")
     await runtime.deleteSession("ses_1", "/repo")
     await runtime.renameSession("ses_1", "t", "/repo")
     await runtime.moveSession("ses_1", "/repo2")
-    expect(seen).toEqual(["createSession", "getSession", "listSessions", "deleteSession", "renameSession", "moveSession"])
+    expect(methodsOf(calls)).toEqual(["createSession", "getSession", "listSessions", "deleteSession", "renameSession", "moveSession"])
   })
 
-  test("forwards arguments and returns the client value", async () => {
-    let received: unknown[] = []
-    const client: SessionClient = {
-      createSession: async (params, directory) => { received = [params, directory]; return sessionFixture },
-      getSession: async () => sessionFixture,
-      listSessions: async () => [sessionFixture],
-      deleteSession: async () => true,
-      renameSession: async () => undefined,
-      moveSession: async () => undefined,
-    }
-    const runtime = new OpenCodeRuntime(client)
+  test("forwards createSession arguments and returns the client value", async () => {
+    const calls: Call[] = []
+    const runtime = new OpenCodeRuntime(recordingClient(calls))
     const created = await runtime.createSession({ title: "x" }, "/repo")
-    expect(received).toEqual([{ title: "x" }, "/repo"])
+    expect(calls[0].args).toEqual([{ title: "x" }, "/repo"])
     expect(created).toBe(sessionFixture)
+  })
+
+  test("routes each agent-domain method to the matching client method", async () => {
+    const calls: Call[] = []
+    const runtime = new OpenCodeRuntime(recordingClient(calls))
+    await runtime.getMessages("ses_1", undefined, "/repo")
+    await runtime.cancel("ses_1", "/repo")
+    await runtime.replyPermission("ses_1", "req_1", "once", { directory: "/repo" })
+    await runtime.getPermission("ses_1", "req_1", "/repo")
+    await runtime.listPermissions({ directories: ["/repo"] })
+    await runtime.selectModel("ses_1", { providerID: "p", id: "m" }, "/repo")
+    await runtime.selectAgent("ses_1", "build", "/repo")
+    await runtime.getActiveStatus("/repo")
+    await runtime.forkSession?.("ses_1", { directory: "/repo" })
+    await runtime.listAgents?.("/repo")
+    await runtime.listCommands?.("/repo")
+    await runtime.listMcpServers?.("/repo")
+    await runtime.connectMcpServer?.("srv", "/repo")
+    await runtime.disconnectMcpServer?.("srv", "/repo")
+    await runtime.listSkills?.("/repo")
+    await runtime.replyForm?.("ses_1", "form_1", {}, "/repo")
+    await runtime.cancelForm?.("ses_1", "form_1", "/repo")
+    await runtime.listPendingForms?.({ directories: ["/repo"] })
+    await runtime.commitRevert?.("ses_1", "/repo")
+    await runtime.clearRevert?.("ses_1", "/repo")
+    await runtime.getSessionTurnDiff?.("ses_1", { directory: "/repo" })
+    expect(methodsOf(calls)).toEqual([
+      "getSessionMessages",
+      "abortSession",
+      "replyToPermission",
+      "fetchPermission",
+      "listPendingPermissions",
+      "switchSessionModel",
+      "switchSessionAgent",
+      "getActiveSessionStatuses",
+      "forkSession",
+      "listAgents",
+      "listCommands",
+      "listMcpServers",
+      "connectMcpServer",
+      "disconnectMcpServer",
+      "listSkills",
+      "replyToForm",
+      "cancelForm",
+      "listPendingForms",
+      "commitRevert",
+      "clearRevert",
+      "getSessionTurnDiff",
+    ])
   })
 
   test("delegates event translation to the injected translator", () => {
     const routed: RoutedSyncEvent[] = [{ directory: "global", event: { type: "server.connected", properties: {} } }]
-    const runtime = new OpenCodeRuntime(recordingClient().client, () => routed)
+    const runtime = new OpenCodeRuntime(recordingClient([]), () => routed)
     expect(runtime.translateEvent({ anything: true })).toBe(routed)
   })
 })
