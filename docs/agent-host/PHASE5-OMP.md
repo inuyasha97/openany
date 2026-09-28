@@ -35,9 +35,19 @@ Order: P5.1, then P5.2, then P5.3, then P5.4.
 
 ## Status
 
-P5.1 started: `packages/omp-adapter/package.json` created with the OMP dependency; `bun install` added it and changed `bun.lock`. The next step is to verify the OMP SDK API from the installed package and implement the minimal `OmpRuntime` with tests.
+Resume here. Done so far:
+
+- P5.1: `packages/omp-adapter/` holds `OmpRuntime` over an `OmpHost` seam, with 6 tests (`runtime.ts`, `runtime.test.ts`, `index.ts`). See `plans/2026-09-27-p5-1-omp-runtime.md`.
+- The real SDK binding: `sdk-host.ts` (`createOmpHost()`), using `SessionManager.listAll()`, `createAgentSession({ cwd })`, `session.switchSession(path)`, and the handle's `sessionId`/`prompt`/`abort`/`subscribe`/`dispose`/`sessionFile`.
+- `mapping.ts` (`toOmpSessionInfo`, pure) and `mapping-events.ts` (`toSyncEvents`): the run boundaries map to `session.status busy` and `session.idle`. 11 tests total, all green.
+- The package resolves the canonical types through the UI path alias (`@openchamber/ui/*` and `@/*` -> `../ui/src/*` in `packages/omp-adapter/tsconfig.json`), so `SyncEvent` is imported type-only from `@openchamber/ui/lib/agent/events`. Verified working.
+
+Next step (P5.4, the largest piece): map OMP message and tool events to `SyncEvent`. `message_update`/`text_delta` -> `message.part.delta`; `tool_execution_start`/`update`/`end` -> `message.tool.transition`. This needs a projection from OMP messages and parts onto the UI `Message`/`Part` model, comparable to Grove's `packages/omp-adapter/src/mapping.ts`.
+
+Then P5.2 (server routes and the bridge frame) and P5.3 (`OmpRuntimeClient` in the UI, registered with `runtimeId = "omp"`).
 
 ## Open questions
 
-- The minimal `OmpRuntime`'s exact surface: which OMP SDK calls back session list/create/get, prompt and abort.
+- The OMP message and part identity convention: how an OMP message id and text/tool part map onto the UI's `partIds` addressing (`(assistantMessageID, ordinal)` for text, the call id for tools).
 - Whether the server routes are registered in a new fork-owned module or through the existing route composition (the latter is upstream-tracked).
+
