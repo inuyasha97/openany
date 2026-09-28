@@ -1,4 +1,4 @@
-import { opencodeClient } from '@/lib/opencode/client';
+import { getAgentRuntime } from '@/lib/agent/registry';
 import type { Session } from '@/lib/opencode/model';
 import { normalizePath } from '@/lib/pathNormalization';
 import { snapshotGitWorktree } from '@/lib/gitApi';
@@ -12,7 +12,7 @@ import type { WorktreeMetadata } from '@/types/worktree';
 import { getMultiRunIdentity } from './identity';
 import type { MultiRunSummary } from './runs';
 
-const listSessionPage: SessionPageLister = (options) => opencodeClient.listSessionsPage(options);
+const listSessionPage: SessionPageLister = (options) => getAgentRuntime().listSessionsPage(options);
 
 type KeepFailureReason = 'membership-changed' | 'snapshot-failed' | 'archive-failed' | 'worktree-in-use' | 'worktree-removal-failed';
 
@@ -93,7 +93,7 @@ export async function keepRunMember(
     }
     let current: Session;
     try {
-      current = await opencodeClient.getSession(sessionId, cached.directory);
+      current = await getAgentRuntime().getSession(sessionId, cached.directory);
     } catch {
       assertCurrent();
       result.failures.push({ sessionId, reason: 'membership-changed' });

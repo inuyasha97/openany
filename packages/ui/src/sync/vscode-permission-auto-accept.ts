@@ -1,5 +1,5 @@
 import type { PermissionRequest, Session } from "@/lib/opencode/model"
-import { opencodeClient } from "@/lib/opencode/client"
+import { getAgentRuntime } from "@/lib/agent/registry"
 import { usePermissionStore } from "@/stores/permissionStore"
 import { getAllSyncSessionMap, getDirectoryState } from "./sync-refs"
 import * as sessionActions from "./session-actions"
@@ -135,10 +135,10 @@ const runtime = createVSCodePermissionAutoAcceptRuntime({
     Object.entries(usePermissionStore.getState().modes).map(([sessionId, mode]) => [sessionId, mode !== "ask"]),
   ),
   getSessions: getAllSyncSessionMap,
-  getSession: (sessionId, directory) => opencodeClient.getSession(sessionId, directory),
+  getSession: (sessionId, directory) => getAgentRuntime().getSession(sessionId, directory),
   getKnownPendingPermissions: (directory) => Object.values(getDirectoryState(directory)?.permission ?? {}).flat(),
-  listPendingPermissions: (directory) => opencodeClient.listPendingPermissions({ directories: [directory] }),
-  getPermissionState: async (sessionId, requestId, directory) => (await opencodeClient.fetchPermission(sessionId, requestId, directory)).state,
+  listPendingPermissions: (directory) => getAgentRuntime().listPermissions({ directories: [directory] }),
+  getPermissionState: async (sessionId, requestId, directory) => (await getAgentRuntime().getPermission(sessionId, requestId, directory)).state,
   reply: (sessionId, requestId, directory) => sessionActions.respondToPermission(sessionId, requestId, "once", directory),
   wait: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
 })

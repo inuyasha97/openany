@@ -1,6 +1,7 @@
 import type { PermissionMode } from '@/stores/utils/permissionAutoAccept';
 import type { Message, Part, Session } from '@/lib/opencode/model';
-import { opencodeClient, type SkillMentions } from '@/lib/opencode/client';
+import type { SkillMentions } from '@/lib/agent/contract';
+import { getAgentRuntime } from '@/lib/agent/registry';
 import * as sessionActions from '@/sync/session-actions';
 import { withBtwSessionLink, withBtwSessionMarker, withoutBtwSessionLink, withoutBtwSessionMarker } from '@/lib/sessionBtwMetadata';
 import { useBtwStore } from '@/stores/useBtwStore';
@@ -203,7 +204,7 @@ export async function startBtwSession(input: StartBtwInput): Promise<Session> {
     const forkPointMessageID = findLastCompletedAssistantMessageID(parentMessages);
     // No completed turn to fork at means take the whole parent transcript,
     // which is what an omitted `before` asks for.
-    const forked = await opencodeClient.forkSession(input.parentSessionId, {
+    const forked = await getAgentRuntime().forkSession(input.parentSessionId, {
       before: forkPointMessageID ?? undefined,
       directory: input.directory,
     });
@@ -228,7 +229,7 @@ export async function startBtwSession(input: StartBtwInput): Promise<Session> {
         if (getRuntimeKey() !== expectedRuntimeKey) throw new Error('runtime changed');
       }
       // Locate the inherited-history boundary by identity, not by ID ordering.
-      const newestCloned = await opencodeClient.getSessionMessages(forked.id, { limit: 1 }, sessionDirectory);
+      const newestCloned = await getAgentRuntime().getMessages(forked.id, { limit: 1 }, sessionDirectory);
       // A `null` boundary makes the panel show every inherited message, so an
       // empty read must not be taken as "the fork inherited nothing" when we
       // know it did: having picked a fork point proves the parent had turns.

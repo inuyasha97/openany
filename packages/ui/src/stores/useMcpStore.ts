@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import type { McpServerStatus } from '@/lib/opencode/model';
-import { opencodeClient } from '@/lib/opencode/client';
+import { getAgentRuntime } from '@/lib/agent/registry';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 
 export type McpStatusMap = Record<string, McpServerStatus>;
@@ -134,7 +134,7 @@ export const useMcpStore = create<McpStore>()(
 
       const generation = mcpGeneration;
       try {
-        const servers = await opencodeClient.listMcpServers(directory);
+        const servers = await getAgentRuntime().listMcpServers(directory);
         if (generation !== mcpGeneration) return;
         const data: McpStatusMap = Object.fromEntries(servers.map((server) => [server.name, server]));
 
@@ -177,7 +177,7 @@ export const useMcpStore = create<McpStore>()(
       const normalized = normalizeDirectory(directory ?? useDirectoryStore.getState().currentDirectory);
       const key = toKey(normalized);
       try {
-        await opencodeClient.connectMcpServer(name, normalized);
+        await getAgentRuntime().connectMcpServer(name, normalized);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Connection failed';
         set((state) => ({
@@ -196,7 +196,7 @@ export const useMcpStore = create<McpStore>()(
 
     disconnect: async (name, directory) => {
       const normalized = normalizeDirectory(directory ?? useDirectoryStore.getState().currentDirectory);
-      await opencodeClient.disconnectMcpServer(name, normalized);
+      await getAgentRuntime().disconnectMcpServer(name, normalized);
       await get().refresh({ directory: normalized, silent: true });
     },
 
@@ -209,7 +209,7 @@ export const useMcpStore = create<McpStore>()(
       let warningMessage: string | undefined;
 
       try {
-        await opencodeClient.connectMcpServer(name, normalized);
+        await getAgentRuntime().connectMcpServer(name, normalized);
       } catch (error) {
         errorMessage = error instanceof Error ? error.message : 'Connection failed';
         set((state) => ({
@@ -229,7 +229,7 @@ export const useMcpStore = create<McpStore>()(
 
       if (!wasConnected && currentStatus?.status.status === 'connected') {
         try {
-          await opencodeClient.disconnectMcpServer(name, normalized);
+          await getAgentRuntime().disconnectMcpServer(name, normalized);
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Disconnect failed';
           warningMessage = `Connection test succeeded, but cleanup disconnect failed: ${message}`;

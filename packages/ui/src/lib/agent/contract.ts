@@ -151,20 +151,20 @@ export type AgentRuntime = {
   selectAgent(id: string, agent: string, directory?: string | null): Promise<void>
   getActiveStatus(directory?: string | null): Promise<Record<string, SessionStatus> | null>
 
-  forkSession?(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<Session>
-  listAgents?(directory?: string | null): Promise<Agent[]>
-  listCommands?(directory?: string | null, signal?: AbortSignal): Promise<Command[]>
-  listMcpServers?(directory?: string | null): Promise<McpServerStatus[]>
-  connectMcpServer?(server: string, directory?: string | null): Promise<void>
-  disconnectMcpServer?(server: string, directory?: string | null): Promise<void>
-  listSkills?(directory?: string | null): Promise<Skill[]>
-  replyForm?(sessionID: string, formID: string, answer: FormAnswer, directory?: string | null): Promise<boolean>
-  cancelForm?(sessionID: string, formID: string, directory?: string | null): Promise<boolean>
-  listPendingForms?(options?: PendingRequestListOptions): Promise<FormInfo[]>
-  stageRevert?(sessionId: string, messageId: string, options?: { files?: boolean; directory?: string | null }): Promise<SessionRevert>
-  commitRevert?(sessionId: string, directory?: string | null): Promise<void>
-  clearRevert?(sessionId: string, directory?: string | null): Promise<void>
-  getSessionTurnDiff?(sessionId: string, options?: { from?: string; to?: string; context?: number; directory?: string | null }): Promise<FileDiffInfo[]>
+  forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<Session>
+  listAgents(directory?: string | null): Promise<Agent[]>
+  listCommands(directory?: string | null, signal?: AbortSignal): Promise<Command[]>
+  listMcpServers(directory?: string | null): Promise<McpServerStatus[]>
+  connectMcpServer(server: string, directory?: string | null): Promise<void>
+  disconnectMcpServer(server: string, directory?: string | null): Promise<void>
+  listSkills(directory?: string | null): Promise<Skill[]>
+  replyForm(sessionID: string, formID: string, answer: FormAnswer, directory?: string | null): Promise<boolean>
+  cancelForm(sessionID: string, formID: string, directory?: string | null): Promise<boolean>
+  listPendingForms(options?: PendingRequestListOptions): Promise<FormInfo[]>
+  stageRevert(sessionId: string, messageId: string, options?: { files?: boolean; directory?: string | null }): Promise<SessionRevert>
+  commitRevert(sessionId: string, directory?: string | null): Promise<void>
+  clearRevert(sessionId: string, directory?: string | null): Promise<void>
+  getSessionTurnDiff(sessionId: string, options?: { from?: string; to?: string; context?: number; directory?: string | null }): Promise<FileDiffInfo[]>
 
   sendPrompt(params: SendPromptParams): Promise<string>
   sendCommand(params: SendCommandParams): Promise<void>
