@@ -69,7 +69,25 @@ Two more rules apply while the work grows:
 4. New behavior sits behind a flag that is off by default. The OpenCode-only path is unchanged when the flag is off, so upstream tests stay green and a fault stays separate from current behavior.
 5. `client.ts` is the one hot spot. Moving its domain and OpenChamber-owned logic out (the buckets in DESIGN.md) is the conflict-heavy part. Do it in small mechanical steps and pull code into new files rather than rewriting it in place. Git reports a modify/delete when upstream touches a line that moved, which is workable when the moves are small.
 
-## Milestone M1
+## Program (phases 1 to 3)
+
+Definition of done for phases 1 to 3: the agent-domain path (chat, session, message, streaming, permission, status) runs through the `AgentRuntime` contract and the canonical model. OpenChamber-owned features and OpenCode-specific features stay in the OpenCode adapter, reachable behind capability flags. Callers migrate area by area; not every caller of `opencodeClient` has to move.
+
+| # | Milestone | What it does | Risk |
+|---|---|---|---|
+| M1 | Contract and OpenCode adapter | Session lifecycle behind `AgentRuntime`, zero behavior change. Done. | Low |
+| M2 | Canonical event vocabulary | Event types move to `lib/agent`. Done. | Low |
+| M3 | Runtime owns translation | The adapter translates wire events; the pipeline stops importing the OpenCode event module. | Low |
+| M4 | Contract breadth | Add message, prompt, cancel, permission, selection, status, fork; capability flags for optional ones. | Low |
+| M5 | Migrate the agent-domain callers | Chat, session and message callers move through the seam, area by area. | Medium |
+| M6 | Canonical `AgentSession` | Session becomes first-class with a runtime id and a native id; session projection moves into the adapter. | Medium |
+| M7 | Canonical `AgentMessage` and `AgentPart` | Message and part projection move into the adapter; stores consume the canonical model. | High |
+| M8 | Bucket 2 cleanup | Orchestration and policy leave `client.ts`. | High |
+| M9 | Bucket 3 and 4 cleanup | OpenChamber-owned routes leave the client; OpenCode-specific calls sit behind capability flags. | Medium |
+
+Order: M3, then M4, then M5, then M6 and M7, then M8 and M9. Every milestone follows the rules above: fork-owned code first, thin edits to shared files, sync often.
+
+## Milestone M1 (done)
 
 M1 has zero behavior change. It creates the seam and proves it with a test, and nothing a user sees changes.
 
