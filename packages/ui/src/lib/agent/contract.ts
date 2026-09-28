@@ -47,8 +47,13 @@ export type AgentSession = Session & {
   nativeSessionId: string
 }
 
+/** The canonical name for a message. Equals the domain model while one runtime exists. */
+export type AgentMessage = Message
+/** The canonical name for a message part. Equals the domain model while one runtime exists. */
+export type AgentPart = Part
+
 export type MessagePage = {
-  items: Array<{ info: Message; parts: Part[] }>
+  items: Array<{ info: AgentMessage; parts: AgentPart[] }>
   cursor: { previous?: string; next?: string }
 }
 

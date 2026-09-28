@@ -62,6 +62,8 @@ import {
   type Vcs,
 } from "./model"
 import type {
+  AgentMessage,
+  AgentPart,
   AgentSession,
   FetchPermissionResult,
   FileInputLite,
@@ -77,6 +79,8 @@ import { mergeConfigDocuments, projectAgent, projectMessages, projectProject, pr
 
 export type { OpenCodeClient }
 export type {
+  AgentMessage,
+  AgentPart,
   AgentSession,
   FetchPermissionResult,
   FileInputLite,
