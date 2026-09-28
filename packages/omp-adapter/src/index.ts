@@ -1,2 +1,5 @@
+export { toOmpSessionInfo } from "./mapping"
+export type { OmpSessionInfoLike } from "./mapping"
 export { OmpRuntime } from "./runtime"
 export type { OmpEvent, OmpHost, OmpSessionHandle, OmpSessionInfo } from "./runtime"
+export { createOmpHost } from "./sdk-host"
