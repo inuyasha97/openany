@@ -1,5 +1,6 @@
 import type { SessionInboxDelivery } from "@opencode/client"
 import type { Metadata, ModelRef, Session } from "@/lib/opencode/model"
+import type { RoutedAgentEvent } from "./events"
 
 export type AgentCapabilities = {
   fork: boolean
@@ -31,4 +32,7 @@ export type AgentRuntime = {
   deleteSession(id: string, directory?: string | null): Promise<boolean>
   renameSession(id: string, title: string, directory?: string | null): Promise<void>
   moveSession(id: string, toDirectory: string, options?: MoveSessionOptions): Promise<void>
+
+  /** Validates a raw stream payload and returns the canonical events it carries. */
+  translateEvent(payload: unknown): RoutedAgentEvent[]
 }

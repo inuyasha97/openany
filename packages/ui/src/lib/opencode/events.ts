@@ -14,6 +14,7 @@
  */
 
 import type { OpenCodeEvent } from "@opencode/client"
+import { z } from "zod"
 import {
   compact,
   partIds,
@@ -40,6 +41,15 @@ import type {
   ToolTransition,
 } from "@/lib/agent/events"
 import { GLOBAL_EVENT_DIRECTORY } from "@/lib/agent/events"
+
+// The wire event contract is generated from the server; the stream is trusted
+// once its shape matches. Only the discriminator and location are checked here
+// because the translator narrows on `type` for everything else.
+const wireEventSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  location: z.object({ directory: z.string() }).partial().optional(),
+})
 
 // ---------------------------------------------------------------------------
 // Event vocabulary (defined in @/lib/agent/events, re-exported for consumers)
@@ -771,4 +781,13 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
 export function routeWireEvent(event: OpenCodeEvent): RoutedSyncEvent[] {
   const directory = eventDirectory(event)
   return translateWireEvent(event).map((translated) => ({ directory, event: translated }))
+}
+
+/** Validates a raw stream payload and routes it, or returns nothing when it is not a wire event. */
+export function translateWirePayload(payload: unknown): RoutedSyncEvent[] {
+  if (!wireEventSchema.safeParse(payload).success) return []
+  // SAFETY: the discriminator and location were validated above; the rest of
+  // the shape is the server's generated contract, narrowed per `type` by the
+  // translator.
+  return routeWireEvent(payload as OpenCodeEvent)
 }

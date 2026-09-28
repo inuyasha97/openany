@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Session } from "@/lib/opencode/model"
+import type { RoutedSyncEvent } from "./events"
 import { OpenCodeRuntime, type SessionClient } from "./opencode-runtime"
 
 const sessionFixture: Session = {
@@ -66,5 +67,11 @@ describe("OpenCodeRuntime", () => {
     const created = await runtime.createSession({ title: "x" }, "/repo")
     expect(received).toEqual([{ title: "x" }, "/repo"])
     expect(created).toBe(sessionFixture)
+  })
+
+  test("delegates event translation to the injected translator", () => {
+    const routed: RoutedSyncEvent[] = [{ directory: "global", event: { type: "server.connected", properties: {} } }]
+    const runtime = new OpenCodeRuntime(recordingClient().client, () => routed)
+    expect(runtime.translateEvent({ anything: true })).toBe(routed)
   })
 })

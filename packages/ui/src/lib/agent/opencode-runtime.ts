@@ -1,11 +1,15 @@
 import { opencodeClient } from "@/lib/opencode/client"
+import { translateWirePayload } from "@/lib/opencode/events"
 import type { Session } from "@/lib/opencode/model"
 import type { AgentCapabilities, AgentRuntime, CreateSessionParams, MoveSessionOptions } from "./contract"
+import type { RoutedAgentEvent, RoutedSyncEvent } from "./events"
 
 export type SessionClient = Pick<
   typeof opencodeClient,
   "createSession" | "getSession" | "listSessions" | "deleteSession" | "renameSession" | "moveSession"
 >
+
+export type TranslateWirePayload = (payload: unknown) => RoutedSyncEvent[]
 
 const OPENCODE_CAPABILITIES: AgentCapabilities = {
   fork: true,
@@ -21,7 +25,10 @@ export class OpenCodeRuntime implements AgentRuntime {
   readonly id = "opencode"
   readonly capabilities = OPENCODE_CAPABILITIES
 
-  constructor(private readonly client: SessionClient = opencodeClient) {}
+  constructor(
+    private readonly client: SessionClient = opencodeClient,
+    private readonly translateWire: TranslateWirePayload = translateWirePayload,
+  ) {}
 
   createSession(params?: CreateSessionParams, directory?: string | null): Promise<Session> {
     return this.client.createSession(params, directory)
@@ -45,5 +52,9 @@ export class OpenCodeRuntime implements AgentRuntime {
 
   moveSession(id: string, toDirectory: string, options?: MoveSessionOptions): Promise<void> {
     return this.client.moveSession(id, toDirectory, options)
+  }
+
+  translateEvent(payload: unknown): RoutedAgentEvent[] {
+    return this.translateWire(payload)
   }
 }
