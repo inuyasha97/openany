@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
+import type { AgentSession } from '@/lib/agent/contract';
 import { createRuntimeOpencodeClient, opencodeClient } from '@/lib/opencode/client';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -12,8 +13,8 @@ import * as worktreeBootstrap from '@/lib/worktrees/worktreeBootstrap';
 import * as projectConfig from '@/lib/openchamberConfig';
 import * as sharedTrust from '@/lib/sharedTrustConfirmation';
 
-const created: Session = {
-  id: 'background-session', directory: '/project-b', title: 'Task', projectID: 'b', cost: 0,
+const created: AgentSession = {
+  id: 'background-session', runtimeId: 'opencode', nativeSessionId: 'background-session', directory: '/project-b', title: 'Task', projectID: 'b', cost: 0,
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 1 },
 };

@@ -5,14 +5,17 @@ import { Window } from 'happy-dom'
 import { mock } from 'bun:test'
 import { OpenCode } from '@opencode/client'
 import type { Session } from '@/lib/opencode/model'
+import type { AgentSession } from '@/lib/agent/contract'
 import type { SessionListOptions, SessionPage } from '@/lib/opencode/client'
 
 const DIRECTORY = '/repo/discovery'
 const cursorsSeenOnDiscoveryCalls: Array<string | undefined> = []
 const parentMessageFetches: string[] = []
 
-const rootSession = (id: string, title: string, updated: number): Session => ({
+const rootSession = (id: string, title: string, updated: number): AgentSession => ({
   id,
+  runtimeId: 'opencode',
+  nativeSessionId: id,
   projectID: 'project',
   directory: DIRECTORY,
   title,
@@ -21,7 +24,7 @@ const rootSession = (id: string, title: string, updated: number): Session => ({
   time: { created: 1, updated },
 })
 
-const childSession: Session = { ...rootSession('ses_child', 'subagent child', 10), parentID: 'ses_parent' }
+const childSession: AgentSession = { ...rootSession('ses_child', 'subagent child', 10), parentID: 'ses_parent' }
 
 const hang = <T,>(): Promise<T> => new Promise<T>(() => undefined)
 

@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import type { Session } from "@/lib/opencode/model"
-import type { MessagePage } from "./contract"
+import type { AgentSession, MessagePage } from "./contract"
 import type { RoutedSyncEvent } from "./events"
 import { OpenCodeRuntime, type SessionClient } from "./opencode-runtime"
 
-const sessionFixture: Session = {
+const sessionFixture: AgentSession = {
   id: "ses_1",
+  runtimeId: "opencode",
+  nativeSessionId: "ses_1",
   projectID: "p",
   directory: "/repo",
   title: "t",

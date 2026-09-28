@@ -62,6 +62,7 @@ import {
   type Vcs,
 } from "./model"
 import type {
+  AgentSession,
   FetchPermissionResult,
   FileInputLite,
   MessagePage,
@@ -76,6 +77,7 @@ import { mergeConfigDocuments, projectAgent, projectMessages, projectProject, pr
 
 export type { OpenCodeClient }
 export type {
+  AgentSession,
   FetchPermissionResult,
   FileInputLite,
   MessagePage,
@@ -768,7 +770,7 @@ class OpencodeService {
   }
 
   /** First page of sessions for the current directory. */
-  async listSessions(directory?: string | null): Promise<Session[]> {
+  async listSessions(directory?: string | null): Promise<AgentSession[]> {
     const page = await this.listSessionsPage({ directory })
     return page.sessions
   }
@@ -776,7 +778,7 @@ class OpencodeService {
   async createSession(
     params?: { id?: string; title?: string; agent?: string; model?: ModelRef; metadata?: Metadata },
     directory?: string | null,
-  ): Promise<Session> {
+  ): Promise<AgentSession> {
     const requestDirectory = this.resolveDirectory(directory)
     const info = await call("session.create", () =>
       this.clientFor(directory).session.create({
@@ -794,7 +796,7 @@ class OpencodeService {
     return projectSession(info)
   }
 
-  async getSession(id: string, directory?: string | null): Promise<Session> {
+  async getSession(id: string, directory?: string | null): Promise<AgentSession> {
     const info = await call("session.get", () => this.clientFor(directory).session.get({ sessionID: id }))
     return projectSession(info)
   }
@@ -1196,7 +1198,7 @@ class OpencodeService {
    * message; omitting it copies the whole transcript (OpenCode 2.0.8 replaced
    * the `boundary` object with this single optional message id).
    */
-  async forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<Session> {
+  async forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<AgentSession> {
     const info = await call("session.fork", () =>
       this.clientFor(options?.directory).session.fork({ sessionID: sessionId, before: options?.before }),
     )

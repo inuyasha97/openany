@@ -38,6 +38,7 @@ import {
   type UserMessage,
   type Vcs,
 } from "./model"
+import type { AgentSession } from "@/lib/agent/contract"
 
 /** One item of an assistant message's ordered content. */
 export type AssistantContentItem = SessionMessageAssistant["content"][number]
@@ -47,9 +48,11 @@ export type AssistantToolItem = Extract<AssistantContentItem, { type: "tool" }>
 // Sessions
 // ---------------------------------------------------------------------------
 
-export function projectSession(info: SessionInfo): Session {
+export function projectSession(info: SessionInfo): AgentSession {
   return compact({
     id: info.id,
+    runtimeId: "opencode",
+    nativeSessionId: info.id,
     parentID: info.parentID,
     projectID: info.projectID,
     directory: info.location.directory,

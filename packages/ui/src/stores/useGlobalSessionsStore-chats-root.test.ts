@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
+import type { AgentSession } from '@/lib/agent/contract';
 import { opencodeClient } from '@/lib/opencode/client';
 import { switchRuntimeEndpoint } from '@/lib/runtime-switch';
 import { persistSessions, readDirCache } from '@/sync/persist-cache';
@@ -41,8 +42,8 @@ const deferred = <T>() => {
   const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
   return { promise, resolve, reject };
 };
-const chat = (id: string): Session => ({
-  id, projectID: 'openchamber:chats', directory: '/srv/chats/day/session-' + id,
+const chat = (id: string): AgentSession => ({
+  id, runtimeId: 'opencode', nativeSessionId: id, projectID: 'openchamber:chats', directory: '/srv/chats/day/session-' + id,
   title: id, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 2 },
 });

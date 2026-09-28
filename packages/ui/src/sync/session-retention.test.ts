@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
+import type { AgentSession } from '@/lib/agent/contract';
 import * as sessionRoutes from './session-archive-batch';
 import { opencodeClient } from '@/lib/opencode/client';
 import { switchRuntimeEndpoint } from '@/lib/runtime-switch';
@@ -11,8 +12,8 @@ import { buildSessionRetentionCandidates, runSessionRetentionCleanup, useSession
 
 const now = Date.now();
 const day = 86_400_000;
-const session = (id: string, patch: Partial<Session> = {}): Session => ({
-  id, projectID: 'project', directory: '/retention-project', title: id, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+const session = (id: string, patch: Partial<Session> = {}): AgentSession => ({
+  id, runtimeId: 'opencode', nativeSessionId: id, projectID: 'project', directory: '/retention-project', title: id, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: now - 60 * day, updated: now - 40 * day }, ...patch,
 });
 const recent = Array.from({ length: 5 }, (_, index) => session(`recent-${index}`, {
@@ -43,7 +44,7 @@ beforeEach(() => {
   spyOn(opencodeClient, 'getSession').mockImplementation(async (id) => {
     const item = useGlobalSessionsStore.getState().entityById.get(id);
     if (!item) throw Object.assign(new Error('not found'), { status: 404 });
-    return item;
+    return { ...item, runtimeId: 'opencode', nativeSessionId: item.id };
   });
   spyOn(console, 'error').mockImplementation(() => {});
 });

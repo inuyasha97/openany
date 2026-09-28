@@ -37,6 +37,12 @@ describe("projectSession", () => {
     const session = projectSession({ ...sessionInfo, title: undefined })
     expect(session.title).toBe("")
   })
+
+  test("names the owning runtime and the native session id", () => {
+    const session = projectSession(sessionInfo)
+    expect(session.runtimeId).toBe("opencode")
+    expect(session.nativeSessionId).toBe("ses_1")
+  })
 })
 
 const assistant: SessionMessageAssistant = {

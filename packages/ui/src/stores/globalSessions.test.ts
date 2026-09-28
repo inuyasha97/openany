@@ -3,6 +3,7 @@ import { opencodeClient } from '@/lib/opencode/client';
 import { describe, expect, test } from 'bun:test'
 import type { SessionListOptions, SessionPage } from '@/lib/opencode/client'
 import type { Session } from '@/lib/opencode/model'
+import type { AgentSession } from '@/lib/agent/contract'
 import { OpenCode } from '@opencode/client'
 
 import {
@@ -12,8 +13,10 @@ import {
   type SessionPageLister,
 } from './globalSessions'
 
-const makeSession = (session: Partial<Session> & { id: string }): Session => ({
+const makeSession = (session: Partial<Session> & { id: string }): AgentSession => ({
   projectID: 'project',
+  runtimeId: 'opencode',
+  nativeSessionId: session.id,
   directory: '/repo',
   title: session.id,
   cost: 0,

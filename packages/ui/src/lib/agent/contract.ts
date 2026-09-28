@@ -41,6 +41,12 @@ export type CreateSessionParams = {
 
 export type MoveSessionOptions = { delivery?: SessionInboxDelivery }
 
+/** A session together with the runtime that owns it and that runtime's own session id. */
+export type AgentSession = Session & {
+  runtimeId: string
+  nativeSessionId: string
+}
+
 export type MessagePage = {
   items: Array<{ info: Message; parts: Part[] }>
   cursor: { previous?: string; next?: string }
@@ -76,7 +82,7 @@ export type FileInputLite = {
 }
 
 export type SessionPage = {
-  sessions: Session[]
+  sessions: AgentSession[]
   cursor: { previous?: string; next?: string }
   /**
    * The isolated spaces the host merged into a global page, one mark per space, when the
@@ -135,9 +141,9 @@ export type AgentRuntime = {
   readonly id: string
   readonly capabilities: AgentCapabilities
 
-  createSession(params?: CreateSessionParams, directory?: string | null): Promise<Session>
-  getSession(id: string, directory?: string | null): Promise<Session>
-  listSessions(directory?: string | null): Promise<Session[]>
+  createSession(params?: CreateSessionParams, directory?: string | null): Promise<AgentSession>
+  getSession(id: string, directory?: string | null): Promise<AgentSession>
+  listSessions(directory?: string | null): Promise<AgentSession[]>
   deleteSession(id: string, directory?: string | null): Promise<boolean>
   renameSession(id: string, title: string, directory?: string | null): Promise<void>
   moveSession(id: string, toDirectory: string, options?: MoveSessionOptions): Promise<void>
@@ -151,7 +157,7 @@ export type AgentRuntime = {
   selectAgent(id: string, agent: string, directory?: string | null): Promise<void>
   getActiveStatus(directory?: string | null): Promise<Record<string, SessionStatus> | null>
 
-  forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<Session>
+  forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<AgentSession>
   listAgents(directory?: string | null): Promise<Agent[]>
   listCommands(directory?: string | null, signal?: AbortSignal): Promise<Command[]>
   listMcpServers(directory?: string | null): Promise<McpServerStatus[]>

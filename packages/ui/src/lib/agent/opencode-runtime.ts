@@ -8,13 +8,13 @@ import type {
   ModelRef,
   PermissionReply,
   PermissionRequest,
-  Session,
   SessionStatus,
   Skill,
 } from "@/lib/opencode/model"
 import type {
   AgentCapabilities,
   AgentRuntime,
+  AgentSession,
   CreateSessionParams,
   FetchPermissionResult,
   MessagePage,
@@ -63,15 +63,15 @@ export class OpenCodeRuntime implements AgentRuntime {
     private readonly translateWire: TranslateWirePayload = translateWirePayload,
   ) {}
 
-  createSession(params?: CreateSessionParams, directory?: string | null): Promise<Session> {
+  createSession(params?: CreateSessionParams, directory?: string | null): Promise<AgentSession> {
     return this.client.createSession(params, directory)
   }
 
-  getSession(id: string, directory?: string | null): Promise<Session> {
+  getSession(id: string, directory?: string | null): Promise<AgentSession> {
     return this.client.getSession(id, directory)
   }
 
-  listSessions(directory?: string | null): Promise<Session[]> {
+  listSessions(directory?: string | null): Promise<AgentSession[]> {
     return this.client.listSessions(directory)
   }
 
@@ -119,7 +119,7 @@ export class OpenCodeRuntime implements AgentRuntime {
     return this.client.getActiveSessionStatuses(directory)
   }
 
-  forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<Session> {
+  forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<AgentSession> {
     return this.client.forkSession(sessionId, options)
   }
 

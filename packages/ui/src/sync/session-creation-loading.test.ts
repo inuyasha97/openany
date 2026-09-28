@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import type { Session, UserMessage } from "@/lib/opencode/model"
+import type { AgentSession } from "@/lib/agent/contract"
 import { opencodeClient } from "@/lib/opencode/client"
 import type { MessagePage } from "@/lib/opencode/client"
 import type { SessionMessagePageSource } from "./session-message-loader"
@@ -23,8 +24,10 @@ const sdk: SessionMessagePageSource = {
     throw new Error("history read should not happen")
   },
 }
-const session: Session = {
+const session: AgentSession = {
   id: "session-created",
+  runtimeId: "opencode",
+  nativeSessionId: "session-created",
   projectID: "project-created",
   directory: "C:/canonical/worktree",
   title: "New session",
