@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react"
 import type { Message, Part } from "@/lib/opencode/model"
-import { opencodeClient } from "@/lib/opencode/client"
+import { useAgentRuntime } from "@/lib/agent/use-agent-runtime"
 import { Binary } from "./binary"
 import { upsertSessionRecord } from "./session-records"
 import { retry } from "./retry"
@@ -57,6 +57,7 @@ export function useSync() {
   const messageLoader = useSessionMessageLoader()
   const runtimeKey = getRuntimeKey()
   const touch = useSessionCacheTouch()
+  const runtime = useAgentRuntime()
 
   const recoverPendingQuestions = useCallback(
     async (sessionID: string, directoryOverride?: string): Promise<boolean> => {
@@ -119,7 +120,7 @@ export function useSync() {
           shouldFetchSession
             ? (async () => {
                 try {
-                  const session = await retry(() => opencodeClient.getSession(sessionID, targetDirectory))
+                  const session = await retry(() => runtime.getSession(sessionID, targetDirectory))
                   if (!isStale()) {
                     const nextSession = stripSessionDiffSnapshots(session)
                     const s = targetStore.getState()
@@ -159,7 +160,7 @@ export function useSync() {
       void promise.then(clearInflightRequest, clearInflightRequest)
       return promise
     },
-    [childStores, directory, keyFor, messageLoader, runtimeKey, store, touch],
+    [childStores, directory, keyFor, messageLoader, runtime, runtimeKey, store, touch],
   )
 
   // Load more (pagination)

@@ -61,6 +61,7 @@ import { syncDebug } from "./debug"
 import { getReconnectCandidateSessionIds, mergeBootstrapSessions } from "./reconnect-recovery"
 import { messagesBefore } from "./message-ordering"
 import { opencodeClient } from "@/lib/opencode/client"
+import { getAgentRuntime } from "@/lib/agent/registry"
 import { usePermissionStore } from "@/stores/permissionStore"
 import { policySnapshotFromWire } from "@/stores/utils/permissionAutoAccept"
 import { selectSafetyNetAvailable, useRoutingStore } from "@/stores/useRoutingStore"
@@ -746,7 +747,7 @@ async function resyncDirectorySessionStatuses(
   isStale?: () => boolean,
 ): Promise<DirectorySessionStatusSnapshot | null> {
   const invalidatedAtStart = store.getState().sessionStatusInvalidated
-  const nextStatuses = await opencodeClient.getActiveSessionStatuses(directory)
+  const nextStatuses = await getAgentRuntime().getActiveStatus(directory)
   // null = fetch failed; preserve existing state. {} or populated = a snapshot
   // of active sessions — reconciled per `mode` (absence ≠ idle under monotonic).
   if (nextStatuses === null || isStale?.()) return null
@@ -1349,7 +1350,7 @@ export async function resyncBlockingRequestsForDirectory(
     const beforeSignatures = new Map(
       candidates.map((sessionId) => [sessionId, requestSignature(before.permission[sessionId])]),
     )
-    const pendingPermissions = await opencodeClient.listPendingPermissions({ directories: [directory] })
+    const pendingPermissions = await getAgentRuntime().listPermissions({ directories: [directory] })
     const grouped: Record<string, PermissionRequest[]> = {}
     for (const permission of pendingPermissions) {
       if (!permission?.id || !permission.sessionID) continue
@@ -1446,7 +1447,7 @@ async function resyncDirectoryAfterReconnect(
     syncDebug.recovery.materializing({ reason, directory, sessionID: sessionId })
     const loader = getImperativeSessionMessageLoader()
     const [session] = await Promise.all([
-      retry(() => opencodeClient.getSession(sessionId, directory)).catch(() => null),
+      retry(() => getAgentRuntime().getSession(sessionId, directory)).catch(() => null),
       loader?.refreshTail({ directory, sessionID: sessionId }, RECONNECT_MESSAGE_LIMIT) ?? Promise.resolve(),
     ])
     if (isStale()) return
@@ -1509,7 +1510,7 @@ async function reloadCatalog(kind: CatalogKind, childStores: ChildStoreManager):
   await Promise.all([...childStores.children.entries()].map(async ([directory, store]) => {
     try {
       if (kind === "agent") {
-        store.setState({ agent: await opencodeClient.listAgents(directory) })
+        store.setState({ agent: await getAgentRuntime().listAgents(directory) })
       } else if (kind !== "command") {
         // Commands have no sync-store slice: `refreshStoresForCatalogKind`
         // re-reads `useCommandsStore`, the only consumer, on demand.
@@ -1712,7 +1713,7 @@ export function handleEvent(
       {
         isKnown: (sessionID) => useGlobalSessionsStore.getState().entityById.has(sessionID),
         isCreatingLocally: (parentID) => useBtwStore.getState().byParent[parentID]?.creating === true,
-        getSession: (sessionID, sessionDirectory) => opencodeClient.getSession(sessionID, sessionDirectory),
+        getSession: (sessionID, sessionDirectory) => getAgentRuntime().getSession(sessionID, sessionDirectory),
         isCurrent: () => expectedRuntimeKey === getRuntimeKey(),
         apply: (info) => handleEvent(
           rawDirectory,
@@ -2265,7 +2266,7 @@ export async function recoverInterruptedTurnAfterMessageLoad(
   if ((initial.permission?.[sessionID] ?? []).length > 0) return
 
   if (!initial.session_status?.[sessionID]) {
-    const snapshot = await opencodeClient.getActiveSessionStatuses(directory)
+    const snapshot = await getAgentRuntime().getActiveStatus(directory)
     if (snapshot === null || isStale?.()
       || getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== sdk) return
 
@@ -2301,7 +2302,7 @@ export async function recoverInterruptedTurnAfterMessageLoad(
 // ---------------------------------------------------------------------------
 
 /** One session-list page through the shared client wrapper. */
-const listSessionPage: SessionPageLister = (options) => opencodeClient.listSessionsPage(options)
+const listSessionPage: SessionPageLister = (options) => getAgentRuntime().listSessionsPage(options)
 
 const dispatchOpenCodeUpdateAvailable = (payload: { version: string }) => {
   if (typeof window === "undefined") return

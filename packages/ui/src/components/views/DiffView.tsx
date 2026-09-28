@@ -55,7 +55,7 @@ import { WALKTHROUGH_ACTION_CLASS } from '@/components/views/walkthrough/walkthr
 import { useWalkthroughStore } from '@/stores/useWalkthroughStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSessionMessages } from '@/sync/sync-context';
-import { opencodeClient } from '@/lib/opencode/client';
+import { useAgentRuntime } from '@/lib/agent/use-agent-runtime';
 import { getFirstChangedModifiedLineFromPatch } from './diffPatchUtils';
 import { parseDiffFromFile, type FileDiffMetadata } from '@pierre/diffs';
 
@@ -1234,6 +1234,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     const fetchBranches = useGitStore((state) => state.fetchBranches);
     const clearDiffCache = useGitStore((state) => state.clearDiffCache);
     const setDiff = useGitStore((state) => state.setDiff);
+    const runtime = useAgentRuntime();
     const [displayFile, setDisplayFile] = React.useState<string | null>(null);
     const [displayFileStaged, setDisplayFileStaged] = React.useState(false);
     const [pinnedStackedTarget, setPinnedStackedTarget] = React.useState<string | null>(null);
@@ -1330,7 +1331,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     React.useEffect(() => {
         if (activeDiffScope !== 'turn' || !currentSessionId || !visible) return;
         let cancelled = false;
-        void opencodeClient.getSessionTurnDiff(currentSessionId, { directory: rootDirectory ?? undefined })
+        void runtime.getSessionTurnDiff(currentSessionId, { directory: rootDirectory ?? undefined })
             .then((files) => {
                 if (cancelled) return;
                 setLastTurnDiffs(files.map((entry) => ({
@@ -1349,7 +1350,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         return () => {
             cancelled = true;
         };
-    }, [activeDiffScope, currentSessionId, lastMessageId, rootDirectory, visible]);
+    }, [activeDiffScope, currentSessionId, lastMessageId, rootDirectory, runtime, visible]);
 
     const lastTurnDiffData = React.useMemo(() => {
         const map = new Map<string, DiffData>();

@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { opencodeClient } from '@/lib/opencode/client';
+import { useAgentRuntime } from '@/lib/agent/use-agent-runtime';
 import { generateSessionTitle } from '@/lib/sessionTitle';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { isVSCodeRuntime } from '@/lib/desktop';
@@ -16,12 +16,13 @@ export function useIsSessionAiRenamePending(sessionID: string, directory: string
 
 export function useSessionAiRename(sessionID: string, directory: string | null | undefined) {
   const { runtimeKey, childStores, messageLoader } = useSyncRuntime();
+  const runtime = useAgentRuntime();
 
   const prepare = useCallback(async (signal: AbortSignal) => {
     if (!directory || isVSCodeRuntime()) throw new Error('Session title generation is unavailable');
     signal.throwIfAborted();
     if (getRuntimeKey() !== runtimeKey) throw new Error('Runtime changed');
-    const session = await opencodeClient.getSession(sessionID, directory);
+    const session = await runtime.getSession(sessionID, directory);
     signal.throwIfAborted();
     if (getRuntimeKey() !== runtimeKey || normalizePath(session.directory) !== normalizePath(directory)) {
       throw new Error('Session moved');
@@ -42,7 +43,7 @@ export function useSessionAiRename(sessionID: string, directory: string | null |
     } finally {
       release();
     }
-  }, [childStores, directory, messageLoader, runtimeKey, sessionID]);
+  }, [childStores, directory, messageLoader, runtimeKey, runtime, sessionID]);
 
   const rename = useCallback(async () => {
     if (!directory) return;
@@ -51,11 +52,11 @@ export function useSessionAiRename(sessionID: string, directory: string | null |
         signal,
         prepare,
         generate: (turns, requestSignal) => generateSessionTitle({ turns, directory, sessionID, signal: requestSignal }),
-        readSession: () => opencodeClient.getSession(sessionID, directory),
+        readSession: () => runtime.getSession(sessionID, directory),
         saveTitle: (title, requestSignal) => updateSessionTitle(sessionID, title, { directory, expectedRuntimeKey: runtimeKey, signal: requestSignal }),
       });
     });
-  }, [directory, prepare, runtimeKey, sessionID]);
+  }, [directory, prepare, runtimeKey, runtime, sessionID]);
 
   return { prepare, rename };
 }
