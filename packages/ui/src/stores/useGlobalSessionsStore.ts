@@ -401,6 +401,30 @@ const mergeSessionPage = (
   return applySnapshot(state, reconciled.activeSessions, reconciled.archivedSessions, state.status, false);
 };
 
+/**
+ * Fork: sessions owned by another runtime are not in OpenCode's snapshot.
+ * Merge them additively so they survive a load or a directory refresh; when
+ * the listing is unavailable or fails, keep the ones already known instead of
+ * dropping them. Detached from the caller so an unavailable runtime never
+ * delays the OpenCode snapshot.
+ */
+const mergeAdditionalRuntimeSessions = (
+  get: () => GlobalSessionsState,
+  set: (updater: (state: GlobalSessionsState) => Partial<GlobalSessionsState> | GlobalSessionsState) => void,
+  generation: number,
+  baselineRevision: number,
+): void => {
+  void listAdditionalRuntimeSessions().then((extraSessions) => {
+    if (generation !== loadGeneration) return;
+    const known = extraSessions.length > 0
+      ? extraSessions
+      : get().activeSessions.filter(isAdditionalRuntimeSession);
+    if (known.length === 0) return;
+    set((state) => mergeSessionPage(state, known, [], baselineRevision));
+    raiseSessionOrderingBaselines(get().activeSessions);
+  });
+};
+
 const overlayMutationsSince = (
   state: GlobalSessionsState,
   activeSessions: Session[],
@@ -733,15 +757,7 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
         // listing is unavailable or fails, keep the ones already known instead
         // of dropping them. Detached from the load so an unavailable runtime
         // never delays the OpenCode snapshot.
-        void listAdditionalRuntimeSessions().then((extraSessions) => {
-          if (generation !== loadGeneration) return;
-          const known = extraSessions.length > 0
-            ? extraSessions
-            : get().activeSessions.filter(isAdditionalRuntimeSession);
-          if (known.length === 0) return;
-          set((state) => mergeSessionPage(state, known, [], baselineRevision));
-          raiseSessionOrderingBaselines(get().activeSessions);
-        });
+        mergeAdditionalRuntimeSessions(get, set, generation, baselineRevision);
         return { activeSessions: committed.activeSessions, archivedSessions: committed.archivedSessions };
       } catch (error) {
         if (generation !== loadGeneration) {
@@ -866,6 +882,9 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
       const session = state.entityById.get(sessionId);
       return session && !session.time?.archived ? [session] : [];
     }));
+    // A directory refresh replaces OpenCode's sessions for those directories;
+    // re-merge the other runtimes' sessions that shared them.
+    mergeAdditionalRuntimeSessions(get, set, generation, baselineRevision);
     return { activeSessions: state.activeSessions, archivedSessions: state.archivedSessions };
   },
 
