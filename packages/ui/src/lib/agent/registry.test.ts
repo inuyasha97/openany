@@ -29,8 +29,15 @@ describe("agent runtime registry", () => {
     expect(getAgentRuntime("omp").id).toBe("omp")
   })
 
+  test("resolves the built-in ACP runtime for the acp id", () => {
+    const runtime = getAgentRuntime("acp")
+    expect(runtime.id).toBe("acp")
+    expect(runtime.capabilities.permissions).toBe(true)
+    expect(runtime.capabilities.modelSelection).toBe(false)
+  })
+
   test("falls back to the default runtime for an unregistered id", () => {
-    expect(getAgentRuntime("acp").id).toBe("opencode")
+    expect(getAgentRuntime("gemini").id).toBe("opencode")
   })
 
   test("resolves a session to its bound runtime, OpenCode by default", () => {

@@ -1,9 +1,11 @@
 import type { AgentRuntime } from "./contract"
 import { OpenCodeRuntime } from "./opencode-runtime"
 import { OmpRuntimeClient } from "./omp-runtime"
+import { AcpRuntimeClient } from "./acp-runtime"
 
 const DEFAULT_RUNTIME_ID = "opencode"
 const OMP_RUNTIME_ID = "omp"
+const ACP_RUNTIME_ID = "acp"
 
 const registeredRuntimes = new Map<string, AgentRuntime>()
 // Sessions the caller has bound to a non-default runtime. OpenCode sessions
@@ -11,12 +13,13 @@ const registeredRuntimes = new Map<string, AgentRuntime>()
 const sessionRuntimes = new Map<string, string>()
 let cachedDefault: AgentRuntime | null = null
 let cachedOmp: AgentRuntime | null = null
+let cachedAcp: AgentRuntime | null = null
 
 /**
  * The runtime for an id. A registered runtime wins; otherwise a built-in
  * runtime is built once and returned: OpenCode for the default id, OMP for
- * `"omp"`. Resolved at call time so a runtime switch is never cached across
- * endpoints.
+ * `"omp"`, ACP for `"acp"`. Resolved at call time so a runtime switch is never
+ * cached across endpoints.
  */
 export const getAgentRuntime = (runtimeId: string = DEFAULT_RUNTIME_ID): AgentRuntime => {
   const registered = registeredRuntimes.get(runtimeId)
@@ -24,6 +27,10 @@ export const getAgentRuntime = (runtimeId: string = DEFAULT_RUNTIME_ID): AgentRu
   if (runtimeId === OMP_RUNTIME_ID) {
     cachedOmp ??= new OmpRuntimeClient()
     return cachedOmp
+  }
+  if (runtimeId === ACP_RUNTIME_ID) {
+    cachedAcp ??= new AcpRuntimeClient()
+    return cachedAcp
   }
   cachedDefault ??= new OpenCodeRuntime()
   return cachedDefault

@@ -64,7 +64,7 @@ import { createSettingsHelpers } from './lib/opencode/settings-helpers.js';
 import { createThemeRuntime } from './lib/opencode/theme-runtime.js';
 import { createFeatureRoutesRuntime } from './lib/opencode/feature-routes-runtime.js';
 // Fork-owned OMP agent runtime; off unless OPENCHAMBER_OMP_RUNTIME=1.
-import { installOmpAgentRuntime } from './lib/agents/index.js';
+import { installAcpAgentRuntime, installOmpAgentRuntime } from './lib/agents/index.js';
 import { parseServeCliOptions } from './lib/opencode/cli-options.js';
 import {
   registerAuthAndAccessRoutes,
@@ -653,6 +653,8 @@ let exitOnShutdown = true;
 let uiAuthController = null;
 // Fork-owned OMP agent runtime host; null unless OPENCHAMBER_OMP_RUNTIME=1.
 let ompAgentRuntime = null;
+// Fork-owned ACP agent runtime host; null unless OPENCHAMBER_ACP_RUNTIME=1.
+let acpAgentRuntime = null;
 // The isolated-spaces host: the place, the manager and the dispatcher. Null while the feature's
 // switch is off, and then nothing of the feature runs, see docs/isolated-spaces/DESIGN.md.
 let spacesHost = null;
@@ -1745,6 +1747,8 @@ const gracefulShutdownRuntime = createGracefulShutdownRuntime({
   getSpacesHost: () => spacesHost,
   // Fork: dispose the OMP runtime (off unless the flag is on).
   getOmpRuntime: () => ompAgentRuntime,
+  // Fork: dispose the ACP runtime (off unless the flag is on).
+  getAcpRuntime: () => acpAgentRuntime,
 });
 
 const gracefulShutdown = (...args) => gracefulShutdownRuntime.gracefulShutdown(...args);
@@ -2299,6 +2303,7 @@ async function main(options = {}) {
   // generic OpenCode proxy (installed later, on OpenCode start) so its explicit
   // routes win. Off by default, so the OpenCode-only path is unchanged.
   ompAgentRuntime = await installOmpAgentRuntime({ app, broadcast: broadcastOpenChamberUiEvent });
+  acpAgentRuntime = await installAcpAgentRuntime({ app, broadcast: broadcastOpenChamberUiEvent });
 
   // After bootstrap: the upgrade gate needs the real UI auth controller.
   guestSurfaceRuntime = createGuestSurfaceRuntime({

@@ -30,8 +30,8 @@ export type AcpTransport = {
 }
 
 export type CreateAcpHostOptions = {
-  /** One transport per session process. */
-  createTransport: () => AcpTransport
+  /** One transport per session process, started with that session's cwd. */
+  createTransport: (input: { cwd?: string }) => AcpTransport
 }
 
 const ACP_PROTOCOL_VERSION = 1
@@ -101,7 +101,7 @@ export const createAcpHost = ({ createTransport }: CreateAcpHostOptions): AcpHos
       throw new Error(`unknown acp session: ${input.sessionId}`)
     }
 
-    const transport = createTransport()
+    const transport = createTransport(input)
     const listeners = new Set<(event: AcpEvent) => void>()
     const pending = new Map<string, { resolve: (result: JsonValue | undefined) => void; reject: (error: Error) => void }>()
     const permissionIds = new Set<string>()
@@ -181,8 +181,18 @@ export const createAcpHost = ({ createTransport }: CreateAcpHostOptions): AcpHos
     const handle: AcpSessionHandle = {
       id: sessionId,
       prompt: async (text) => {
-        const result = promptResultSchema.safeParse(await request("session/prompt", { sessionId, prompt: [{ type: "text", text }] }))
-        emit({ type: "turn_ended", stopReason: result.success ? result.data.stopReason : undefined })
+        // `session/prompt` resolves only when the turn ends, so the request is
+        // not awaited: the turn streams over `session/update` and `turn_ended`
+        // is emitted when the response lands. The caller gets an immediate ack.
+        void request("session/prompt", { sessionId, prompt: [{ type: "text", text }] })
+          .then((result) => {
+            const parsed = promptResultSchema.safeParse(result)
+            emit({ type: "turn_ended", stopReason: parsed.success ? parsed.data.stopReason : undefined })
+          })
+          .catch(() => {
+            // A failed prompt still ends the turn, so the session does not stay busy.
+            emit({ type: "turn_ended" })
+          })
         return true
       },
       cancel: async () => {

@@ -181,11 +181,11 @@ const openchamberAutoAcceptSchema = z.object({
   }),
 })
 
-// The fork's OMP runtime pushes already-projected `SyncEvent`s on the shared
-// bridge. Only the envelope is validated here; the events themselves are the
-// server's projection of OMP into the canonical vocabulary.
-const openchamberOmpSchema = z.object({
-  type: z.literal("openchamber:omp"),
+// The fork's agent runtimes (OMP, ACP) push already-projected `SyncEvent`s on
+// the shared bridge. Only the envelope is validated here; the events themselves
+// are the server's projection into the canonical vocabulary.
+const openchamberRuntimeFrameSchema = z.object({
+  type: z.union([z.literal("openchamber:omp"), z.literal("openchamber:acp")]),
   properties: z.object({
     sessionID: z.string().min(1),
     directory: z.string().optional(),
@@ -237,8 +237,8 @@ function translateOpenchamberStatus(payload: unknown): SyncEvent | null {
  * queue instead of the global one. An event the server did not project is never
  * seen here.
  */
-function translateOpenchamberOmp(payload: unknown, frameDirectory: string | undefined): Array<{ directory: string; event: SyncEvent }> {
-  const parsed = openchamberOmpSchema.safeParse(payload)
+function translateOpenchamberRuntimeFrame(payload: unknown, frameDirectory: string | undefined): Array<{ directory: string; event: SyncEvent }> {
+  const parsed = openchamberRuntimeFrameSchema.safeParse(payload)
   if (!parsed.success) return []
   const directory = parsed.data.properties.directory || frameDirectory || GLOBAL_EVENT_DIRECTORY
   // SAFETY: the envelope is validated and the events come from OpenChamber's
@@ -263,8 +263,8 @@ function translateOpenchamberOmp(payload: unknown, frameDirectory: string | unde
 function translatePayload(payload: unknown, frameDirectory: string | undefined): Array<{ directory: string; event: SyncEvent }> {
   const bridged = translateOpenchamberStatus(payload) ?? translateOpenchamberArchived(payload) ?? translateOpenchamberNative(payload)
   if (bridged) return [{ directory: frameDirectory ?? GLOBAL_EVENT_DIRECTORY, event: bridged }]
-  const omp = translateOpenchamberOmp(payload, frameDirectory)
-  if (omp.length > 0) return omp
+  const runtimeFrame = translateOpenchamberRuntimeFrame(payload, frameDirectory)
+  if (runtimeFrame.length > 0) return runtimeFrame
   const routed = getAgentRuntime().translateEvent(payload)
   if (!frameDirectory) return routed
   return routed.map((entry) => (entry.directory === GLOBAL_EVENT_DIRECTORY ? { ...entry, directory: frameDirectory } : entry))

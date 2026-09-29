@@ -42,6 +42,8 @@ export const createGracefulShutdownRuntime = (dependencies) => {
     getSpacesHost = () => null,
     // Fork: the OMP agent runtime, when its flag is on.
     getOmpRuntime = () => null,
+    // Fork: the ACP agent runtime, when its flag is on.
+    getAcpRuntime = () => null,
   } = dependencies;
 
   let shutdownPromise = null;
@@ -91,6 +93,7 @@ export const createGracefulShutdownRuntime = (dependencies) => {
       () => messageQueueRuntime?.stop?.(),
       () => scheduledTasksRuntime?.stop?.(),
       () => getOmpRuntime()?.dispose?.(),
+      () => getAcpRuntime()?.dispose?.(),
       stopAllGuestServices,
     ];
     for (const cleanup of cleanupOperations) {

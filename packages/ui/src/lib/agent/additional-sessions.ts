@@ -8,6 +8,7 @@
 
 import type { Session } from "@/lib/opencode/model"
 import type { AgentSession } from "./contract"
+import { isAcpRuntimeAvailable } from "./acp-availability"
 import { isOmpRuntimeAvailable } from "./omp-availability"
 import { getAgentRuntime } from "./registry"
 
@@ -21,6 +22,14 @@ export const isAdditionalRuntimeSession = (session: Session): boolean => {
   return Boolean(runtimeId) && runtimeId !== DEFAULT_RUNTIME_ID
 }
 
+const listSafely = async (runtimeId: string): Promise<AgentSession[]> => {
+  try {
+    return await getAgentRuntime(runtimeId).listSessions()
+  } catch {
+    return []
+  }
+}
+
 /**
  * Sessions from every mounted non-default runtime, for merging into the global
  * list. An unavailable runtime contributes nothing, and a listing failure must
@@ -28,10 +37,8 @@ export const isAdditionalRuntimeSession = (session: Session): boolean => {
  * what it already knows rather than dropping it.
  */
 export const listAdditionalRuntimeSessions = async (): Promise<AgentSession[]> => {
-  if (!(await isOmpRuntimeAvailable())) return []
-  try {
-    return await getAgentRuntime("omp").listSessions()
-  } catch {
-    return []
-  }
+  const sessions: AgentSession[] = []
+  if (await isOmpRuntimeAvailable()) sessions.push(...(await listSafely("omp")))
+  if (await isAcpRuntimeAvailable()) sessions.push(...(await listSafely("acp")))
+  return sessions
 }

@@ -80,6 +80,8 @@ describe("createAcpHost", () => {
     const seen: unknown[] = []
     handle.subscribe((event) => seen.push(event))
     expect(await handle.prompt("hi")).toBe(true)
+    // The turn ends asynchronously, when the prompt response lands.
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(fake.written.some((message) => message.method === "session/prompt")).toBe(true)
     expect(seen).toEqual([{ type: "turn_ended", stopReason: "end_turn" }])
   })
