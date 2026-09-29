@@ -12,6 +12,8 @@ COPY packages/electron/package.json ./packages/electron/
 COPY packages/vscode/package.json ./packages/vscode/
 COPY packages/mobile/package.json ./packages/mobile/
 COPY packages/sdk/package.json ./packages/sdk/
+COPY packages/omp-adapter/package.json ./packages/omp-adapter/
+COPY packages/acp-adapter/package.json ./packages/acp-adapter/
 RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM deps AS builder
