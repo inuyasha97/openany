@@ -40,6 +40,8 @@ export const createGracefulShutdownRuntime = (dependencies) => {
     getRelayService,
     getRelayReconcileTimer,
     getSpacesHost = () => null,
+    // Fork: the OMP agent runtime, when its flag is on.
+    getOmpRuntime = () => null,
   } = dependencies;
 
   let shutdownPromise = null;
@@ -88,6 +90,7 @@ export const createGracefulShutdownRuntime = (dependencies) => {
       () => contextObligatoryRuntime?.stop?.(),
       () => messageQueueRuntime?.stop?.(),
       () => scheduledTasksRuntime?.stop?.(),
+      () => getOmpRuntime()?.dispose?.(),
       stopAllGuestServices,
     ];
     for (const cleanup of cleanupOperations) {

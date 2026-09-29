@@ -7,8 +7,11 @@ Fork-owned agent runtime seam. See `docs/agent-host/DESIGN.md` and `docs/agent-h
 - `contract.ts` holds `AgentRuntime`, `AgentCapabilities`, and the parameter types. Runtime-neutral. It also defines `AgentSession`, a `Session` that names its runtime and native session id.
 - `events.ts` holds the canonical event vocabulary: `AgentEvent` (alias `SyncEvent`) and the payload types. Runtime-neutral; the OpenCode adapter translates wire events into these in `lib/opencode/events.ts`.
 - `opencode-runtime.ts` holds `OpenCodeRuntime`, the adapter over `opencodeClient`, and `SessionClient`, the structural client type it depends on.
-- `registry.ts` holds the runtime manager: `getAgentRuntime(runtimeId?)`, `registerAgentRuntime()`, `clearAgentRuntimes()`. A registered runtime wins by id; otherwise the OpenCode runtime is built once. Resolved at call time, never cached across endpoints.
+- `omp-runtime.ts` holds `OmpRuntimeClient`, the OMP adapter over the server's `/api/agents/omp/*` routes. It has `id = "omp"`, no optional capabilities, and rejects every unsupported operation. Sessions (create/list/get), messages and prompts are implemented; `sendPrompt` forwards the client's `messageId` so the optimistic message reconciles. OMP events reach the UI already projected on the `openchamber:omp` bridge frame, so its `translateEvent` returns nothing.
+- `registry.ts` holds the runtime manager: `getAgentRuntime(runtimeId?)`, `registerAgentRuntime()`, `clearAgentRuntimes()`. A registered runtime wins by id; otherwise a built-in runtime is built once (`"opencode"` or `"omp"`). It also binds a session to its runtime: `registerSessionRuntime`/`forgetSessionRuntime` and `getAgentRuntimeForSession(sessionId)`, which defaults to OpenCode so it is inert until a second runtime creates sessions. Resolved at call time, never cached across endpoints.
 - `use-agent-runtime.ts` holds `useAgentRuntime()`, the React access to the active runtime.
+- `omp-availability.ts` probes `GET /api/agents/omp/status` (404 means the server has the runtime off) and exposes `useOmpRuntimeAvailable(enabled)` so the affordance only appears when OMP can be served.
+- `session-capabilities.ts` (`resolveSessionCapabilities`) answers what a session's runtime supports, from its `AgentCapabilities`; components gate controls on it instead of testing a runtime name. OpenCode resolves all-true.
 
 ## Rules
 

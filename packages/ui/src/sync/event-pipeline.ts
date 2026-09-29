@@ -18,8 +18,8 @@ import type { OpenCodeClient } from "@opencode/client"
 import { z } from "zod"
 import { opencodeClient } from "@/lib/opencode/client"
 import { GLOBAL_EVENT_DIRECTORY, syncEventSessionID, type SyncEvent } from "@/lib/agent/events"
-import { getAgentRuntime } from "@/lib/agent/registry"
-import type { Metadata } from "@/lib/opencode/model"
+import { getAgentRuntime, registerSessionRuntime } from "@/lib/agent/registry"
+import type { Metadata, Session } from "@/lib/opencode/model"
 import { getRuntimeUrlResolver } from "@/lib/runtime-url"
 import { clearRuntimeUrlAuthToken, refreshRuntimeUrlAuthToken } from "@/lib/runtime-auth"
 import { type RelayTunnelWebSocket } from "@/lib/relay/tunnel-client"
@@ -181,6 +181,18 @@ const openchamberAutoAcceptSchema = z.object({
   }),
 })
 
+// The fork's OMP runtime pushes already-projected `SyncEvent`s on the shared
+// bridge. Only the envelope is validated here; the events themselves are the
+// server's projection of OMP into the canonical vocabulary.
+const openchamberOmpSchema = z.object({
+  type: z.literal("openchamber:omp"),
+  properties: z.object({
+    sessionID: z.string().min(1),
+    directory: z.string().optional(),
+    events: z.array(z.object({ type: z.string() }).passthrough()),
+  }),
+})
+
 function translateOpenchamberArchived(payload: unknown): SyncEvent | null {
   const parsed = openchamberArchivedSchema.safeParse(payload)
   if (!parsed.success) return null
@@ -220,6 +232,30 @@ function translateOpenchamberStatus(payload: unknown): SyncEvent | null {
 }
 
 /**
+ * Routes the fork's OMP frame. The server sends one frame per projected batch,
+ * carrying the directory the session runs in so the events land in the right
+ * queue instead of the global one. An event the server did not project is never
+ * seen here.
+ */
+function translateOpenchamberOmp(payload: unknown, frameDirectory: string | undefined): Array<{ directory: string; event: SyncEvent }> {
+  const parsed = openchamberOmpSchema.safeParse(payload)
+  if (!parsed.success) return []
+  const directory = parsed.data.properties.directory || frameDirectory || GLOBAL_EVENT_DIRECTORY
+  // SAFETY: the envelope is validated and the events come from OpenChamber's
+  // own server, already in the canonical vocabulary.
+  const events = parsed.data.properties.events as SyncEvent[]
+  for (const event of events) {
+    if (event.type !== "session.created") continue
+    const info = event.properties.info
+    // SAFETY: a session record from another runtime carries the extra identity
+    // fields; an OpenCode record leaves them absent.
+    const runtimeId = (info as Session & { runtimeId?: string }).runtimeId
+    if (runtimeId) registerSessionRuntime(info.id, runtimeId)
+  }
+  return events.map((event) => ({ directory, event }))
+}
+
+/**
  * Turns one raw stream payload into routed sync events. `frameDirectory` is
  * the directory the server bridge attached, used when the event itself does
  * not name a location.
@@ -227,6 +263,8 @@ function translateOpenchamberStatus(payload: unknown): SyncEvent | null {
 function translatePayload(payload: unknown, frameDirectory: string | undefined): Array<{ directory: string; event: SyncEvent }> {
   const bridged = translateOpenchamberStatus(payload) ?? translateOpenchamberArchived(payload) ?? translateOpenchamberNative(payload)
   if (bridged) return [{ directory: frameDirectory ?? GLOBAL_EVENT_DIRECTORY, event: bridged }]
+  const omp = translateOpenchamberOmp(payload, frameDirectory)
+  if (omp.length > 0) return omp
   const routed = getAgentRuntime().translateEvent(payload)
   if (!frameDirectory) return routed
   return routed.map((entry) => (entry.directory === GLOBAL_EVENT_DIRECTORY ? { ...entry, directory: frameDirectory } : entry))

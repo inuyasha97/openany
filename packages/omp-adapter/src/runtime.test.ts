@@ -30,6 +30,7 @@ const makeHandle = (id: string): FakeHandle => {
     dispose: async () => {
       handle.disposed = true
     },
+    messages: () => [],
     emit: (event) => {
       for (const listener of listeners) listener(event)
     },
@@ -90,13 +91,13 @@ describe("OmpRuntime", () => {
   test("fans session events out to subscribers", async () => {
     const { host, handles } = makeHost([info("ses_a")])
     const runtime = new OmpRuntime(host)
-    const seen: OmpEvent[] = []
-    const unsubscribe = runtime.subscribe((event) => seen.push(event))
+    const seen: Array<[string, OmpEvent]> = []
+    const unsubscribe = runtime.subscribe((sessionId, event) => seen.push([sessionId, event]))
     await runtime.getSession("ses_a")
-    handles.get("ses_a")?.emit({ type: "message_update" })
+    handles.get("ses_a")?.emit({ type: "turn_start" })
     unsubscribe()
     handles.get("ses_a")?.emit({ type: "turn_end" })
-    expect(seen).toEqual([{ type: "message_update" }])
+    expect(seen).toEqual([["ses_a", { type: "turn_start" }]])
   })
 
   test("aborts and disposes attached sessions on teardown", async () => {

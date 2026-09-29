@@ -23,7 +23,10 @@ import { ModelControls } from '../../ModelControls';
 import { ComposerActionButtons } from './ComposerActionButtons';
 import { ComposerAttachmentControls } from './ComposerAttachmentControls';
 import { FocusModeButton } from './FocusModeButton';
+import { OmpRuntimeControl } from './OmpRuntimeControl';
 import { PermissionAutoAcceptButton } from './PermissionAutoAcceptButton';
+import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
+import { useSessionUIStore } from '@/sync/session-ui-store';
 import type { PermissionMode } from '@/stores/utils/permissionAutoAccept';
 import type { BtwSelection } from '@/stores/useBtwStore';
 
@@ -84,6 +87,7 @@ export interface ComposerFooterProps {
 
 export function ComposerFooter(props: ComposerFooterProps) {
     const { t } = useI18n();
+    const draftRuntimeId = useSessionUIStore((state) => state.newSessionDraft.runtimeId);
     const {
         isMobile,
         isVSCode,
@@ -131,6 +135,11 @@ export function ComposerFooter(props: ComposerFooterProps) {
         parallelRun = null,
     } = props;
 
+    // Hide the model/agent pickers for a session whose runtime does not own
+    // model or agent selection (DESIGN.md: capabilities, not runtime names).
+    const capabilities = resolveSessionCapabilities(currentSessionId, newSessionDraftOpen ? draftRuntimeId : undefined);
+    const showModelControls = isBtw || capabilities.modelSelection || capabilities.agentSelection;
+
     return (
         <div
             className={cn(
@@ -163,13 +172,14 @@ export function ComposerFooter(props: ComposerFooterProps) {
                                 onOpenGuestAttach={onOpenGuestAttach}
                                 filesOnly={isBtw}
                             />
-                            <PermissionAutoAcceptButton
+                            {capabilities.permissions ? <PermissionAutoAcceptButton
                                 footerIconButtonClass={footerIconButtonClass}
                                 iconSizeClass={iconSizeClass}
                                 isInteractive={isPermissionAutoAcceptInteractive}
                                 permissionMode={permissionMode}
                                 handlePermissionModeCycle={onCyclePermissionMode}
-                            />
+                            /> : null}
+                            {!isBtw ? <OmpRuntimeControl /> : null}
                             {!isBtw ? <SessionGoalButton
                                 sessionId={currentSessionId}
                                 directory={directory}
@@ -242,14 +252,14 @@ export function ComposerFooter(props: ComposerFooterProps) {
                             isExpandedInput={isExpandedInput}
                             onToggle={onToggleExpandedInput}
                         /> : null}
-                        <PermissionAutoAcceptButton
+                        {capabilities.permissions ? <PermissionAutoAcceptButton
                             footerIconButtonClass={footerIconButtonClass}
                             iconSizeClass={iconSizeClass}
                             isInteractive={isPermissionAutoAcceptInteractive}
                             permissionMode={permissionMode}
                             handlePermissionModeCycle={onCyclePermissionMode}
                             withTooltip
-                        />
+                        /> : null}
                         {!isBtw ? <SessionGoalButton
                             sessionId={currentSessionId}
                             directory={directory}
@@ -261,7 +271,8 @@ export function ComposerFooter(props: ComposerFooterProps) {
                         {!isBtw ? <SessionGoalObjectiveCounter length={messageLength} /> : null}
                     </div>
                     <div className={cn('flex items-center flex-1 justify-end', footerGapClass, 'md:gap-x-3')}>
-                        {parallelRun ? <div className="flex-1" /> : isBtw ? <ModelControls className="flex-1 min-w-0 justify-end" sessionId={modelSessionId ?? null} selection={btwSelection} /> : <MemoModelControls className={cn('flex-1 min-w-0 justify-end')} onRunInParallel={onRunInParallel} />}
+                        {!isBtw && !parallelRun ? <OmpRuntimeControl /> : null}
+                        {parallelRun ? <div className="flex-1" /> : isBtw ? <ModelControls className="flex-1 min-w-0 justify-end" sessionId={modelSessionId ?? null} selection={btwSelection} /> : showModelControls ? <MemoModelControls className={cn('flex-1 min-w-0 justify-end')} onRunInParallel={onRunInParallel} /> : <div className="flex-1" />}
                         {!isBtw ? <MemoComposerDictation
                             radius={chatInputRadius}
                             isMobile={isMobile}

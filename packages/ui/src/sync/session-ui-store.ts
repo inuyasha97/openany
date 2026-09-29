@@ -19,7 +19,7 @@ import type { AttachedFile, SessionContextUsage, SessionWorktreeAttachment } fro
 import type { PermissionMode } from "@/stores/utils/permissionAutoAccept"
 import type { WorktreeMetadata } from "@/types/worktree"
 import { opencodeClient } from "@/lib/opencode/client"
-import { getAgentRuntime } from "@/lib/agent/registry"
+import { getAgentRuntimeForSession } from "@/lib/agent/registry"
 import type { SkillMentions } from "@/lib/agent/contract"
 import { buildSkillMentionInstruction } from "@/lib/skillMentionInstruction"
 import { runtimeFetch } from "@/lib/runtime-fetch"
@@ -194,6 +194,8 @@ export async function routeMessage(params: {
     variant: params.variant,
     agent: params.agent,
   })
+  // Commands, skills and the prompt itself all go to the session's own runtime.
+  const sessionRuntime = getAgentRuntimeForSession(params.sessionId)
   // A context item becomes a synthetic message, which carries text only. Any
   // file it brought rides with the send so the attachment still arrives.
   const contextItems = (params.additionalParts ?? [])
@@ -220,7 +222,10 @@ export async function routeMessage(params: {
 
   let skills = params.skills
   // Slash commands use the command route; skills attach to a normal prompt.
-  if (params.content.startsWith("/")) {
+  // A runtime that declares neither sends the text as a plain prompt.
+  const canUseCommands = sessionRuntime.capabilities.commands
+  const canUseSkills = sessionRuntime.capabilities.skills
+  if (params.content.startsWith("/") && (canUseCommands || canUseSkills)) {
     const [head, ...tail] = params.content.split(" ")
     const cmdName = head.slice(1)
 
@@ -228,10 +233,12 @@ export async function routeMessage(params: {
     // project root and one of its worktrees can define different commands
     // under the same name. OpenCode 2.x lists skills separately and accepts
     // them as prompt attachments rather than commands.
-    let matchedCommand = selectCommandsForDirectory(useCommandsStore.getState(), requestDirectory)
-      .find((c) => c.name === cmdName)
-    let matchedSkill = selectSkillsForDirectory(useSkillsStore.getState(), requestDirectory)
-      .find((s) => s.name === cmdName)
+    let matchedCommand = canUseCommands
+      ? selectCommandsForDirectory(useCommandsStore.getState(), requestDirectory).find((c) => c.name === cmdName)
+      : undefined
+    let matchedSkill = canUseSkills
+      ? selectSkillsForDirectory(useSkillsStore.getState(), requestDirectory).find((s) => s.name === cmdName)
+      : undefined
 
     // The command list is no longer pre-warmed at bootstrap (listing it
     // initializes the directory's whole MCP fleet), so a name known to neither
@@ -245,11 +252,11 @@ export async function routeMessage(params: {
     // precedence when both lookups match.
     if (!matchedCommand && !matchedSkill) {
       const [liveCommands, skillsLoaded] = await Promise.all([
-        getAgentRuntime().listCommands(requestDirectory),
-        useSkillsStore.getState().loadSkills(requestDirectory),
+        canUseCommands ? sessionRuntime.listCommands(requestDirectory) : Promise.resolve([]),
+        canUseSkills ? useSkillsStore.getState().loadSkills(requestDirectory) : Promise.resolve(true),
       ])
       matchedCommand = liveCommands.find((c) => c.name === cmdName)
-      if (!matchedCommand) {
+      if (!matchedCommand && canUseSkills) {
         if (!skillsLoaded) {
           throw new Error(`Could not load skills to resolve /${cmdName}`)
         }
@@ -270,7 +277,7 @@ export async function routeMessage(params: {
       // through the stream instead.
       params.appendSubmissions?.()
       const commandContext = [...contextItems, ...skillInstructionContext()]
-      await getAgentRuntime().sendCommand({
+      await sessionRuntime.sendCommand({
         runtimeKey: params.runtimeKey,
         id: params.sessionId,
         model: selection.model,
@@ -303,7 +310,7 @@ export async function routeMessage(params: {
     directory: requestDirectory,
     files: sendFiles,
     appendSubmissions: params.appendSubmissions,
-    send: (messageID) => getAgentRuntime().sendPrompt({
+    send: (messageID) => getAgentRuntimeForSession(params.sessionId).sendPrompt({
       runtimeKey: params.runtimeKey,
       id: params.sessionId,
       providerID: params.providerID,
@@ -401,6 +408,8 @@ export type NewSessionDraftState = {
   projectContextPins?: { notes: string[]; plans: string[] }
   target: NewSessionDraftTarget
   preparedChatDirectory?: string | null
+  /** Runtime that will own the new session; absent means the OpenCode default. */
+  runtimeId?: string
   /** Opened as a programmatic fallback (no session active at boot), not by the user. */
   openedAutomatically?: boolean
 }
@@ -457,6 +466,7 @@ export type SessionUIState = {
   closeNewSessionDraft: () => void
   setNewSessionDraftTarget: (target: { projectId?: string | null; selectedProjectId?: string | null; directoryOverride?: string | null }, options?: { force?: boolean }) => void
   setDraftPreserveDirectoryOverride: (value: boolean) => void
+  setNewSessionDraftRuntime: (runtimeId?: string) => void
   setDraftPermissionMode: (mode: PermissionMode) => void
   setDraftProjectContextPin: (kind: "note" | "plan", id: string, pinned: boolean) => void
   acknowledgeSessionAbort: (sessionId: string) => void
@@ -951,7 +961,7 @@ const createSessionWithDraftLifecycle = async (
     const resolved = await resolveCreatableDraftDirectory(draft, directoryOverride)
     if (resolved.status === "aborted") return null
     const directory = resolved.directory
-    const session = await createSessionAction(title, directory, metadata, selectionTransition, selection)
+    const session = await createSessionAction(title, directory, metadata, selectionTransition, selection, "open", draft.runtimeId)
     if (!session) return null
 
     useSessionUIStore.getState().closeNewSessionDraft()
@@ -1586,6 +1596,12 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     set((s) => {
       if (!s.newSessionDraft?.open) return s
       return { newSessionDraft: { ...s.newSessionDraft, preserveDirectoryOverride: value } }
+    }),
+
+  setNewSessionDraftRuntime: (runtimeId) =>
+    set((s) => {
+      if (!s.newSessionDraft?.open) return s
+      return { newSessionDraft: { ...s.newSessionDraft, runtimeId } }
     }),
 
   setDraftPermissionMode: (mode) =>

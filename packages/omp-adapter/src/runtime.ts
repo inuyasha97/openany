@@ -6,6 +6,10 @@
  * testable with a fake and the real SDK binding stays in one place.
  */
 
+import type { OmpEvent, OmpMessage } from "./model"
+
+export type { OmpEvent }
+
 export type OmpSessionInfo = {
   id: string
   /** On-disk path `SessionManager` opens the session from. */
@@ -14,9 +18,6 @@ export type OmpSessionInfo = {
   title: string
 }
 
-/** A raw OMP session event. Narrowed into `SyncEvent` by the server-side mapping. */
-export type OmpEvent = { type: string }
-
 export type OmpSessionHandle = {
   id: string
   prompt: (text: string) => Promise<boolean>
@@ -24,6 +25,8 @@ export type OmpSessionHandle = {
   subscribe: (listener: (event: OmpEvent) => void) => () => void
   dispose: () => Promise<void>
   sessionFile: string | undefined
+  /** The session's current message history, oldest first. */
+  messages: () => readonly OmpMessage[]
 }
 
 export type OmpHost = {
@@ -34,7 +37,7 @@ export type OmpHost = {
 export class OmpRuntime {
   private readonly sessions = new Map<string, OmpSessionHandle>()
   private readonly unsubscribes = new Map<string, () => void>()
-  private readonly listeners = new Set<(event: OmpEvent) => void>()
+  private readonly listeners = new Set<(sessionId: string, event: OmpEvent) => void>()
 
   constructor(private readonly host: OmpHost) {}
 
@@ -58,11 +61,15 @@ export class OmpRuntime {
     return (await this.getSession(id)).prompt(text)
   }
 
+  async getMessages(id: string): Promise<readonly OmpMessage[]> {
+    return (await this.getSession(id)).messages()
+  }
+
   async abort(id: string): Promise<void> {
     return (await this.getSession(id)).abort()
   }
 
-  subscribe(listener: (event: OmpEvent) => void): () => void {
+  subscribe(listener: (sessionId: string, event: OmpEvent) => void): () => void {
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
@@ -92,14 +99,14 @@ export class OmpRuntime {
 
   private attach(handle: OmpSessionHandle): OmpSessionHandle {
     this.sessions.set(handle.id, handle)
-    this.unsubscribes.set(handle.id, handle.subscribe((event) => this.emit(event)))
+    this.unsubscribes.set(handle.id, handle.subscribe((event) => this.emit(handle.id, event)))
     return handle
   }
 
-  private emit(event: OmpEvent): void {
+  private emit(sessionId: string, event: OmpEvent): void {
     for (const listener of this.listeners) {
       try {
-        listener(event)
+        listener(sessionId, event)
       } catch {
         /* listener errors must not break other subscribers */
       }

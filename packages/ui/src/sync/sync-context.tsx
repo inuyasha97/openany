@@ -61,7 +61,7 @@ import { syncDebug } from "./debug"
 import { getReconnectCandidateSessionIds, mergeBootstrapSessions } from "./reconnect-recovery"
 import { messagesBefore } from "./message-ordering"
 import { opencodeClient } from "@/lib/opencode/client"
-import { getAgentRuntime } from "@/lib/agent/registry"
+import { getAgentRuntime, getAgentRuntimeForSession } from "@/lib/agent/registry"
 import { usePermissionStore } from "@/stores/permissionStore"
 import { policySnapshotFromWire } from "@/stores/utils/permissionAutoAccept"
 import { selectSafetyNetAvailable, useRoutingStore } from "@/stores/useRoutingStore"
@@ -119,6 +119,19 @@ import {
 // ---------------------------------------------------------------------------
 // Context
 // ---------------------------------------------------------------------------
+
+/**
+ * Fork: message history resolves to the session's runtime. An OpenCode session
+ * keeps the exact same client call it always made; a session owned by another
+ * runtime (OMP) answers for its own history.
+ */
+const messagePageSource = {
+  getSessionMessages: (
+    id: string,
+    options?: { limit?: number; cursor?: string; order?: "asc" | "desc" },
+    directory?: string | null,
+  ) => getAgentRuntimeForSession(id).getMessages(id, options, directory),
+}
 
 /**
  * The provider's current directory as a subscribable value instead of a
@@ -2328,13 +2341,13 @@ export function SyncProvider(props: {
   const messageLoaderRef = useRef<SessionMessageLoader | null>(null)
   if (!messageLoaderRef.current) {
     messageLoaderRef.current = new SessionMessageLoader(childStores, {
-      sdk: opencodeClient,
+      sdk: messagePageSource,
       runtimeKey,
     })
   }
   const messageLoader = messageLoaderRef.current
   const messageLoaderDisposalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  messageLoader.configure({ sdk: opencodeClient, runtimeKey })
+  messageLoader.configure({ sdk: messagePageSource, runtimeKey })
   const routingIndexRef = useRef<EventRoutingIndex | null>(null)
   if (!routingIndexRef.current) routingIndexRef.current = createEventRoutingIndex()
   const routingIndex = routingIndexRef.current

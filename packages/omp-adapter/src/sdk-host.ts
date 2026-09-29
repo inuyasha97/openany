@@ -1,5 +1,6 @@
 import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent"
 import { toOmpSessionInfo } from "./mapping"
+import type { OmpEvent, OmpMessage } from "./model"
 import type { OmpHost } from "./runtime"
 
 /**
@@ -23,9 +24,15 @@ export const createOmpHost = (): OmpHost => ({
       abort: async () => {
         await session.abort()
       },
-      subscribe: (listener) => session.subscribe((event) => listener(event)),
+      subscribe: (listener) =>
+        // SAFETY: `AgentSessionEvent` is a superset of the frames the runtime
+        // consumes; the mapping narrows on `type` and ignores the rest.
+        session.subscribe((event) => listener(event as OmpEvent)),
       dispose: () => session.dispose(),
       sessionFile: session.sessionFile,
+      // SAFETY: `session.messages` is the SDK's message union; the projection
+      // reads only the fields the OMP subset declares.
+      messages: () => session.messages as readonly OmpMessage[],
     }
   },
 })

@@ -35,19 +35,76 @@ Order: P5.1, then P5.2, then P5.3, then P5.4.
 
 ## Status
 
-Resume here. Done so far:
+Phase 5 complete on 2026-09-29. All four milestones are implemented and tested; the one remaining item is a product decision (a UI affordance to create and select OMP sessions), which is the maintainer's call and is not part of the milestones.
+
+Done so far:
 
 - P5.1: `packages/omp-adapter/` holds `OmpRuntime` over an `OmpHost` seam, with 6 tests (`runtime.ts`, `runtime.test.ts`, `index.ts`). See `plans/2026-09-27-p5-1-omp-runtime.md`.
 - The real SDK binding: `sdk-host.ts` (`createOmpHost()`), using `SessionManager.listAll()`, `createAgentSession({ cwd })`, `session.switchSession(path)`, and the handle's `sessionId`/`prompt`/`abort`/`subscribe`/`dispose`/`sessionFile`.
-- `mapping.ts` (`toOmpSessionInfo`, pure) and `mapping-events.ts` (`toSyncEvents`): the run boundaries map to `session.status busy` and `session.idle`. 11 tests total, all green.
 - The package resolves the canonical types through the UI path alias (`@openchamber/ui/*` and `@/*` -> `../ui/src/*` in `packages/omp-adapter/tsconfig.json`), so `SyncEvent` is imported type-only from `@openchamber/ui/lib/agent/events`. Verified working.
+- P5.4: `model.ts` holds the fork-owned OMP shapes; `mapping-messages.ts` projects OMP messages and content onto `Message`/`Part`; `mapping-events.ts` holds `createOmpEventProjector()`, a per-session stateful projector. 24 adapter tests, all green.
 
-Next step (P5.4, the largest piece): map OMP message and tool events to `SyncEvent`. `message_update`/`text_delta` -> `message.part.delta`; `tool_execution_start`/`update`/`end` -> `message.tool.transition`. This needs a projection from OMP messages and parts onto the UI `Message`/`Part` model, comparable to Grove's `packages/omp-adapter/src/mapping.ts`.
+### P5.4: what the projector covers
 
-Then P5.2 (server routes and the bridge frame) and P5.3 (`OmpRuntimeClient` in the UI, registered with `runtimeId = "omp"`).
+- Run boundaries: `agent_start` -> `session.status busy`, `agent_end` -> `session.idle`.
+- User messages: `message_start` -> `message.updated` plus `message.parts.replaced` (text and image files as data URLs).
+- Assistant messages: `message_start` -> `message.updated`; `text_*`/`thinking_*` -> `message.part.updated` and `message.part.delta` on `partIds`-style ids; `toolcall_*` -> the pending tool part, its raw argument delta and the `input` transition; `message_end` -> `message.patched` (finish, cost, tokens, error) plus `message.parts.replaced` to reconcile parts the stream skipped.
+- Tool execution: `tool_execution_start` -> the tool part updated to `running` (so a late subscriber still gets the part); `tool_execution_end` -> a `success`/`failed` transition with output text and image attachments.
+- Retries: `auto_retry_start` -> `session.status retry` with `next = now + delayMs`; `auto_retry_end` -> `session.status busy` on recovery or `session.error` on exhaustion.
+- Compaction: `auto_compaction_start` -> a running `compaction` message; `auto_compaction_end` -> the settled record with the summary (failed when the event carries an error); a skipped compaction emits nothing.
+
+### P5.4: identity convention (was an open question)
+
+- Message id: `omp:<sessionId>:<role>:<timestamp>`. OMP messages carry no id, so it is derived from the message timestamp. The session id is included because the UI keys parts by message id alone, which must be unique across sessions.
+- Part id: text and reasoning use the content index (`<messageId>:text:<index>`, `<messageId>:reasoning:<index>`), tool calls use the provider call id. Both match the `partIds` convention in `lib/opencode/model.ts`; the adapter keeps a local copy because it may not import UI values.
+
+### Intentionally unmapped OMP events
+
+The projector's `default` branch drops them; none has a canonical `SyncEvent` today.
+
+- Tool progress: `tool_execution_update` (its `partialResult` is not the UI's tool-progress metadata) and `tool_execution_stream`.
+- Notices and advisory frames: `notice`, `goal_updated`, `todo_reminder`, `todo_auto_clear`, `advisor_cost_changed`, `advisor_yielded`, `irc_message`, `ttsr_triggered`.
+- Session-shape changes the UI cannot act on yet: `model_changed`, `config_warnings_changed`, `thinking_level_changed`, `retry_fallback_applied`, `retry_fallback_succeeded`.
+- Permissions and forms do not exist in OMP's event stream (it has tool approval gates instead), so those `SyncEvent`s have no source. Not "deferred": not applicable.
+
+### P5.2: the server hosts the adapter
+
+Fork-owned `packages/web/server/lib/agents/` holds three modules, all unit-tested against a fake adapter (`bunx vitest run server/lib/agents`):
+
+- `omp-runtime-host.js` (`createOmpRuntimeHost`): owns one `OmpRuntime` and one projector per session, and broadcasts each projected batch as a single `openchamber:omp` frame `{ sessionID, directory, events }` on the shared control stream. `directory` is the session cwd when known.
+- `omp-routes.js` (`registerOmpRoutes`): `GET /api/agents/omp/sessions`, `POST /api/agents/omp/sessions`, `POST /api/agents/omp/sessions/:id/prompt`, `POST /api/agents/omp/sessions/:id/abort`. Bodies are parsed per route, and an unknown session is a 404.
+- `index.js` (`installOmpAgentRuntime`): the flag gate and the lazy adapter import.
+
+The adapter's `OmpRuntime.subscribe` now passes `(sessionId, event)`; the projector is stateful per session and OMP events carry no session id, so the runtime supplies it.
+
+Wiring: thin edits to `packages/web/server/index.js` (one import, one mount call after the feature routes register and before the generic proxy, plus a shutdown getter) and one cleanup step in `packages/web/server/lib/opencode/shutdown-runtime.js` that disposes the host. All behind `OPENCHAMBER_OMP_RUNTIME=1`; with the flag off the adapter is never imported and the OpenCode-only path is unchanged.
+
+Packaging decision: `packages/web/package.json` gained no dependency. The fork-owned server module imports the adapter by relative path (`../../../../omp-adapter/src/index.ts`), resolved when the flag is on. The adapter and the OMP SDK are TypeScript-only, so the OMP path requires the server to run under Bun; the default path does not.
+
+### P5.3: the UI client and the bridge branch
+
+- `packages/ui/src/lib/agent/omp-runtime.ts` (`OmpRuntimeClient`) implements `AgentRuntime` over the OMP routes with `id = "omp"` and every optional capability `false`. Sessions, prompts and cancels are implemented; every unsupported method rejects with `OMP runtime does not support <operation>` rather than returning an empty result. `translateEvent` returns nothing: OMP events arrive already projected on the bridge, not as raw wire payloads. The fetch implementation is injected, so the client is tested without a network (`bun test src/lib/agent/omp-runtime.test.ts`).
+- `packages/ui/src/lib/agent/registry.ts` resolves `"omp"` to a built-in `OmpRuntimeClient` (built once, like the OpenCode default). This is inert: no caller requests the `"omp"` id until the UI gains OMP affordances, so the OpenCode path is unchanged.
+- `packages/ui/src/sync/event-pipeline.ts` gains an `openchamber:omp` branch: the envelope is validated, the events are routed to the frame's `directory` (session cwd), falling back to the global queue. Tested in `event-pipeline.test.ts`.
+
+Surfaces: the client reaches the server through `runtimeFetch`, so it works wherever the OMP routes and the control stream are reachable (web, Electron, hosted, Capacitor). It is **inert** on every surface until a UI affordance creates an OMP session; VS Code additionally needs the new `/api/agents/omp/*` paths forwarded by its webview bridge before it can be used there.
+
+### Post-phase: groundwork a UI affordance needs
+
+Done after the milestones, so an affordance can be built without further server or mapping work.
+
+- Session discovery: the host announces each newly seen OMP session once as `session.created` (on create and on list), so the UI store holds the session before its messages arrive.
+- History: `OmpSessionHandle.messages()` reads the SDK's current history; `projectOmpHistory` projects it to a `MessagePage`, folding each `toolResult` into the tool part of the call it answered. Exposed as `GET /api/agents/omp/sessions/:id/messages`, and `OmpRuntimeClient.getMessages` now calls it instead of rejecting.
+- Optimistic reconciliation: the client supplies its own `messageId` to `sendPrompt`; the route forwards it and the host declares it to the projector, which gives the next user `message_start` that id. `sendPrompt` returns the same id. The optimistic message reconciles in place; no duplicate.
+- Runtime resolution by session: `registry.ts` exposes `registerSessionRuntime`/`forgetSessionRuntime`/`getAgentRuntimeForSession(sessionId)`. `createSession` accepts an optional `runtimeId`, uses it, and registers the binding; an `openchamber:omp` `session.created` frame registers the binding for a session found on list; the binding is dropped on confirmed deletion. The chat send path (`session-ui-store`), the abort path, the session reload path (`session-actions`), and the history loader (`sync-context`'s `messagePageSource`) now resolve the runtime per session. An OpenCode session resolves to the exact same client call as before, so this is inert until something creates an OMP session.
+- Entry point (maintainer-approved defaults): the OMP runtime is offered in the new-session composer via `OmpRuntimeControl`, shown only while a session is drafting and only when the server reports the runtime mounted (`GET /api/agents/omp/status`, 404 when off). The choice is stored on the draft (`NewSessionDraftState.runtimeId`) and passed to `createSession`. Default is OpenCode. A drafted OMP session uses the current project directory as its cwd; it appears in the same sidebar/project list; model/agent stay empty (OMP defaults). The label is translated in all 12 locale dictionaries.
+
+Still needed for a general affordance (Chặng 2): other OpenCode-scoped callers (catalog, providers, permissions, status, revert) still assume OpenCode, so an OMP session's other controls may still reflect OpenCode. VS Code already forwards `/api/*` through its existing webview proxy, so the OMP routes need no allowlist change there (not yet verified in a running VS Code instance).
+
+Capability gating (Chặng 2, started): `resolveSessionCapabilities(sessionId, draftRuntimeId?)` answers what a session's runtime supports. The composer hides the model/agent pickers when the runtime does not own selection, and hides the permission auto-accept control when `permissions` is false (OMP declares all of these false). The send path resolves commands and skills through the session's runtime and skips slash-command resolution entirely when `commands` and `skills` are both unsupported, so `/name` travels as plain text instead of reaching OpenCode. OpenCode sessions resolve all-true, so the OpenCode UI is unchanged. The remaining OpenCode-only surfaces outside the composer (revert, fork, turn diff, forms, goal, session menus) are not gated yet.
 
 ## Open questions
 
-- The OMP message and part identity convention: how an OMP message id and text/tool part map onto the UI's `partIds` addressing (`(assistantMessageID, ordinal)` for text, the call id for tools).
-- Whether the server routes are registered in a new fork-owned module or through the existing route composition (the latter is upstream-tracked).
+- No UI affordance creates or lists OMP sessions, so nothing user-reachable uses the client. That affordance is a product decision for the maintainer; the phase's engineering is complete without it. The four questions it has to answer are in the proposal: entry point, whether OMP sessions share the OpenCode sidebar/project list, directory scoping, and model/agent selection.
+
 

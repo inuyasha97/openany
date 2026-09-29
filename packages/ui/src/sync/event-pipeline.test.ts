@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client"
 import type { SyncEvent } from "@/lib/opencode/events"
+import { forgetSessionRuntime, runtimeIdForSession } from "@/lib/agent/registry"
 import { adoptRelayTunnel, deactivateRelayTunnel } from "@/lib/relay/runtime-tunnel"
 import type { RelayTunnelClient, RelayTunnelWebSocket } from "@/lib/relay/tunnel-client"
 import { clearRuntimeUrlAuthToken, setRuntimeUrlAuthToken } from "@/lib/runtime-auth"
@@ -172,6 +173,60 @@ describe("createEventPipeline", () => {
     )
     expect(events[0]).toEqual({ type: "openchamber.notification", properties: { kind: "agent-complete", sessionId: "ses_1", title: "Done" } })
     expect(events[1]).toEqual({ type: "openchamber.permission-auto-accept", properties: { sessions: { ses_1: true }, modes: { ses_1: "safety" }, revision: 3 } })
+  })
+
+  test("routes an openchamber:omp frame to the session directory", async () => {
+    const { directory, events } = await collect(
+      [{
+        type: "openchamber:omp",
+        properties: {
+          sessionID: "ses_1",
+          directory: "/repo",
+          events: [
+            { type: "session.status", properties: { sessionID: "ses_1", status: { type: "busy" } } },
+            { type: "session.idle", properties: { sessionID: "ses_1" } },
+          ],
+        },
+      } as never],
+      2,
+    )
+    expect(directory).toBe("/repo")
+    expect(events).toEqual([
+      { type: "session.status", properties: { sessionID: "ses_1", status: { type: "busy" } } },
+      { type: "session.idle", properties: { sessionID: "ses_1" } },
+    ])
+  })
+
+  test("routes an openchamber:omp frame without a directory to the global queue", async () => {
+    const { directory, events } = await collect(
+      [{ type: "openchamber:omp", properties: { sessionID: "ses_1", events: [{ type: "session.idle", properties: { sessionID: "ses_1" } }] } as never }],
+      1,
+    )
+    expect(directory).toBe("global")
+    expect(events).toEqual([{ type: "session.idle", properties: { sessionID: "ses_1" } }])
+  })
+
+  test("binds a session to its runtime from an openchamber:omp session.created frame", async () => {
+    forgetSessionRuntime("ses_1")
+    try {
+      await collect(
+        [{
+          type: "openchamber:omp",
+          properties: {
+            sessionID: "ses_1",
+            directory: "/repo",
+            events: [{
+              type: "session.created",
+              properties: { info: { id: "ses_1", sessionID: "ses_1", projectID: "", directory: "/repo", title: "", cost: 0, tokens: {}, time: {}, runtimeId: "omp", nativeSessionId: "ses_1" } },
+            }],
+          },
+        } as never],
+        1,
+      )
+      expect(runtimeIdForSession("ses_1")).toBe("omp")
+    } finally {
+      forgetSessionRuntime("ses_1")
+    }
   })
 
   test("ignores payloads that are neither wire events nor bridge events", async () => {

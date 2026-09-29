@@ -12,7 +12,7 @@ import { useInputStore } from "./input-store"
 import type { ChildStoreManager } from "./child-store"
 import { computeSubtreeIds } from "./scoped-blocking-requests"
 import { opencodeClient } from "@/lib/opencode/client"
-import { getAgentRuntime } from "@/lib/agent/registry"
+import { forgetSessionRuntime, getAgentRuntime, getAgentRuntimeForSession, registerSessionRuntime } from "@/lib/agent/registry"
 import { ascendingId } from "@/lib/opencode/ids"
 import { mergeSessionDirectoryMetadata, resolveGlobalSessionDirectory, useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
 import { useConfigStore } from "@/stores/useConfigStore"
@@ -483,7 +483,7 @@ function firstUserMessageAtOrAfter(messages: Message[], cutoff: number): Message
 }
 
 async function fetchSessionMessages(sessionId: string, directory?: string | null): Promise<Message[]> {
-  const page = await getAgentRuntime().getMessages(sessionId, undefined, directory)
+  const page = await getAgentRuntimeForSession(sessionId).getMessages(sessionId, undefined, directory)
   return page.items.map(({ info }) => info)
 }
 
@@ -946,6 +946,7 @@ export async function createSession(
   selectionTransition?: "submitted-draft",
   selection?: SessionCreateSelection,
   navigation: "open" | "preserve" = "open",
+  runtimeId?: string,
 ): Promise<Session | null> {
   const runtimeKey = getRuntimeKey()
   const runtimeClient = opencodeClient.getSdkClient()
@@ -956,12 +957,13 @@ export async function createSession(
     // opencodeClient.getDirectory() value and group the session under the
     // wrong project (closes #1637, #2270).
     const effectiveDirectory = directoryOverride ?? dir()
-    const session = await getAgentRuntime().createSession(
+    const session = await getAgentRuntime(runtimeId).createSession(
       { title, metadata, model: selection?.model, agent: selection?.agent },
       effectiveDirectory,
     )
 
     if (getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== runtimeClient) return null
+    registerSessionRuntime(session.id, session.runtimeId ?? runtimeId ?? "opencode")
     const sessionDirectory = session.directory || effectiveDirectory || null
     // Pre-populate routing index so SSE events arriving before session.created
     // can be routed to the correct child store
@@ -1268,6 +1270,7 @@ function finalizeConfirmedSessionDeletion(
   sessionDirectory?: string,
   expectedRuntimeKey = getRuntimeKey(),
 ): void {
+  forgetSessionRuntime(sessionId)
   const snapshots = removeSessionFromLiveStores(sessionId, sessionDirectory)
   for (const store of _childStores?.children.values() ?? []) {
     const invalidated = store.getState().sessionStatusInvalidated
@@ -2326,7 +2329,7 @@ export async function revertToMessage(sessionId: string, messageId: string): Pro
   const status = state.session_status[sessionId]
   if (status && status.type !== "idle") {
     try {
-      await getAgentRuntime().cancel(sessionId, directory)
+    await getAgentRuntimeForSession(sessionId).cancel(sessionId, directory)
     } catch {
       // ignore abort errors
     }
