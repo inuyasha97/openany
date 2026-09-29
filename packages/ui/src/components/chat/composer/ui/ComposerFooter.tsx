@@ -170,6 +170,7 @@ export function ComposerFooter(props: ComposerFooterProps) {
                                 onOpenMobileSheet={onOpenAttachSheet}
                                 attachGuests={attachGuests}
                                 onOpenGuestAttach={onOpenGuestAttach}
+                                attachmentsEnabled={capabilities.attachments}
                                 filesOnly={isBtw}
                             />
                             {capabilities.permissions ? <PermissionAutoAcceptButton
@@ -244,6 +245,7 @@ export function ComposerFooter(props: ComposerFooterProps) {
                             onOpenSettings={isBtw ? undefined : onOpenSettings}
                             attachGuests={attachGuests}
                             onOpenGuestAttach={onOpenGuestAttach}
+                            attachmentsEnabled={capabilities.attachments}
                             filesOnly={isBtw}
                         />
                         {!isBtw ? <FocusModeButton

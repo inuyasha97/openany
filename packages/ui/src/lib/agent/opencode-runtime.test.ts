@@ -76,6 +76,7 @@ describe("OpenCodeRuntime", () => {
       rename: true,
       delete: true,
       move: true,
+      attachments: true,
     })
   })
 

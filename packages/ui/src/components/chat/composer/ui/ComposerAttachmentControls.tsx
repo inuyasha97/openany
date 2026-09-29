@@ -41,6 +41,8 @@ type ComposerAttachmentControlsProps = {
      * linked context (issues, PRs, guests), which stays with the main draft.
      */
     filesOnly?: boolean;
+    /** False when the session's runtime does not accept attachments; hides the attach menu. */
+    attachmentsEnabled?: boolean;
 };
 
 export const ComposerAttachmentControls = React.memo(function ComposerAttachmentControls(props: ComposerAttachmentControlsProps) {
@@ -58,10 +60,12 @@ export const ComposerAttachmentControls = React.memo(function ComposerAttachment
         attachGuests,
         onOpenGuestAttach,
         filesOnly = false,
+        attachmentsEnabled = true,
     } = props;
 
     return (
         <div className="flex items-center gap-x-1.5">
+            {attachmentsEnabled ? (
             <div className="relative inline-flex">
                 {props.onOpenMobileSheet && !filesOnly ? (
                     <button
@@ -155,6 +159,7 @@ export const ComposerAttachmentControls = React.memo(function ComposerAttachment
                     </DropdownMenu>
                 )}
             </div>
+            ) : null}
 
             {onOpenSettings ? (
                 <button
@@ -179,6 +184,7 @@ export const ComposerAttachmentControls = React.memo(function ComposerAttachment
     && prev.onOpenMobileSheet === next.onOpenMobileSheet
     && prev.onOpenGuestAttach === next.onOpenGuestAttach
     && prev.filesOnly === next.filesOnly
+    && prev.attachmentsEnabled === next.attachmentsEnabled
     && (prev.attachGuests ?? []).map((guest) => `${guest.id}:${guest.name}:${guest.mode}`).join()
         === (next.attachGuests ?? []).map((guest) => `${guest.id}:${guest.name}:${guest.mode}`).join()
 ));

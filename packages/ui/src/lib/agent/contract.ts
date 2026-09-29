@@ -32,6 +32,8 @@ export type AgentCapabilities = {
   rename: boolean
   delete: boolean
   move: boolean
+  /** The runtime accepts file attachments on a prompt. */
+  attachments: boolean
 }
 
 export type CreateSessionParams = {

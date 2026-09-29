@@ -52,6 +52,7 @@ const CAPABILITIES: AgentCapabilities = {
   rename: false,
   delete: false,
   move: false,
+  attachments: false,
 }
 
 const ZERO_TOKENS = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }

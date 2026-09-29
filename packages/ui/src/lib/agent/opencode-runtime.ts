@@ -55,6 +55,7 @@ const OPENCODE_CAPABILITIES: AgentCapabilities = {
   rename: true,
   delete: true,
   move: true,
+  attachments: true,
 }
 
 export class OpenCodeRuntime implements AgentRuntime {

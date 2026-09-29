@@ -22,7 +22,7 @@ describe("OmpRuntimeClient", () => {
   test("declares the omp id, no optional capabilities and an inert translator", () => {
     const { client } = makeClient({})
     expect(client.id).toBe("omp")
-    expect(Object.values(client.capabilities)).toEqual([false, false, false, false, false, false, false, false, false, false, false, false, false, false])
+    expect(Object.values(client.capabilities)).toEqual([false, false, false, false, false, false, false, false, false, false, false, false, false, false, false])
     expect(client.translateEvent()).toEqual([])
   })
 
