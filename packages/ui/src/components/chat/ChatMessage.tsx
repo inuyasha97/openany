@@ -18,6 +18,7 @@ import { GuestIcon } from '@/components/layout/GuestRailIcon';
 import { useGuestActions } from '@/hooks/useGuestSurfaces';
 import { buildGuestMessageItem, guestMessageActionsFor } from '@/lib/guests/actions';
 import { runGuestAction } from '@/lib/guests/run-action';
+import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 import type { AgentMentionInfo } from './message/types';
 import type { StreamPhase, ToolPopupContent } from './message/types';
 import { deriveMessageRole } from './message/messageRole';
@@ -629,6 +630,10 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         useSessionUIStore.getState().revertToMessage(sessionId, message.info.id);
     }, [sessionId, message.info.id]);
 
+    // The session's runtime decides whether revert and fork are offered; an
+    // unsupported one must not show an action that would reject.
+    const sessionCapabilities = resolveSessionCapabilities(sessionId);
+
     // Extension actions for this role. The record is read at click time so a
     // streaming message does not rebuild the list on every part update.
     const guestActionEntries = useGuestActions();
@@ -802,8 +807,8 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                                 copiedMessage={copiedMessage}
                                                 showReasoningTraces={showReasoningTraces}
                                                 agentMention={agentMention}
-                                                onRevert={handleRevert}
-                                                onFork={isUser ? handleFork : undefined}
+                                                onRevert={sessionCapabilities.revert ? handleRevert : undefined}
+                                                onFork={isUser && sessionCapabilities.fork ? handleFork : undefined}
                                                 contextPinned={isPinnedIntoContext}
                                                 contextPinPending={pinPending}
                                                 onToggleContextPin={canPinIntoContext && messageCreatedAt ? handleToggleContextPin : undefined}
@@ -837,8 +842,8 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                                 copiedMessage={copiedMessage}
                                                 showReasoningTraces={showReasoningTraces}
                                                 agentMention={agentMention}
-                                                onRevert={handleRevert}
-                                                onFork={isUser ? handleFork : undefined}
+                                                onRevert={sessionCapabilities.revert ? handleRevert : undefined}
+                                                onFork={isUser && sessionCapabilities.fork ? handleFork : undefined}
                                                 contextPinned={isPinnedIntoContext}
                                                 contextPinPending={pinPending}
                                                 onToggleContextPin={canPinIntoContext && messageCreatedAt ? handleToggleContextPin : undefined}

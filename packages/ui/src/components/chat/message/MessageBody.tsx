@@ -22,6 +22,7 @@ import { ArrowsMerge } from '@/components/icons/ArrowsMerge';
 
 import { MarkdownImageGallery, SimpleMarkdownRenderer } from '../MarkdownRenderer';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 import { useUIStore } from '@/stores/useUIStore';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import type { Session } from '@/lib/opencode/model';
@@ -2429,7 +2430,7 @@ const AssistantMessageBody = React.memo(({
                       </div>
                         {/* Changed files keep their own line: they are a list that
                             grows, not a fact about the run. */}
-                        {!isMiniChatSurface && isLastAssistantInTurn && hasStopFinish ? (
+                        {!isMiniChatSurface && isLastAssistantInTurn && hasStopFinish && resolveSessionCapabilities(sessionId).turnDiff ? (
                             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                                 <TurnChangedFilePills
                                     files={turnGroupingContext?.changedFiles}

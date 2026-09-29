@@ -21,6 +21,7 @@ import { isRunningSubagentRunMessage, readSubagentRun, type SubagentRun } from '
 import { useUIStore } from '@/stores/useUIStore';
 import { useChatSurfaceMode } from '@/components/chat/useChatSurfaceMode';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 import { useSession } from '@/sync/sync-context';
 import { useI18n } from '@/lib/i18n';
 import type { Message, ToolPart as ToolPartType } from '@/lib/opencode/model';
@@ -163,12 +164,16 @@ const NOTICE_ACTION_BUTTON_CLASS = 'h-6 w-6 text-muted-foreground bg-transparent
  */
 const SubagentRunActions: React.FC<{ message: SyntheticMessage; canFork: boolean; alwaysVisible: boolean }> = ({ message, canFork, alwaysVisible }) => {
     const { t } = useI18n();
+    const capabilities = resolveSessionCapabilities(message.sessionID);
     const handleRevert = React.useCallback(() => {
         void useSessionUIStore.getState().revertToMessage(message.sessionID, message.id);
     }, [message.id, message.sessionID]);
     const handleFork = React.useCallback(() => {
         void useSessionUIStore.getState().forkFromMessage(message.sessionID, message.id);
     }, [message.id, message.sessionID]);
+
+    const showFork = canFork && capabilities.fork;
+    if (!capabilities.revert && !showFork) return null;
 
     return (
         <div
@@ -179,22 +184,24 @@ const SubagentRunActions: React.FC<{ message: SyntheticMessage; canFork: boolean
                     : 'pointer-events-none opacity-0 transition-opacity duration-150 group-hover/subagent-run:pointer-events-auto group-hover/subagent-run:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
             )}
         >
-            <Tooltip>
-                <TooltipTrigger asChild>
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className={NOTICE_ACTION_BUTTON_CLASS}
-                        aria-label={t('chat.messageBody.actions.revertAria')}
-                        onClick={handleRevert}
-                    >
-                        <Icon name="arrow-go-back" className="h-3 w-3" />
-                    </Button>
-                </TooltipTrigger>
-                <TooltipContent sideOffset={6}>{t('chat.messageBody.actions.revert')}</TooltipContent>
-            </Tooltip>
-            {canFork ? (
+            {capabilities.revert ? (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className={NOTICE_ACTION_BUTTON_CLASS}
+                            aria-label={t('chat.messageBody.actions.revertAria')}
+                            onClick={handleRevert}
+                        >
+                            <Icon name="arrow-go-back" className="h-3 w-3" />
+                        </Button>
+                    </TooltipTrigger>
+                    <TooltipContent sideOffset={6}>{t('chat.messageBody.actions.revert')}</TooltipContent>
+                </Tooltip>
+            ) : null}
+            {showFork ? (
                 <Tooltip>
                     <TooltipTrigger asChild>
                         <Button
