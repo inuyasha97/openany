@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Session } from '@/lib/opencode/model';
 import { opencodeClient } from '@/lib/opencode/client';
 import { getAgentRuntime } from '@/lib/agent/registry';
+import { isAdditionalRuntimeSession, listAdditionalRuntimeSessions } from '@/lib/agent/additional-sessions';
 import { filterManagedChatsForRuntime, listGlobalSessionPages, splitGlobalSessionsByArchived, type SessionPageLister } from '@/stores/globalSessions';
 import { getReviewTransferDirection, type ReviewTransferDirection } from '@/lib/reviewFlow';
 import { getOriginalSessionID, getReviewSessionID } from '@/lib/sessionReviewMetadata';
@@ -727,6 +728,20 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
         });
         const committed = get();
         raiseSessionOrderingBaselines(committed.activeSessions);
+        // Fork: sessions owned by another runtime are not in OpenCode's
+        // snapshot. Merge them additively so they survive a reload; when the
+        // listing is unavailable or fails, keep the ones already known instead
+        // of dropping them. Detached from the load so an unavailable runtime
+        // never delays the OpenCode snapshot.
+        void listAdditionalRuntimeSessions().then((extraSessions) => {
+          if (generation !== loadGeneration) return;
+          const known = extraSessions.length > 0
+            ? extraSessions
+            : get().activeSessions.filter(isAdditionalRuntimeSession);
+          if (known.length === 0) return;
+          set((state) => mergeSessionPage(state, known, [], baselineRevision));
+          raiseSessionOrderingBaselines(get().activeSessions);
+        });
         return { activeSessions: committed.activeSessions, archivedSessions: committed.archivedSessions };
       } catch (error) {
         if (generation !== loadGeneration) {

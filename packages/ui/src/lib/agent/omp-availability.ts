@@ -12,8 +12,9 @@ import { runtimeFetch } from "@/lib/runtime-fetch"
 
 let cachedProbe: Promise<boolean> | null = null
 
-const probeOmpRuntime = (): Promise<boolean> => {
-  cachedProbe ??= runtimeFetch("/api/agents/omp/status")
+/** True when the server has the OMP runtime mounted. Probed once, then cached. */
+export const isOmpRuntimeAvailable = (): Promise<boolean> => {
+  cachedProbe ??= runtimeFetch("/api/agents/omp/status", { signal: AbortSignal.timeout(2_000) })
     .then((response) => response.ok)
     .catch(() => false)
   return cachedProbe
@@ -25,7 +26,7 @@ export const useOmpRuntimeAvailable = (enabled = true): boolean => {
   useEffect(() => {
     if (!enabled) return
     let active = true
-    void probeOmpRuntime().then((value) => {
+    void isOmpRuntimeAvailable().then((value) => {
       if (active) setAvailable(value)
     })
     return () => {
