@@ -7,5 +7,9 @@
   "types": "src/index.ts",
   "scripts": {
     "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@openchamber/ui": "workspace:*",
+    "zod": "^4.3.6"
   }
 }

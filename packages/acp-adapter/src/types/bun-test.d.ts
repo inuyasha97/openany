@@ -7,6 +7,7 @@ declare module "bun:test" {
   export interface ExpectResult {
     toEqual(expected: unknown): void
     toBe(expected: unknown): void
+    toContainEqual(expected: unknown): void
     rejects: {
       toThrow(expected?: string | RegExp | (new (...args: never[]) => unknown)): Promise<void>
     }

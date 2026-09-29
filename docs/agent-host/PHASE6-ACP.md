@@ -30,13 +30,15 @@ So ACP is both a session API and a **bidirectional client role**: unlike OpenCod
 
 | # | What it does |
 |---|---|
-| P6.1 | `packages/acp-adapter/` with `AcpRuntime` over an `AcpHost` seam (list/create/get session, prompt, cancel, permission reply, subscribe) and unit tests. No server or UI wiring. |
-| P6.2 | The stdio ACP client: spawn the agent, `initialize`, `session/new`, `session/prompt`, `session/cancel`, answer `session/request_permission`; a real `AcpHost`. |
-| P6.3 | The server hosts it: ACP routes, the agent process registry, and `openchamber:acp` frames on the shared bridge, behind `OPENCHAMBER_ACP_RUNTIME=1`. |
+| P6.1 | `packages/acp-adapter/` with `AcpRuntime` over an `AcpHost` seam (list/create/get session, prompt, cancel, permission reply, subscribe) and unit tests. Done. |
+| P6.2 | The ACP JSON-RPC client over an injectable transport: `initialize`, `session/new`, `session/prompt`, `session/cancel`, normalized `session/update`, `session/request_permission` replies, and method-not-found for the unimplemented client surface. Done (`acp-host.ts`). |
+| P6.3 | The server hosts it: the stdio process transport (spawn the agent), ACP routes, the process registry, and `openchamber:acp` frames on the shared bridge, behind `OPENCHAMBER_ACP_RUNTIME=1`. |
 | P6.4 | `AcpRuntimeClient` in the UI, registered with `runtimeId = "acp"`, plus one `openchamber:acp` branch in `event-pipeline.ts`. |
 | P6.5 | The full ACP `session/update` to `SyncEvent` mapping (the largest piece, like P5.4). |
 
 Order: P6.1, P6.2, P6.3, P6.4, P6.5. Each milestone follows the phase 5 rules: fork-owned code first, thin edits to shared files, sync often.
+
+Progress: P6.1 and P6.2 landed on 2026-09-29 (`packages/acp-adapter`, 13 tests). The stdio process transport lives with the server (P6.3) so the adapter stays free of Node-only types.
 
 ## Event mapping (P6.5 sketch)
 

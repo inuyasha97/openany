@@ -1,10 +1,55 @@
 /**
- * The ACP shapes the adapter consumes.
+ * The normalized ACP session events the host emits.
  *
- * A normalized session event, not the raw ACP notification: `acp-host.ts`
- * unpacks JSON-RPC `session/update` notifications into this shape, and the
- * server-side mapping narrows it into `SyncEvent`. It stays a stub until the
- * mapping milestone needs fields.
+ * `acp-host.ts` unpacks raw JSON-RPC `session/update` notifications and the
+ * agent's `session/request_permission` requests into this closed union, so the
+ * server-side mapping (`openchamber:acp` frames) narrows on `type` and never
+ * sees raw ACP. ACP carries a session id on the wire; the runtime supplies it,
+ * so it is not on the event.
  */
 
-export type AcpEvent = { type: string }
+export type AcpMessageDelta = {
+  type: "message_delta"
+  role: "user" | "assistant" | "thought"
+  text: string
+}
+
+export type AcpToolCall = {
+  type: "tool_call"
+  toolCallId: string
+  title?: string
+  kind?: string
+  status?: string
+}
+
+export type AcpToolCallUpdate = {
+  type: "tool_call_update"
+  toolCallId: string
+  status?: string
+  text?: string
+}
+
+export type AcpPermissionOption = {
+  optionId: string
+  kind: string
+  name?: string
+}
+
+export type AcpPermissionRequest = {
+  type: "permission_request"
+  requestId: string
+  toolCallId?: string
+  options: AcpPermissionOption[]
+}
+
+export type AcpTurnEnded = {
+  type: "turn_ended"
+  stopReason?: string
+}
+
+export type AcpEvent =
+  | AcpMessageDelta
+  | AcpToolCall
+  | AcpToolCallUpdate
+  | AcpPermissionRequest
+  | AcpTurnEnded

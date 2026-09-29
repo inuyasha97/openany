@@ -96,10 +96,10 @@ describe("AcpRuntime", () => {
     const seen: Array<[string, AcpEvent]> = []
     const unsubscribe = runtime.subscribe((sessionId, event) => seen.push([sessionId, event]))
     await runtime.getSession("ses_a")
-    handles.get("ses_a")?.emit({ type: "update" })
+    handles.get("ses_a")?.emit({ type: "turn_ended", stopReason: "end_turn" })
     unsubscribe()
-    handles.get("ses_a")?.emit({ type: "late" })
-    expect(seen).toEqual([["ses_a", { type: "update" }]])
+    handles.get("ses_a")?.emit({ type: "turn_ended" })
+    expect(seen).toEqual([["ses_a", { type: "turn_ended", stopReason: "end_turn" }]])
   })
 
   test("routes a permission reply to the session handle", async () => {
