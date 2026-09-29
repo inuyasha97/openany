@@ -1460,7 +1460,7 @@ async function resyncDirectoryAfterReconnect(
     syncDebug.recovery.materializing({ reason, directory, sessionID: sessionId })
     const loader = getImperativeSessionMessageLoader()
     const [session] = await Promise.all([
-      retry(() => getAgentRuntime().getSession(sessionId, directory)).catch(() => null),
+      retry(() => getAgentRuntimeForSession(sessionId).getSession(sessionId, directory)).catch(() => null),
       loader?.refreshTail({ directory, sessionID: sessionId }, RECONNECT_MESSAGE_LIMIT) ?? Promise.resolve(),
     ])
     if (isStale()) return
@@ -1726,7 +1726,7 @@ export function handleEvent(
       {
         isKnown: (sessionID) => useGlobalSessionsStore.getState().entityById.has(sessionID),
         isCreatingLocally: (parentID) => useBtwStore.getState().byParent[parentID]?.creating === true,
-        getSession: (sessionID, sessionDirectory) => getAgentRuntime().getSession(sessionID, sessionDirectory),
+        getSession: (sessionID, sessionDirectory) => getAgentRuntimeForSession(sessionID).getSession(sessionID, sessionDirectory),
         isCurrent: () => expectedRuntimeKey === getRuntimeKey(),
         apply: (info) => handleEvent(
           rawDirectory,
