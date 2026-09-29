@@ -31,6 +31,7 @@ import { guestSessionActions, type GuestActionEntry } from '@/lib/guests/actions
 import { runGuestSessionAction } from '@/lib/guests/session-action';
 import { SessionAiRenameMenuItem } from '@/components/session/SessionAiRenameMenuItem';
 import { handleSessionRenameKeyDown } from '@/components/session/sessionRenameKeyboard';
+import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 import { useIsSessionAiRenamePending } from '@/sync/use-session-ai-rename';
 import { useSessionPermissions, useSessionFormCount } from '@/sync/sync-context';
 import { usePrefetchSessionMessages, useSessionMessageRecordsForExport } from '@/sync/use-sync';
@@ -1093,6 +1094,8 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       });
   };
 
+  const sessionCapabilities = resolveSessionCapabilities(session.id);
+
   const renderSessionMenuItems = ({
     Item,
     Separator,
@@ -1107,19 +1110,23 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     SubContent: React.ElementType;
   }) => (
     <>
-      <Item
-        onClick={() => {
-          // Defer rename until dropdown close transition completes.
-          // onOpenChangeComplete fires after animation + focus cleanup are done,
-          // avoiding focus stealing from Base UI's unmount cleanup.
-          pendingRenameRef.current = { id: session.id, title: sessionTitle };
-        }}
-        className="[&>svg]:mr-1"
-      >
-        <Icon name="pencil-ai" className="mr-1 h-4 w-4" />
-        {t('sessions.sidebar.session.menu.rename')}
-      </Item>
-      <SessionAiRenameMenuItem sessionID={session.id} directory={sessionDirectory} open={isSessionMenuOpen} Item={Item} />
+      {sessionCapabilities.rename ? (
+        <>
+          <Item
+            onClick={() => {
+              // Defer rename until dropdown close transition completes.
+              // onOpenChangeComplete fires after animation + focus cleanup are done,
+              // avoiding focus stealing from Base UI's unmount cleanup.
+              pendingRenameRef.current = { id: session.id, title: sessionTitle };
+            }}
+            className="[&>svg]:mr-1"
+          >
+            <Icon name="pencil-ai" className="mr-1 h-4 w-4" />
+            {t('sessions.sidebar.session.menu.rename')}
+          </Item>
+          <SessionAiRenameMenuItem sessionID={session.id} directory={sessionDirectory} open={isSessionMenuOpen} Item={Item} />
+        </>
+      ) : null}
       <Item onClick={() => handleCopySessionId(session.id)} className="[&>svg]:mr-1">
         <Icon name="file-copy" className="mr-1 h-4 w-4" />
         {t('sessions.sidebar.session.menu.copyId')}
@@ -1150,7 +1157,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
           {t('sessions.sidebar.project.actions.edit')}
         </Item>
       ) : null}
-      {canShowSessionWorktreeMenu({ isSubtaskSession, archivedBucket: Boolean(archivedBucket), isVSCode, sessionDirectory }) ? (() => {
+      {sessionCapabilities.move && canShowSessionWorktreeMenu({ isSubtaskSession, archivedBucket: Boolean(archivedBucket), isVSCode, sessionDirectory }) ? (() => {
         const isWorktreeMenuDisabled = getSessionWorktreeMenuDisabled({
           sessionDirectory,
           isStreaming,
@@ -1389,10 +1396,12 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
           {t('sessions.sidebar.bulkActions.restore')}
         </Item>
       ) : null}
-      <Item className="text-destructive focus:text-destructive [&>svg]:mr-1" onClick={() => handleDeleteSession(session, { archivedBucket, hardDelete: true })}>
-        <Icon name="delete-bin" className="mr-1 h-4 w-4" />
-        {t('sessions.sidebar.bulkActions.delete')}
-      </Item>
+      {sessionCapabilities.delete ? (
+        <Item className="text-destructive focus:text-destructive [&>svg]:mr-1" onClick={() => handleDeleteSession(session, { archivedBucket, hardDelete: true })}>
+          <Icon name="delete-bin" className="mr-1 h-4 w-4" />
+          {t('sessions.sidebar.bulkActions.delete')}
+        </Item>
+      ) : null}
     </>
   );
 

@@ -49,6 +49,9 @@ const CAPABILITIES: AgentCapabilities = {
   revert: false,
   turnDiff: false,
   skills: false,
+  rename: false,
+  delete: false,
+  move: false,
 }
 
 const ZERO_TOKENS = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }

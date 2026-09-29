@@ -73,6 +73,9 @@ describe("OpenCodeRuntime", () => {
       revert: true,
       turnDiff: true,
       skills: true,
+      rename: true,
+      delete: true,
+      move: true,
     })
   })
 

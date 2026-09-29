@@ -29,6 +29,9 @@ export type AgentCapabilities = {
   revert: boolean
   turnDiff: boolean
   skills: boolean
+  rename: boolean
+  delete: boolean
+  move: boolean
 }
 
 export type CreateSessionParams = {
