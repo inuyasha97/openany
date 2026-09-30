@@ -29,7 +29,9 @@ type RuntimeOption = { id: string; label: string };
 // Product names stay literal; only the label and aria text are translated.
 const OPENCODE: RuntimeOption = { id: 'opencode', label: 'OpenCode' };
 const OMP: RuntimeOption = { id: 'omp', label: 'OMP' };
-const ACP: RuntimeOption = { id: 'acp', label: 'ACP' };
+// ACP is a protocol, not an agent: the label names the agent the default
+// command launches (`omp acp`), so the picker says which agent it will run.
+const ACP: RuntimeOption = { id: 'acp', label: 'OMP (ACP)' };
 
 export function RuntimeControl() {
     const { t } = useI18n();
