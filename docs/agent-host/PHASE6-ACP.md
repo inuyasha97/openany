@@ -38,7 +38,7 @@ So ACP is both a session API and a **bidirectional client role**: unlike OpenCod
 
 Order: P6.1, P6.2, P6.3, P6.4, P6.5. Each milestone follows the phase 5 rules: fork-owned code first, thin edits to shared files, sync often.
 
-Progress: all five milestones landed on 2026-09-29 (`packages/acp-adapter`, `packages/web/server/lib/agents/acp-*`, `packages/ui/src/lib/agent/acp-runtime.ts`, 18 adapter tests, 31 server tests). The stdio process transport lives with the server so the adapter stays free of Node-only types. Not yet verified end to end against a running ACP agent: the default command is `omp acp` (`OPENCHAMBER_ACP_COMMAND` overrides it).
+Progress: all five milestones landed on 2026-09-29 (`packages/acp-adapter`, `packages/web/server/lib/agents/acp-*`, `packages/ui/src/lib/agent/acp-runtime.ts`, 18 adapter tests, 31 server tests). The stdio process transport lives with the server so the adapter stays free of Node-only types. The handshake (`initialize` + `session/new`) was verified against a real `omp acp` subprocess on 2026-09-29 (session id returned); a full prompt round-trip was not run because it needs model credentials. The default command is `omp acp` (`OPENCHAMBER_ACP_COMMAND` overrides it).
 
 ## Event mapping (P6.5 sketch)
 
