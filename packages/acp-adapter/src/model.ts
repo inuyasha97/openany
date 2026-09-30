@@ -8,13 +8,13 @@
  * so it is not on the event.
  */
 
-export type AcpMessageDelta = {
+type AcpMessageDelta = {
   type: "message_delta"
   role: "user" | "assistant" | "thought"
   text: string
 }
 
-export type AcpToolCall = {
+type AcpToolCall = {
   type: "tool_call"
   toolCallId: string
   title?: string
@@ -22,7 +22,7 @@ export type AcpToolCall = {
   status?: string
 }
 
-export type AcpToolCallUpdate = {
+type AcpToolCallUpdate = {
   type: "tool_call_update"
   toolCallId: string
   status?: string
@@ -35,14 +35,14 @@ export type AcpPermissionOption = {
   name?: string
 }
 
-export type AcpPermissionRequest = {
+type AcpPermissionRequest = {
   type: "permission_request"
   requestId: string
   toolCallId?: string
   options: AcpPermissionOption[]
 }
 
-export type AcpTurnEnded = {
+type AcpTurnEnded = {
   type: "turn_ended"
   stopReason?: string
 }

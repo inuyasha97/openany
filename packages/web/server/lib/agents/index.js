@@ -18,7 +18,7 @@ import { registerAcpRoutes } from './acp-routes.js';
 import { createProcessTransport } from './acp-transport.js';
 
 export const isOmpRuntimeForced = (env = process.env) => env.OPENCHAMBER_OMP_RUNTIME === '1';
-export const isAcpRuntimeForced = (env = process.env) => env.OPENCHAMBER_ACP_RUNTIME === '1';
+const isAcpRuntimeForced = (env = process.env) => env.OPENCHAMBER_ACP_RUNTIME === '1';
 
 const loadOmpAdapter = () => import('../../../../omp-adapter/src/index.ts');
 const loadAcpAdapter = () => import('../../../../acp-adapter/src/index.ts');
