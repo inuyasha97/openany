@@ -2134,6 +2134,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
             )) {
                 return;
             }
+            event.preventDefault();
             if (navigationFiles.length === 0) return;
             const delta = event.key === 'ArrowDown' ? 1 : -1;
             const currentPath = isTreeMode ? treeSelectedFile?.path : displayFile;
@@ -2143,7 +2144,6 @@ export const DiffView: React.FC<DiffViewProps> = ({
                 : index + delta;
             const next = navigationFiles[nextIndex];
             if (!next) return;
-            event.preventDefault();
             handleSelectFileAndScroll(next.path);
         };
         window.addEventListener('keydown', handleKeyDown);

@@ -1991,7 +1991,11 @@ export function handleEvent(
   }
 
   countSyncPerformance("reducerEvents")
-  const reducerResult = applyDirectoryEvent(draft, payload)
+  // A catalog event names the location it was rebuilt in; for an open
+  // directory it lands here rather than in the global branch above.
+  const reducerResult = applyDirectoryEvent(draft, payload, {
+    onCatalogUpdated: (kind) => scheduleCatalogReload(kind, childStores),
+  })
   const reducerChanged = typeof reducerResult === "boolean" ? reducerResult : reducerResult.changed
   const materializationResult = typeof reducerResult === "boolean" ? undefined : reducerResult.materialization
   // Retire old reads even if a local send already removed the reverted range.
@@ -2644,7 +2648,15 @@ export function SyncProvider(props: {
         // that one space, the directories the global list knows for it, so a session made or
         // finished during the gap shows up without a full global reload.
         useSpacesStore.getState().noteStream(spaceId, status)
-        if (status !== "connected") return
+        if (status !== "connected") {
+          // A space that stopped itself for the idle stop ends its stream on its way out. While the
+          // host's list still says it runs, read the list again at each failed reconnect, which the
+          // host paces, so the group says "stopped" rather than "not answering" once it is down.
+          if (useSpacesStore.getState().journey?.get(spaceId)?.state === "running") {
+            void refreshSpacesJourney().catch(() => undefined)
+          }
+          return
+        }
         const directories = Array.from(useGlobalSessionsStore.getState().sessionsByDirectory.keys())
           .filter((directory) => spaceIdOfDirectory(directory) === spaceId)
         const spaceDirectory = useSpacesStore.getState().spaces.get(spaceId)?.directory
@@ -2658,6 +2670,10 @@ export function SyncProvider(props: {
         // from the place, are read again from the journey route.
         const known = useSpacesStore.getState().noteProgress(progress)
         if (known && progress.step !== "ready" && progress.step !== "failed") return
+        void refreshSpacesJourney().catch(() => undefined)
+      },
+      onSpaceSetup: () => {
+        // The setup commands of a space moved on; what they do now is in the list.
         void refreshSpacesJourney().catch(() => undefined)
       },
       onReconnect: ({ replayReset }) => {

@@ -75,7 +75,8 @@ import type {
   SkillMentions,
 } from "@/lib/agent/contract"
 import { ascendingId } from "./ids"
-import { mergeConfigDocuments, projectAgent, projectMessages, projectProject, projectSession, projectVcs } from "./projection"
+import { toJsonRecord } from "./json"
+import { deniesAnyProvider, mergeConfigDocuments, projectAgent, projectMessages, projectProject, projectSession, projectVcs } from "./projection"
 
 export type { OpenCodeClient }
 export type {
@@ -436,14 +437,13 @@ const fsHomeResponseSchema = z.object({
   canonicalLegacyChatsRoot: fsAbsolutePathSchema.optional(),
 })
 
-/**
- * Metadata crosses the wire as JSON. Round-tripping drops what JSON cannot
- * carry (undefined, functions) and gives the value the wire type honestly.
- */
-const toJsonRecord = (value: Metadata | ContextPartMetadata): Metadata =>
-  // SAFETY: JSON.stringify emits only JSON values, so parsing its output back
-  // yields a record of JsonValue by construction.
-  JSON.parse(JSON.stringify(value)) as Metadata
+/** One context item admitted as a synthetic message; `id` is client-minted when given. */
+export type SyntheticContextInput = {
+  id?: string
+  text: string
+  metadata?: ContextPartMetadata
+  description?: string
+}
 
 const pageCursor = (cursor: { previous?: string | null; next?: string | null }) =>
   compact({ previous: cursor.previous ?? undefined, next: cursor.next ?? undefined })
@@ -1036,9 +1036,37 @@ class OpencodeService {
    * Returns the user message id (client-generated so the optimistic message
    * reconciles in place when the server echoes it).
    */
-  async sendMessage(params: SendPromptParams): Promise<string> {
+  async sendMessage(params: {
+    runtimeKey?: string
+    id: string
+    /** Switch the session to this model before sending; omit when unchanged. */
+    model?: ModelRef
+    /** Switch the session to this agent before sending; omit when unchanged. */
+    agent?: string
+    /** Provider the prompt will run on, for the provider circuit breaker. */
+    providerID: string
+    text: string
+    files?: Array<FileInputLite>
+    /**
+     * Context items sent ahead of the prompt as synthetic messages. A caller
+     * that supplies `messageId` also supplies the item ids, minted before it.
+     */
+    context?: SyntheticContextInput[]
+    messageId?: string
+    agentMentions?: Array<{ name: string; source?: { value: string; start: number; end: number } }>
+    metadata?: Metadata
+    delivery?: SessionInboxDelivery
+    directory?: string | null
+    /** Skills named inline; attached to the prompt so OpenCode loads them with it. */
+    skills?: SkillMentions
+  }): Promise<string> {
     this.assertRuntimeUnchanged(params.runtimeKey)
 
+    // Context ids are minted before the prompt's, so the transcript's id order
+    // matches the order the records are admitted in.
+    const context = (params.context ?? [])
+      .filter((item) => item.text.trim())
+      .map((item) => ({ ...item, id: item.id ?? ascendingId("msg") }))
     const messageId = params.messageId ?? ascendingId("msg")
     const files = await Promise.all((params.files ?? []).map((file) => this.toPromptFile(file)))
     const agents = (params.agentMentions ?? [])
@@ -1054,11 +1082,12 @@ class OpencodeService {
 
     assertProviderCircuitClosed(params.providerID)
 
-    const admitSynthetic = async (item: { text: string; metadata?: ContextPartMetadata; description?: string }) => {
+    const admitSynthetic = async (item: SyntheticContextInput) => {
       this.assertRuntimeUnchanged(params.runtimeKey)
       await call("session.synthetic", () =>
         this.clientFor(params.directory).session.synthetic({
           sessionID: params.id,
+          id: item.id,
           text: item.text,
           description: item.description,
           metadata: item.metadata ? toJsonRecord(item.metadata) : undefined,
@@ -1087,8 +1116,7 @@ class OpencodeService {
       await this.applySendSelection(params.id, { model: params.model, agent: params.agent }, params.directory, params.runtimeKey)
       const skills = await this.resolveSkillMentions(params.skills?.names ?? [], params.directory)
       const unresolvedInstruction = params.skills?.instructionFor(skills.unresolved) ?? null
-      for (const item of params.context ?? []) {
-        if (!item.text.trim()) continue
+      for (const item of context) {
         await admitSynthetic(item)
       }
       if (unresolvedInstruction) await admitSynthetic({ text: unresolvedInstruction })
@@ -1121,7 +1149,18 @@ class OpencodeService {
    * synthetic messages that do not start execution, so the command template
    * still expands on the server with the context already in the transcript.
    */
-  async sendCommand(params: SendCommandParams): Promise<void> {
+  async sendCommand(params: {
+    runtimeKey?: string
+    id: string
+    model?: ModelRef
+    agent?: string
+    command: string
+    arguments?: string
+    files?: Array<FileInputLite>
+    context?: SyntheticContextInput[]
+    delivery?: SessionInboxDelivery
+    directory?: string | null
+  }): Promise<void> {
     this.assertRuntimeUnchanged(params.runtimeKey)
     const files = await Promise.all((params.files ?? []).map((file) => this.toPromptFile(file)))
     await this.applySendSelection(params.id, { model: params.model, agent: params.agent }, params.directory, params.runtimeKey)
@@ -1131,6 +1170,7 @@ class OpencodeService {
       await call("session.synthetic", () =>
         this.clientFor(params.directory).session.synthetic({
           sessionID: params.id,
+          id: item.id,
           text: item.text,
           description: item.description,
           metadata: item.metadata ? toJsonRecord(item.metadata) : undefined,
@@ -1456,6 +1496,12 @@ class OpencodeService {
     this.configCacheGeneration += 1
     this.configInFlight.clear()
     this.configCache.clear()
+  }
+
+  /** Whether OpenCode's config for a directory restricts providers with a `provider.use` deny policy. */
+  async configDeniesAnyProvider(directory?: string | null): Promise<boolean> {
+    const entries = await call("config.get", () => this.clientFor(this.resolveDirectory(directory)).config.get())
+    return deniesAnyProvider(entries)
   }
 
   /** Effective configuration for a directory: every discovered document folded, highest priority last. */
