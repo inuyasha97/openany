@@ -47,7 +47,7 @@ jobs:
       - name: Package (unsigned)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: bun run --cwd packages/electron package -- -c.mac.notarize=false
+        run: bun run --cwd packages/electron package -- --publish never -c.mac.notarize=false
       - name: Attach artifacts to a draft release
         uses: softprops/action-gh-release@v2
         with:
