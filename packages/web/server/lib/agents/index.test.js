@@ -2,7 +2,7 @@ import express from 'express';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 
-import { installOmpAgentRuntime, isOmpRuntimeEnabled } from './index.js';
+import { installOmpAgentRuntime, isOmpRuntimeForced } from './index.js';
 
 const createAdapter = () => {
   let subscriber = null;
@@ -37,55 +37,36 @@ const createAdapter = () => {
 };
 
 describe('installOmpAgentRuntime', () => {
-  it('is off by default', () => {
-    expect(isOmpRuntimeEnabled({})).toBe(false);
-    expect(isOmpRuntimeEnabled({ OPENCHAMBER_OMP_RUNTIME: '1' })).toBe(true);
+  it('is off unless the env flag forces it', () => {
+    expect(isOmpRuntimeForced({})).toBe(false);
+    expect(isOmpRuntimeForced({ OPENCHAMBER_OMP_RUNTIME: '1' })).toBe(true);
   });
 
-  it('does nothing and never loads the adapter when the flag is off', async () => {
+  it('registers routes but answers 404 while disabled, without loading the adapter', async () => {
     const app = express();
-    const loadAdapter = vi.fn();
-    const result = await installOmpAgentRuntime({ app, broadcast: () => {}, env: {}, adapter: loadAdapter });
+    const adapter = createAdapter();
+    await installOmpAgentRuntime({ app, broadcast: () => {}, env: {}, adapter });
 
-    expect(result).toBeNull();
-    expect(loadAdapter).not.toHaveBeenCalled();
+    const response = await request(app).get('/api/agents/omp/sessions');
+    expect(response.status).toBe(404);
+    expect(response.body.disabled).toBe(true);
+    expect(adapter.createOmpEventProjector).not.toHaveBeenCalled();
   });
 
-  it('mounts the routes when enabled', async () => {
+  it('serves when the env flag forces it on', async () => {
     const app = express();
-    const host = await installOmpAgentRuntime({
-      app,
-      broadcast: () => {},
-      env: { OPENCHAMBER_OMP_RUNTIME: '1' },
-      adapter: createAdapter(),
-    });
+    await installOmpAgentRuntime({ app, broadcast: () => {}, env: { OPENCHAMBER_OMP_RUNTIME: '1' }, adapter: createAdapter() });
 
-    expect(host).not.toBeNull();
     const response = await request(app).get('/api/agents/omp/sessions');
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ sessions: [] });
+    expect((await request(app).get('/api/agents/omp/status')).body).toEqual({ enabled: true });
   });
 
-  it('reports a mount failure without throwing', async () => {
+  it('serves when the setting enables it', async () => {
     const app = express();
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const result = await installOmpAgentRuntime({
-      app,
-      broadcast: () => {},
-      env: { OPENCHAMBER_OMP_RUNTIME: '1' },
-      adapter: {
-        OmpRuntime: class {
-          constructor() {
-            throw new Error('boom');
-          }
-        },
-        createOmpHost: () => ({}),
-        createOmpEventProjector: () => ({ project: () => [] }),
-      },
-    });
+    await installOmpAgentRuntime({ app, broadcast: () => {}, env: {}, isSettingEnabled: async () => true, adapter: createAdapter() });
 
-    expect(result).toBeNull();
-    expect(error).toHaveBeenCalled();
-    error.mockRestore();
+    expect((await request(app).get('/api/agents/omp/status')).body).toEqual({ enabled: true });
   });
 });

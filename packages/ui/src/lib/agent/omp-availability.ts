@@ -20,6 +20,11 @@ export const isOmpRuntimeAvailable = (): Promise<boolean> => {
   return cachedProbe
 }
 
+/** Clears the cache so the next probe re-reads the server (e.g. after the setting changes). */
+export const resetOmpRuntimeAvailable = (): void => {
+  cachedProbe = null
+}
+
 /** Probes only while enabled, so a surface that is never opened costs no request. */
 export const useOmpRuntimeAvailable = (enabled = true): boolean => {
   const [available, setAvailable] = useState(false)

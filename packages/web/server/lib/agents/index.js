@@ -1,13 +1,14 @@
 /**
  * Fork-owned agent runtimes (Phase 5 OMP, Phase 6 ACP).
  *
- * Mounts a runtime into the OpenChamber server, each off unless its own env
- * flag is set. With the flags off the OpenCode-only path is untouched: nothing
- * below runs and the adapter is never imported.
+ * Each runtime's routes are always registered, so a settings toggle takes
+ * effect on the next request instead of needing a restart. A request is served
+ * only when the runtime is enabled — the env flag forces it on, otherwise the
+ * OpenChamber setting decides. The adapter (and the OMP SDK) is imported
+ * lazily, on the first enabled request, so a disabled runtime costs nothing.
  *
  * The adapters are TypeScript workspace packages and the OMP SDK ships
- * TypeScript-only, so these paths require the server to run under Bun. The
- * imports are lazy and only reached when the flag is on.
+ * TypeScript-only, so these paths require the server to run under Bun.
  */
 
 import { createOmpRuntimeHost } from './omp-runtime-host.js';
@@ -16,8 +17,8 @@ import { createAcpRuntimeHost } from './acp-runtime-host.js';
 import { registerAcpRoutes } from './acp-routes.js';
 import { createProcessTransport } from './acp-transport.js';
 
-export const isOmpRuntimeEnabled = (env = process.env) => env.OPENCHAMBER_OMP_RUNTIME === '1';
-export const isAcpRuntimeEnabled = (env = process.env) => env.OPENCHAMBER_ACP_RUNTIME === '1';
+export const isOmpRuntimeForced = (env = process.env) => env.OPENCHAMBER_OMP_RUNTIME === '1';
+export const isAcpRuntimeForced = (env = process.env) => env.OPENCHAMBER_ACP_RUNTIME === '1';
 
 const loadOmpAdapter = () => import('../../../../omp-adapter/src/index.ts');
 const loadAcpAdapter = () => import('../../../../acp-adapter/src/index.ts');
@@ -29,56 +30,69 @@ const createDefaultAcpTransport = (env) => (input) => createProcessTransport({
   cwd: input.cwd,
 });
 
+const createHostController = (loadHost) => {
+  let hostPromise = null;
+  return {
+    getHost: () => {
+      hostPromise ??= Promise.resolve().then(loadHost);
+      return hostPromise;
+    },
+    async dispose() {
+      const host = await Promise.resolve(hostPromise).catch(() => null);
+      await host?.dispose?.();
+    },
+  };
+};
+
 /**
- * Creates and mounts the OMP runtime when enabled. Returns `null` when the
- * flag is off. A load or mount failure is logged and leaves the server running
- * without OMP rather than taking down the OpenCode path.
+ * Registers the OMP routes and returns a controller for shutdown. Returns a
+ * controller even when the runtime is disabled, because the routes are always
+ * present and read the setting per request.
  */
 export const installOmpAgentRuntime = async ({
   app,
   broadcast,
   env = process.env,
+  isSettingEnabled,
   adapter,
 } = {}) => {
-  if (!isOmpRuntimeEnabled(env)) return null;
-  let resolved;
-  try {
-    resolved = adapter ?? (await loadOmpAdapter());
-    const host = createOmpRuntimeHost({ adapter: resolved, broadcast });
-    registerOmpRoutes(app, { host });
-    console.log('[omp] OMP runtime mounted');
-    return host;
-  } catch (error) {
-    console.error('[omp] failed to mount OMP runtime:', error instanceof Error ? error.message : error);
-    return null;
-  }
+  const controller = createHostController(async () => {
+    const resolved = adapter ?? (await loadOmpAdapter());
+    return createOmpRuntimeHost({ adapter: resolved, broadcast });
+  });
+  const isEnabled = async () => {
+    if (isOmpRuntimeForced(env)) return true;
+    if (!isSettingEnabled) return false;
+    return (await isSettingEnabled().catch(() => false)) === true;
+  };
+  registerOmpRoutes(app, { getHost: controller.getHost, isEnabled });
+  return controller;
 };
 
 /**
- * Creates and mounts the ACP runtime when enabled. Returns `null` when the
- * flag is off. A load or mount failure is logged and leaves the server running
- * without ACP rather than taking down the OpenCode path.
+ * Registers the ACP routes and returns a controller for shutdown.
  */
 export const installAcpAgentRuntime = async ({
   app,
   broadcast,
   env = process.env,
+  isSettingEnabled,
   adapter,
   createTransport,
 } = {}) => {
-  if (!isAcpRuntimeEnabled(env)) return null;
-  try {
+  const controller = createHostController(async () => {
     const resolved = adapter ?? (await loadAcpAdapter());
-    const host = createAcpRuntimeHost({
+    return createAcpRuntimeHost({
       adapter: resolved,
       broadcast,
       createTransport: createTransport ?? createDefaultAcpTransport(env),
     });
-    registerAcpRoutes(app, { host });
-    console.log('[acp] ACP runtime mounted');
-    return host;
-  } catch (error) {
-    console.error('[acp] failed to mount ACP runtime:', error instanceof Error ? error.message : error);
-    return null;
-  }
+  });
+  const isEnabled = async () => {
+    if (isAcpRuntimeForced(env)) return true;
+    if (!isSettingEnabled) return false;
+    return (await isSettingEnabled().catch(() => false)) === true;
+  };
+  registerAcpRoutes(app, { getHost: controller.getHost, isEnabled });
+  return controller;
 };

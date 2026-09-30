@@ -13,13 +13,20 @@ const createHost = (overrides = {}) => ({
   ...overrides,
 });
 
-const createApp = (host) => {
+const createApp = (host, enabled = true) => {
   const app = express();
-  registerAcpRoutes(app, { host });
+  registerAcpRoutes(app, { getHost: async () => host, isEnabled: async () => enabled });
   return app;
 };
 
 describe('ACP routes', () => {
+  it('answers 404 with a disabled flag when the runtime is off', async () => {
+    const response = await request(createApp(createHost(), false)).get('/api/agents/acp/sessions');
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'ACP runtime is disabled', disabled: true });
+    expect((await request(createApp(createHost(), false)).get('/api/agents/acp/status')).body).toEqual({ enabled: false });
+  });
+
   it('announces the runtime on the status route', async () => {
     const response = await request(createApp(createHost())).get('/api/agents/acp/status');
     expect(response.status).toBe(200);

@@ -2323,8 +2323,19 @@ async function main(options = {}) {
   // Fork: mount the OMP agent runtime when enabled. Registered before the
   // generic OpenCode proxy (installed later, on OpenCode start) so its explicit
   // routes win. Off by default, so the OpenCode-only path is unchanged.
-  ompAgentRuntime = await installOmpAgentRuntime({ app, broadcast: broadcastOpenChamberUiEvent });
-  acpAgentRuntime = await installAcpAgentRuntime({ app, broadcast: broadcastOpenChamberUiEvent });
+  // Fork: register the OMP/ACP routes. Each is served only when its env flag
+  // forces it on or the matching setting is enabled, read per request so a
+  // settings toggle takes effect without a restart.
+  ompAgentRuntime = await installOmpAgentRuntime({
+    app,
+    broadcast: broadcastOpenChamberUiEvent,
+    isSettingEnabled: async () => (await readSettingsFromDiskMigrated())?.ompRuntimeEnabled === true,
+  });
+  acpAgentRuntime = await installAcpAgentRuntime({
+    app,
+    broadcast: broadcastOpenChamberUiEvent,
+    isSettingEnabled: async () => (await readSettingsFromDiskMigrated())?.acpRuntimeEnabled === true,
+  });
 
   // After bootstrap: the upgrade gate needs the real UI auth controller.
   guestSurfaceRuntime = createGuestSurfaceRuntime({

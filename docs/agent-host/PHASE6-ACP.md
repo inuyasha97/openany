@@ -32,7 +32,7 @@ So ACP is both a session API and a **bidirectional client role**: unlike OpenCod
 |---|---|
 | P6.1 | `packages/acp-adapter/` with `AcpRuntime` over an `AcpHost` seam (list/create/get session, prompt, cancel, permission reply, subscribe) and unit tests. Done. |
 | P6.2 | The ACP JSON-RPC client over an injectable transport: `initialize`, `session/new`, `session/prompt`, `session/cancel`, normalized `session/update`, `session/request_permission` replies, and method-not-found for the unimplemented client surface. Done (`acp-host.ts`). |
-| P6.3 | The server hosts it: the stdio process transport (spawn the agent), ACP routes, the process registry, and `openchamber:acp` frames on the shared bridge, behind `OPENCHAMBER_ACP_RUNTIME=1`. Done (`acp-transport.js`, `acp-runtime-host.js`, `acp-routes.js`). |
+| P6.3 | The server hosts it: the stdio process transport (spawn the agent), ACP routes, the process registry, and `openchamber:acp` frames on the shared bridge. The routes are always registered; each request is served only when enabled — `OPENCHAMBER_ACP_RUNTIME=1` forces it on, otherwise the `acpRuntimeEnabled` setting decides, read per request. Done (`acp-transport.js`, `acp-runtime-host.js`, `acp-routes.js`). |
 | P6.4 | `AcpRuntimeClient` in the UI, registered with `runtimeId = "acp"`, plus the shared `openchamber:omp`/`openchamber:acp` frame branch in `event-pipeline.ts` and an ACP option in the composer's runtime control. Done. |
 | P6.5 | The full ACP `session/update` to `SyncEvent` mapping. Done (`mapping-events.ts`). |
 
