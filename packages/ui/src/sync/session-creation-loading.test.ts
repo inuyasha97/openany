@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import type { Session, UserMessage } from "@/lib/opencode/model"
+import type { UserMessage } from "@/lib/opencode/model"
 import type { AgentSession } from "@/lib/agent/contract"
 import { opencodeClient } from "@/lib/opencode/client"
 import type { MessagePage } from "@/lib/opencode/client"

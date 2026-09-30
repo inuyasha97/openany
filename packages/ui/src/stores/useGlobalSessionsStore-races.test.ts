@@ -1,6 +1,5 @@
 import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import type { Session } from "@/lib/opencode/model"
 import type { AgentSession } from "@/lib/agent/contract"
 import type { SessionPage } from "@/lib/opencode/client"
 

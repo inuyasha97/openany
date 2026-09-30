@@ -33,7 +33,7 @@ import type { ContextPartMetadata } from "@/lib/messages/contextParts"
 import { getRuntimeUrlResolver } from "@/lib/runtime-url"
 import { runtimeFetch } from "@/lib/runtime-fetch"
 import { isSpaceDirectory } from "@/lib/spaces/space-route"
-import { spaceMarkSchema, type SpaceMark } from "@/lib/spaces/spaces-store"
+import { spaceMarkSchema } from "@/lib/spaces/spaces-store"
 import { getRuntimeKey } from "@/lib/runtime-switch"
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
 import { markStartupTrace } from "@/lib/startupTrace"
@@ -56,7 +56,6 @@ import {
   type PermissionRequest,
   type Project,
   type Provider,
-  type Session,
   type SessionStatus,
   type Skill,
   type Vcs,

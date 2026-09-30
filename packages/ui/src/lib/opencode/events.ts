@@ -18,18 +18,8 @@ import { z } from "zod"
 import {
   compact,
   partIds,
-  type FilePart,
-  type FormRequest,
-  type JsonValue,
-  type Message,
-  type Metadata,
-  type ModelRef,
   type Part,
-  type PermissionRequest,
-  type PermissionRuleset,
   type Session,
-  type SessionStatus,
-  type StructuredError,
   type TokenUsageInfo,
 } from "./model"
 import { projectUserParts, structuredErrorText, toolAttachments, toolOutputText } from "./projection"

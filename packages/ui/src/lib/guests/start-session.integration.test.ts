@@ -1,5 +1,4 @@
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
-import type { Session } from '@/lib/opencode/model';
 import type { AgentSession } from '@/lib/agent/contract';
 import { createRuntimeOpencodeClient, opencodeClient } from '@/lib/opencode/client';
 import { useProjectsStore } from '@/stores/useProjectsStore';

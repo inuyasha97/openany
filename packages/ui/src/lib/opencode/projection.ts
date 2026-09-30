@@ -32,7 +32,6 @@ import {
   type Message,
   type Part,
   type Project,
-  type Session,
   type ToolPart,
   type ToolState,
   type UserMessage,
