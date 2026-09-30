@@ -1,9 +1,9 @@
 {
   "name": "@openchamber/electron",
-  "version": "2.0.4",
+  "version": "0.1.0",
   "private": true,
-  "description": "Electron desktop runtime for OpenChamber",
-  "author": "OpenChamber",
+  "description": "OpenAny desktop runtime for OpenChamber",
+  "author": "OpenAny",
   "type": "module",
   "main": "./dist-bundle/entry.mjs",
   "opencodeCli": {
@@ -56,8 +56,8 @@
     "lint": "node -e \"process.exit(0)\""
   },
   "build": {
-    "appId": "dev.openchamber.desktop",
-    "productName": "OpenChamber",
+    "appId": "dev.openany.desktop",
+    "productName": "OpenAny",
     "asarUnpack": [
       "node_modules/@openchamber/web/server/built-in-extensions/**/*"
     ],
