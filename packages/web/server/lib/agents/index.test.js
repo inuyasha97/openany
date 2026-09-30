@@ -55,7 +55,7 @@ describe('installOmpAgentRuntime', () => {
 
   it('serves when the env flag forces it on', async () => {
     const app = express();
-    await installOmpAgentRuntime({ app, broadcast: () => {}, env: { OPENCHAMBER_OMP_RUNTIME: '1' }, adapter: createAdapter() });
+    await installOmpAgentRuntime({ app, broadcast: () => {}, env: { OPENCHAMBER_OMP_RUNTIME: '1' }, adaptersRunnable: () => true, adapter: createAdapter() });
 
     const response = await request(app).get('/api/agents/omp/sessions');
     expect(response.status).toBe(200);
@@ -65,8 +65,21 @@ describe('installOmpAgentRuntime', () => {
 
   it('serves when the setting enables it', async () => {
     const app = express();
-    await installOmpAgentRuntime({ app, broadcast: () => {}, env: {}, isSettingEnabled: async () => true, adapter: createAdapter() });
+    await installOmpAgentRuntime({ app, broadcast: () => {}, env: {}, adaptersRunnable: () => true, isSettingEnabled: async () => true, adapter: createAdapter() });
 
     expect((await request(app).get('/api/agents/omp/status')).body).toEqual({ enabled: true });
+  });
+
+  it('stays disabled when the adapters cannot run (Node desktop), even forced', async () => {
+    const app = express();
+    await installOmpAgentRuntime({
+      app,
+      broadcast: () => {},
+      env: { OPENCHAMBER_OMP_RUNTIME: '1' },
+      adaptersRunnable: () => false,
+      adapter: createAdapter(),
+    });
+
+    expect((await request(app).get('/api/agents/omp/status')).body).toEqual({ enabled: false });
   });
 });

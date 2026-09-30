@@ -44,6 +44,12 @@ const createHostController = (loadHost) => {
   };
 };
 
+// The adapters are TypeScript with extensionless imports, and the OMP SDK ships
+// TypeScript-only, so they load only under Bun. The Electron desktop runs the
+// server in-process under Node, where the import cannot resolve; the runtimes
+// stay disabled there instead of failing the request.
+const defaultAdaptersRunnable = () => typeof Bun !== 'undefined';
+
 /**
  * Registers the OMP routes and returns a controller for shutdown. Returns a
  * controller even when the runtime is disabled, because the routes are always
@@ -55,12 +61,14 @@ export const installOmpAgentRuntime = async ({
   env = process.env,
   isSettingEnabled,
   adapter,
+  adaptersRunnable = defaultAdaptersRunnable,
 } = {}) => {
   const controller = createHostController(async () => {
     const resolved = adapter ?? (await loadOmpAdapter());
     return createOmpRuntimeHost({ adapter: resolved, broadcast });
   });
   const isEnabled = async () => {
+    if (!adaptersRunnable()) return false;
     if (isOmpRuntimeForced(env)) return true;
     if (!isSettingEnabled) return false;
     return (await isSettingEnabled().catch(() => false)) === true;
@@ -79,6 +87,7 @@ export const installAcpAgentRuntime = async ({
   isSettingEnabled,
   adapter,
   createTransport,
+  adaptersRunnable = defaultAdaptersRunnable,
 } = {}) => {
   const controller = createHostController(async () => {
     const resolved = adapter ?? (await loadAcpAdapter());
@@ -89,6 +98,7 @@ export const installAcpAgentRuntime = async ({
     });
   });
   const isEnabled = async () => {
+    if (!adaptersRunnable()) return false;
     if (isAcpRuntimeForced(env)) return true;
     if (!isSettingEnabled) return false;
     return (await isSettingEnabled().catch(() => false)) === true;

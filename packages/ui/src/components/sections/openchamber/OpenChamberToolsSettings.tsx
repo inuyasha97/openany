@@ -20,6 +20,7 @@ import { BUILTIN_BROWSER_PROVIDER, browserProviderGuests } from '@/lib/guests/br
 import { loadGuestCatalog } from '@/lib/guests/load-catalog';
 import { useGuestsStore } from '@/lib/guests/store';
 import { updateDesktopSettings } from '@/lib/persistence';
+import { isElectronShell, isVSCodeRuntime } from '@/lib/desktop';
 import { resetAcpRuntimeAvailable } from '@/lib/agent/acp-availability';
 import { resetOmpRuntimeAvailable } from '@/lib/agent/omp-availability';
 import { useAgentMemoryStore } from '@/stores/useAgentMemoryStore';
@@ -273,25 +274,31 @@ export const OpenChamberToolsSettings: React.FC = () => {
       />
 
       {/* Fork: additional agent runtimes. Each is off by default; the server
-          serves the runtime only while the switch is on. */}
-      <SettingsCheckboxRow
-        className="mt-4"
-        settingsItem="sessions.runtime-omp"
-        checked={ompRuntimeEnabled}
-        onChange={handleOmpRuntimeChange}
-        label={t('settings.openchamber.tools.field.ompRuntime')}
-        ariaLabel={t('settings.openchamber.tools.field.ompRuntime')}
-        info={t('settings.openchamber.tools.field.ompRuntimeInfo')}
-      />
-      <SettingsCheckboxRow
-        className="mt-4"
-        settingsItem="sessions.runtime-acp"
-        checked={acpRuntimeEnabled}
-        onChange={handleAcpRuntimeChange}
-        label={t('settings.openchamber.tools.field.acpRuntime')}
-        ariaLabel={t('settings.openchamber.tools.field.acpRuntime')}
-        info={t('settings.openchamber.tools.field.acpRuntimeInfo')}
-      />
+          serves the runtime only while the switch is on. The adapters load only
+          under Bun, so the switches are web-only (the Electron desktop runs the
+          server under Node). */}
+      {!isElectronShell() && !isVSCodeRuntime() ? (
+        <>
+          <SettingsCheckboxRow
+            className="mt-4"
+            settingsItem="sessions.runtime-omp"
+            checked={ompRuntimeEnabled}
+            onChange={handleOmpRuntimeChange}
+            label={t('settings.openchamber.tools.field.ompRuntime')}
+            ariaLabel={t('settings.openchamber.tools.field.ompRuntime')}
+            info={t('settings.openchamber.tools.field.ompRuntimeInfo')}
+          />
+          <SettingsCheckboxRow
+            className="mt-4"
+            settingsItem="sessions.runtime-acp"
+            checked={acpRuntimeEnabled}
+            onChange={handleAcpRuntimeChange}
+            label={t('settings.openchamber.tools.field.acpRuntime')}
+            ariaLabel={t('settings.openchamber.tools.field.acpRuntime')}
+            info={t('settings.openchamber.tools.field.acpRuntimeInfo')}
+          />
+        </>
+      ) : null}
     </SettingsSection>
   );
 };

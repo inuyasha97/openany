@@ -79,7 +79,7 @@ The adapter's `OmpRuntime.subscribe` now passes `(sessionId, event)`; the projec
 
 Wiring: thin edits to `packages/web/server/index.js` (one import, one mount call after the feature routes register and before the generic proxy, plus a shutdown getter) and one cleanup step in `packages/web/server/lib/opencode/shutdown-runtime.js` that disposes the host. The routes are always registered; each request is served only when the runtime is enabled — `OPENCHAMBER_OMP_RUNTIME=1` forces it on, otherwise the `ompRuntimeEnabled` setting decides, read per request so a settings toggle needs no restart. With neither on the adapter is never imported and the OpenCode-only path is unchanged.
 
-Packaging decision: `packages/web/package.json` gained no dependency. The fork-owned server module imports the adapter by relative path (`../../../../omp-adapter/src/index.ts`), resolved when the flag is on. The adapter and the OMP SDK are TypeScript-only, so the OMP path requires the server to run under Bun; the default path does not.
+Packaging decision: `packages/web/package.json` gained no dependency. The fork-owned server module imports the adapter by relative path (`../../../../omp-adapter/src/index.ts`), resolved when the runtime is enabled. The adapter and the OMP SDK are TypeScript with extensionless imports, so they load only under Bun. The Electron desktop runs the OpenChamber server in-process under **Node**, where that import cannot resolve (`ERR_MODULE_NOT_FOUND`); the server guard keeps the OMP/ACP runtimes disabled there and the Settings switches are hidden on desktop and VS Code. Supporting them on desktop needs a compiled-to-JS adapter or a Bun server there — a separate decision.
 
 ### P5.3: the UI client and the bridge branch
 
