@@ -202,6 +202,7 @@ export const routingI18n = {
     'chat.chatInput.permissionMode.ask': 'Toestemmingen: telkens vragen',
     'chat.chatInput.permissionMode.safety': 'Toestemmingen: vangnet, alleen vragen voor risicovolle acties',
     'chat.chatInput.permissionMode.auto': 'Toestemmingen: alles accepteren',
+    'chat.chatInput.runtime.label': 'Uitvoeringsomgeving',
     'settings.jevAccess.via': 'Beslist via Jev, met {provider}.',
     'settings.jevAccess.missing': 'Heeft Jev nodig en er is geen classificatieprovider ingesteld.',
     'settings.jevAccess.enterprise': 'Heeft Jev nodig, maar de bedrijfsmodus houdt Jev op deze server uit.',
