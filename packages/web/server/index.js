@@ -61,7 +61,7 @@ import { createProjectDirectoryRuntime } from './lib/openchamber/project-directo
 import { createSettingsNormalizationRuntime } from './lib/openchamber/settings-normalization-runtime.js';
 import { createSettingsHelpers } from './lib/openchamber/settings-helpers.js';
 import { createThemeRuntime } from './lib/openchamber/theme-runtime.js';
-import { createFeatureRoutesRuntime } from './lib/opencode/feature-routes-runtime.js';
+import { createFeatureRoutesRuntime } from './lib/openchamber/feature-routes-runtime.js';
 // Fork-owned OMP agent runtime; the only runtime in this fork.
 import { installAcpAgentRuntime, installOmpAgentRuntime } from './lib/agents/index.js';
 import { configureOmpRuntimeHost, listPermissions, readSessions } from './lib/agents/omp-host-access.js';
@@ -73,7 +73,7 @@ import {
   registerServerStatusRoutes,
 } from './lib/openchamber/core-routes.js';
 import { registerOpenChamberRoutes } from './lib/openchamber/openchamber-routes.js';
-import { createServerUtilsRuntime } from './lib/opencode/server-utils-runtime.js';
+import { createServerUtilsRuntime } from './lib/openchamber/server-utils-runtime.js';
 import { createStaticRoutesRuntime } from './lib/openchamber/static-routes-runtime.js';
 import { createSettingsRuntime } from './lib/openchamber/settings-runtime.js';
 import { createBootstrapRuntime } from './lib/openchamber/bootstrap-runtime.js';
@@ -85,7 +85,7 @@ import { createSessionKnowledgeRuntime } from './lib/session-knowledge/runtime.j
 import { createScheduledTasksRuntime } from './lib/scheduled-tasks/runtime.js';
 import { createServerStartupRuntime } from './lib/openchamber/server-startup-runtime.js';
 import { createTunnelWiringRuntime } from './lib/openchamber/tunnel-wiring-runtime.js';
-import { createStartupPipelineRuntime } from './lib/opencode/startup-pipeline-runtime.js';
+import { createStartupPipelineRuntime } from './lib/openchamber/startup-pipeline-runtime.js';
 import { runCliEntryIfMain } from './lib/openchamber/cli-entry-runtime.js';
 import { registerNotificationRoutes } from './lib/notifications/routes.js';
 import { createNotificationEmitterRuntime } from './lib/notifications/emitter-runtime.js';
@@ -99,7 +99,7 @@ import { createRoutingRuntime } from './lib/routing/runtime.js';
 import { createJevClient } from './lib/routing/jev.js';
 import { createSessionWorkRuntime } from './lib/session-work/runtime.js';
 import { createSessionLineage } from './lib/session-lineage.js';
-import { createGracefulShutdownRuntime } from './lib/opencode/shutdown-runtime.js';
+import { createGracefulShutdownRuntime } from './lib/openchamber/shutdown-runtime.js';
 import { beginGuestServiceHost, beginGuestServiceShutdown, stopAllGuestServices } from './lib/guests/service.js';
 import { findInstalledGuest } from './lib/guests/catalog.js';
 import { extensionsPersistPath } from './lib/guests/persist.js';
