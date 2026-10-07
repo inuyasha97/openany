@@ -171,3 +171,38 @@ openchamber-control, openchamber-sessions, routing, git) talk to OpenCode over
 `opencodeClient.getSdkClient()`. The plan's P3 file lists do not cover them, and
 the plan also forbids deleting OpenChamber-owned features, so each needs an OMP
 transport designed before it can be ported.
+
+## OpenCode removed (2026-10-07)
+
+The plans are executed: OMP is the only agent runtime, and OpenCode is gone
+from both surfaces.
+
+- **Server**: the OpenCode process layer, HTTP proxy, config/credential/skill
+  file layer and event bridge are deleted (36 modules). Every OpenChamber
+  feature reads OMP through `lib/agents/omp-host-access.js` and the
+  OpenChamber-owned modules in `lib/openchamber/`: `credentials.js` (OMP's
+  `agent.db` `auth_credentials`, `models.yml`, provider env vars),
+  `agent-config-files.js` / `skills.js` / `snippets.js` (OMP's
+  `~/.omp/agent/{agents,commands}`, project `.omp/`, YAML config),
+  `session-activity.js`, `binary-env.js`, `proxy-helpers.js` and
+  `omp-unsupported.js` (the typed 501). The event hub still fans OpenChamber
+  frames out to clients; it no longer subscribes to an OpenCode upstream.
+- **UI**: `lib/opencode/client.ts` and `opencodeClient` are deleted; the v2
+  wire contract is declared locally in `lib/opencode/wire.ts` and
+  `@opencode/client` / `@opencode/schema` are no longer dependencies of the
+  root, `packages/ui` or `packages/web`. `lib/openchamber/client.ts`
+  (`openChamberClient`) holds the OpenChamber-owned surface, the sync layer
+  takes `runtimeIdentity` instead of an SDK client, and the pipeline is
+  WebSocket-only over `/api/global/event/ws`.
+- **Capabilities over OMP**: sessions (list/create/get/messages/prompt/abort/
+  rename/delete/move), models, commands, skills, permissions (tool approvals),
+  MCP servers via `mcp.json`, provider login (`get_login_providers` /
+  `login`), image attachments and `@path` file mentions, and one-shot
+  generation through a throwaway session for the small-model service.
+- **No OMP surface for**: synthetic messages, command dispatch, agent and
+  model-variant selection, session parent/revert, MCP OAuth sign-in, the
+  runtime file index. Each fails narrowly with a typed error rather than
+  silently continuing, and the UI affordance that fed it is gone.
+- **Out of scope**: `packages/vscode` still imports the deleted OpenCode
+  server modules and does not type-check; the spec leaves it and
+  `packages/mobile` untouched and not required to build.
