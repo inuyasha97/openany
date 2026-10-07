@@ -2,178 +2,168 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fill the OMP-vs-OpenCode gaps that P1–P4 left hidden: tool approvals, MCP management, provider/model setup, agent selection and attachments.
+**Goal:** Fill the OMP-vs-OpenCode gaps P1–P4 left hidden: tool approvals, MCP management, provider/model setup, agent selection and image attachments.
 
-**Architecture:** Three of the four gaps are **config/state on disk**, which the server reads and writes the same way OMP does. Tool approvals are an **RPC frame** (`extension_ui_request`) that must be projected into the existing permission flow. Each task flips a capability flag only after its route and UI path work.
+**Architecture:** Tool approvals are an RPC frame (`extension_ui_request`) projected into the existing permission flow. MCP/provider setup are **config files** the server reads and writes the way OMP does. Each task flips a capability flag only after its route + client method + UI path work.
 
-**Tech Stack:** Node `fs` + JSON/YAML (config), Express routes, `extension_ui_request`/`extension_ui_response` over RPC, React UI.
+**Tech Stack:** Node `fs`, JSON/YAML, Express + Zod, the P1 RPC client (adds an outbound `send`), React.
 
 **Spec:** `docs/superpowers/specs/2026-10-07-omp-only-runtime-design.md`
 
 ## Global Constraints
 
 - P1–P4 are prerequisites.
-- Never write another application's config; write only OMP-managed files (`.omp/mcp.json`, `~/.omp/agent/mcp.json`, `~/.omp/agent/config.yml`) and follow `enterprise-boundary` before adding any path that stores or transmits provider keys.
-- Resolve runtime paths from OMP's own rules (`~/.omp/agent`, profiles, XDG), not hardcoded assumptions; `/session info` and OMP docs are authoritative.
-- Flip a capability flag to `true` in the same task that implements and tests the route + UI path.
+- Follow `enterprise-boundary` before adding any path that stores or transmits provider keys; write only OMP-managed files, never another application's config.
+- Verified shapes this plan is built from:
+  - `SyncEvent` permission members (`packages/ui/src/lib/agent/events.ts:115-118`):
+    `{ type: "permission.asked"; properties: PermissionRequest }`,
+    `{ type: "permission.replied"; properties: { sessionID: string; requestID: string } }`.
+  - `PermissionRequest` = `{ id; sessionID; action: string; resources: string[]; save?: string[]; metadata?: Record<string, JsonValue>; source?: { type: "tool"; messageID; id }; message?: string }`.
+  - `PermissionReply = "once" | "always" | "reject"`.
+  - Reducer: `packages/ui/src/sync/event-reducer.ts` `applyDirectoryEvent` cases at lines 681-707 (binary-insert by `permission.id`; splice on `permission.replied` by `requestID`).
+  - Global index: `packages/ui/src/sync/global-blocking-requests.ts` (`applyGlobalBlockingRequestEvents`, `useGlobalBlockingRequestsStore`).
+  - Reply path: `usePermissionResponse.ts` -> `sessionActions.respondToPermission` (`packages/ui/src/sync/session-actions.ts:2122`) -> `getAgentRuntimeForSession(sessionId).replyPermission(...)`.
+  - UI dialogs: `PermissionCard.tsx`, `PermissionDock.tsx`.
+  - OMP has no permission route/host method today (`omp-routes.js`, `omp-runtime-host.js`).
 
 ## File Structure
 
-- `packages/web/server/lib/agents/omp-config.js` — create. Read/write OMP MCP + provider config.
-- `packages/web/server/lib/agents/omp-approvals.js` — create. Map `extension_ui_request` to permission events and route replies back.
-- `packages/web/server/lib/agents/omp-runtime-host.js` — modify. Wire approvals.
-- `packages/web/server/lib/agents/omp-routes.js` — modify. MCP, providers, approvals routes.
-- `packages/ui/src/lib/agent/omp-runtime.ts` — modify. Capabilities + methods.
-- UI MCP/provider/permission surfaces — find and wire in the discovery step of each task.
+- Create: `packages/web/server/lib/agents/omp-approvals.js` (+ `.test.js`)
+- Create: `packages/web/server/lib/agents/omp-config.js` (+ `.test.js`)
+- Modify: `packages/omp-adapter/src/rpc-client.ts` (outbound `send`), `rpc-host.ts` (expose `send`, `onRawEvent`, permission state)
+- Modify: `packages/web/server/lib/agents/omp-runtime-host.js`, `omp-routes.js`, `omp-routes.test.js`
+- Modify: `packages/ui/src/lib/agent/omp-runtime.ts` (+ test)
 
 ---
 
 ### Task 1: Tool approvals → permission flow
 
-The largest gap and the most user-visible: an OMP approval must surface as a permission request and the user's answer must resolve the pending `extension_ui_request`.
-
-**Files:**
-- Create: `packages/web/server/lib/agents/omp-approvals.js`
-- Modify: `packages/web/server/lib/agents/omp-runtime-host.js`, `omp-routes.js`
-- Modify: `packages/ui/src/lib/agent/omp-runtime.ts`
-
 **Interfaces:**
 - Produces:
-  - `createOmpApprovals({ broadcast })` with `handleRequest(sessionId, frame)`, `resolve(sessionId, requestId, reply)`, `pending(sessionId)`.
-  - Permission events: reuse the canonical `permission.asked`/`permission.replied` `SyncEvent`s.
-  - Routes: `GET /api/agents/omp/sessions/:id/permissions`, `POST /api/agents/omp/sessions/:id/permissions/:requestId`.
-- Consumes: `extension_ui_request` (`select`/`confirm`/`input`/`editor`) and the reply envelope `extension_ui_response` (`value`, `confirmed`, or `cancelled: true`).
+  - `createOmpApprovals({ broadcast, now? })` with `handleRequest(sessionId, frame)`, `resolve(sessionId, requestId, reply)`, `pending(sessionId)`.
+  - Adapter: `OmpRpcClient.send(frame)`, and `OmpRpcClient.onRawEvent` already exists (`onEvent`); the host forwards `extension_ui_request` to `send` responses.
+  - Routes: `GET /api/agents/omp/sessions/:id/permissions`, `POST /api/agents/omp/sessions/:id/permissions/:requestId` body `{ reply: "once"|"always"|"reject" }`.
+- Consumes: RPC request frame `{ type: "extension_ui_request", id, method, title, message?, options?, placeholder?, prefill? }`; RPC reply `{ type: "extension_ui_response", id, value }` | `{ ..., confirmed }` | `{ ..., cancelled: true }`.
 
-- [ ] **Step 1: Discovery — read the permission flow**
-
-```bash
-grep -rln "permission.asked\|permission.replied\|PermissionRequest\|replyPermission\|listPendingPermissions" packages/web/server packages/ui/src
-```
-Read the store and event shapes it produces for OpenCode permissions. Record the exact `SyncEvent` payload the UI expects.
-
-- [ ] **Step 2: Write the failing test**
-
-Create `packages/web/server/lib/agents/omp-approvals.test.js` (Vitest, fake broadcast):
+- [ ] **Step 1: Write the failing test** (create `omp-approvals.test.js`)
 
 ```js
 import { describe, expect, it } from 'vitest';
 import { createOmpApprovals } from './omp-approvals.js';
 
 describe('createOmpApprovals', () => {
-  it('broadcasts permission.asked for an extension_ui_request and records it', () => {
+  it('broadcasts permission.asked for a confirm frame and records it', () => {
     const frames = [];
     const approvals = createOmpApprovals({ broadcast: (f) => frames.push(f) });
     approvals.handleRequest('ses_1', { type: 'extension_ui_request', id: 'ui_1', method: 'confirm', title: 'Run bash?', message: 'rm -rf build' });
     expect(approvals.pending('ses_1')).toHaveLength(1);
     expect(frames[0].type).toBe('openchamber:omp');
-    expect(frames[0].properties.events[0].type).toBe('permission.asked');
+    expect(frames[0].properties.events[0]).toMatchObject({
+      type: 'permission.asked',
+      properties: { id: 'ui_1', sessionID: 'ses_1', resources: ['rm -rf build'] },
+    });
   });
 
-  it('builds the extension_ui_response for a reply', () => {
+  it('maps a reply to an extension_ui_response', () => {
     const approvals = createOmpApprovals({ broadcast: () => {} });
     approvals.handleRequest('ses_1', { type: 'extension_ui_request', id: 'ui_1', method: 'confirm', title: 't', message: 'm' });
-    const reply = approvals.resolve('ses_1', 'ui_1', { confirmed: true });
-    expect(reply).toEqual({ type: 'extension_ui_response', id: 'ui_1', confirmed: true });
+    expect(approvals.resolve('ses_1', 'ui_1', 'once')).toEqual({ type: 'extension_ui_response', id: 'ui_1', confirmed: true });
+    expect(approvals.resolve('ses_1', 'ui_2', 'reject')).toBe(null);
     expect(approvals.pending('ses_1')).toHaveLength(0);
   });
 });
 ```
 
-- [ ] **Step 3: Run to verify failure**
+- [ ] **Step 2: Run to verify failure** — `bunx vitest run server/lib/agents/omp-approvals.test.js` (workdir `packages/web`).
 
-Run: `bunx vitest run server/lib/agents/omp-approvals.test.js` (workdir `packages/web`)
-Expected: FAIL — module missing.
+- [ ] **Step 3: Implement `omp-approvals.js`**
 
-- [ ] **Step 4: Implement `omp-approvals.js`**
+Mapping (record this in the module docblock):
+- `confirm` -> `PermissionRequest { action: "tool", resources: [message ?? title], message: title }`; reply `once`/`always` -> `{ confirmed: true }`, `reject` -> `{ confirmed: false }`.
+- `select` -> `{ action: "select", resources: options }`; reply `once` -> `{ value: options[0] }` (the UI should send a value; extend the route body with optional `value`), `reject` -> `{ cancelled: true }`.
+- `input`/`editor` -> `{ action: "input", resources: [] }`; reply maps `value` through (add optional `value` to the route body), `reject` -> `{ cancelled: true }`.
+- On `handleRequest`, keep `{ frame }` in `Map<sessionId, Map<id, frame>>`; broadcast `permission.asked` (via a passed `broadcast` that wraps one `openchamber:omp` frame). On `resolve`, delete and return the envelope; also broadcast `permission.replied`.
+- `pending(sessionId)` returns the mapped `PermissionRequest[]`.
 
-Map each method:
-- `confirm` -> a yes/no permission (`{ confirmed }` reply).
-- `select` -> a single-choice permission (`{ value }` reply).
-- `input`/`editor` -> a free-text request (`{ value }` reply).
-Broadcast `permission.asked` with the mapped shape (requestId = `frame.id`), keep the frame in a per-session map, and return the correct response envelope on `resolve`.
+- [ ] **Step 4: Add `send` to the RPC client**
 
-- [ ] **Step 5: Wire into the host and routes**
+In `packages/omp-adapter/src/rpc-client.ts`:
 
-- In `omp-runtime-host.js`, the RPC event forwarder must detect `extension_ui_request` before projection and call `approvals.handleRequest(sessionId, frame)`; it must also send the `extension_ui_response` back on the RPC client's stdin (add a `send(frame)` passthrough on the handle/client).
-- Add the two routes and a `replyPermission`/`listPendingPermissions` on the adapter host, then implement them in `OmpRuntimeClient` and flip `permissions: true`.
-
-- [ ] **Step 6: Run tests + full gate**
-
-Run: `bun run --cwd packages/web test && bun run --cwd packages/ui type-check`
-Expected: PASS.
-
-- [ ] **Step 7: Manual check** — trigger an OMP tool that needs approval in a web session and confirm the dialog appears and the answer resumes the run.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add packages/web/server/lib/agents/omp-approvals.js packages/web/server/lib/agents/omp-approvals.test.js packages/web/server/lib/agents/omp-runtime-host.js packages/web/server/lib/agents/omp-routes.js packages/ui/src/lib/agent/omp-runtime.ts
-git commit -m "feat(omp): surface tool approvals as permissions"
+```ts
+  send(frame: OmpRpcFrame): void {
+    this.write(frame)
+  }
 ```
+
+- [ ] **Step 5: Wire the host**
+
+In `omp-runtime-host.js`, before projecting each event, check `event.type === 'extension_ui_request'`: call `approvals.handleRequest(sessionId, event)` and do not project it. Expose host methods `replyPermission(id, requestId, reply, value?)` and `listPermissions(id)`; `replyPermission` calls `approvals.resolve` and then `client.send(envelope)` (needs the client reachable by session id — the P2 `clients` map on the host, or a `sendToSession(id, frame)` callback passed into the host).
+
+- [ ] **Step 6: Routes**
+
+Add:
+```js
+  const replySchema = z.object({ reply: z.enum(['once', 'always', 'reject']), value: z.string().optional() });
+  app.get('/api/agents/omp/sessions/:id/permissions', async (req, res) => { /* host.listPermissions */ });
+  app.post('/api/agents/omp/sessions/:id/permissions/:requestId', parseJsonBody, async (req, res) => { /* host.replyPermission */ });
+```
+
+- [ ] **Step 7: UI client** — implement `replyPermission`, `getPermission` (from `listPermissions` by id), `listPermissions` in `OmpRuntimeClient` and set `permissions: true`. `replyPermission` POSTs `{ reply, value }`; `listPermissions` GETs `/sessions/:id/permissions` for each option-directory session (mirror P2 `getActiveStatus` fan-out).
+
+- [ ] **Step 8: Gate** — `bunx vitest run server/lib/agents` + `bun run --cwd packages/ui type-check && bunx vitest run src/lib/agent`.
+
+- [ ] **Step 9: Manual** — trigger a tool that needs approval; confirm `PermissionDock` shows it and the answer resumes the run.
+
+- [ ] **Step 10: Commit** — `feat(omp): surface tool approvals as permissions`.
 
 ---
 
 ### Task 2: MCP management via config files
 
-**Files:**
-- Create: `packages/web/server/lib/agents/omp-config.js`
-- Modify: `omp-routes.js`, `omp-runtime.ts`
+**Interfaces:** `createOmpConfig({ home? })` -> `{ listMcp(), setMcpEnabled(name, enabled), removeMcp(name, scope), addMcp(definition, scope) }`; routes `GET /api/agents/omp/mcp`, `POST /api/agents/omp/mcp/:name/enabled` `{ enabled }`, `DELETE /api/agents/omp/mcp/:name` `?scope=project|user`.
 
-**Interfaces:**
-- Produces: `createOmpConfig({ home? })` with `listMcp()`, `setMcpEnabled(name, enabled)`, `removeMcp(name, scope)`, `addMcp(definition, scope)`; routes `GET/POST/DELETE /api/agents/omp/mcp`.
-
-- [ ] **Step 1: Discovery**
-
-```bash
-grep -rln "listMcpServers\|connectMcpServer\|mcpServers\|McpServerStatus" packages/ui/src
-```
-Read OMP's `mcp.json` schema (project `.omp/mcp.json`, user `~/.omp/agent/mcp.json`) and which OMP-managed fields the UI needs.
-
-- [ ] **Step 2–6: TDD** — write `omp-config.test.js` for read (parse `mcpServers`, merge project < user, apply `disabledServers`/`enabledServers`) and write (enable/disable/remove/add only to OMP-managed files); implement `omp-config.js`; add routes; implement `OmpRuntimeClient.listMcpServers`/`connectMcpServer`/`disconnectMcpServer`; flip `mcp: true`.
-- [ ] **Step 7: Gate** — `bun run --cwd packages/web test && bun run --cwd packages/ui type-check`; manual MCP list/enable in the UI.
-- [ ] **Step 8: Commit** — `feat(omp): manage mcp servers through config files`.
+- [ ] **Step 1: Discovery** — read OMP's `mcp.json` shape (project `.omp/mcp.json`, user `~/.omp/agent/mcp.json`) and `disabledServers`/`enabledServers`. Find the UI consumer (`grep -rln "listMcpServers\|McpServerStatus" packages/ui/src`).
+- [ ] **Step 2: Failing test** — `omp-config.test.js` using an injected temp `home`: list merges project < user, `disabledServers` wins; enable/disable/remove/add mutate only OMP-managed files.
+- [ ] **Step 3: Implement `omp-config.js`** with an injectable `fs`/`home` for tests.
+- [ ] **Step 4: Routes + host + client** — implement `listMcpServers` (map config entries to `McpServerStatus`), `connectMcpServer`/`disconnectMcpServer` (toggle enabled), flip `mcp: true`.
+- [ ] **Step 5: Gate** — tests + `type-check`; manual list/toggle.
+- [ ] **Step 6: Commit** — `feat(omp): manage mcp servers through config files`.
 
 ---
 
 ### Task 3: Provider and model setup
 
-**Files:** `omp-config.js`, `omp-routes.js`, `omp-runtime.ts`, provider settings UI.
-
-- [ ] **Step 1: Discovery** — find the provider/model settings UI (`grep -rln "getProviders\|providers" packages/ui/src`) and OMP's auth storage / `custom-models` config shape.
-- [ ] **Step 2: OAuth login** — add routes for `get_login_providers`/`login` over RPC and map the `open_url` + `input` frames to the existing login dialog (reuse `extension_ui_request` handling from Task 1).
-- [ ] **Step 3: Manual API key / custom provider** — write to OMP's config/auth storage only; follow `enterprise-boundary`.
-- [ ] **Step 4: Model picker** — implement `selectModel` fully (route from P2 Task 3) and confirm `get_available_models` populates the picker; `modelSelection` stays `true`.
-- [ ] **Step 5: Gate + commit** — tests + `type-check`; `feat(omp): provider and model setup`.
+- [ ] **Step 1: Discovery** — read the provider settings UI (`grep -rln "getProviders\|ProviderCatalog\|ProvidersPage" packages/ui/src`) and OMP auth storage / `custom-models` config (`~/.omp/agent/agent.db`, `~/.omp/agent/config.yml`).
+- [ ] **Step 2: OAuth login** — add RPC `get_login_providers`/`login` routes; map the `open_url` + `input` `extension_ui_request` frames to the login dialog using Task 1's approvals plumbing.
+- [ ] **Step 3: Model picker** — implement `selectModel(id, model)` in the client over the P2 `/sessions/:id/model` route, populate from `GET /models`, flip `modelSelection: true`. Route must call RPC `set_model { provider, modelId }`.
+- [ ] **Step 4: Manual API key / custom provider** — write to OMP config/auth storage only; load `enterprise-boundary` first.
+- [ ] **Step 5: Gate + commit** — `feat(omp): provider and model setup`.
 
 ---
 
-### Task 4: Agent selection (model roles) — investigate, then enable or keep off
+### Task 4: Agent selection (model roles)
 
-**Files:** `omp-runtime.ts`, agent picker UI.
-
-- [ ] **Step 1: Discovery** — determine whether RPC can set/read OMP model roles for a session (`get_state`, config `roles`). If not exposed, keep `agentSelection: false` and hide the picker; record the finding in `docs/agent-host/PHASE5-OMP.md` or the spec.
-- [ ] **Step 2:** If exposed, implement `selectAgent`/`listAgents` over the RPC role commands and flip `agentSelection: true`; else close the task with the recorded finding.
+- [ ] **Step 1: Discovery** — determine whether RPC exposes OMP model roles for a session (`get_state`, config `roles`). 
+- [ ] **Step 2:** If exposed, implement `selectAgent`/`listAgents` and flip `agentSelection: true`; otherwise keep `false`, hide the picker, and record the finding in `docs/agent-host/PHASE5-OMP.md`.
 - [ ] **Step 3: Commit** — `feat(omp): agent selection` or `docs(omp): agent selection stays off (no rpc surface)`.
 
 ---
 
-### Task 5: Attachments policy
+### Task 5: Attachments (images)
 
-**Files:** `omp-runtime.ts`, composer attach UI.
-
-- [ ] **Step 1: Discovery** — find the attach path (`grep -rln "FileInputLite\|attachments\|attach" packages/ui/src/lib/agent packages/ui/src/components/chat/composer`).
-- [ ] **Step 2:** Support images by mapping file parts to RPC `images[]` (`{ type: "image", data, mimeType }`); decide the non-image policy (path mention vs drop) and encode it. Flip `attachments: true` only for the supported cases, or keep a narrower capability.
+- [ ] **Step 1: Discovery** — the attach path (`ChatInput.tsx`, `components/chat/composer/attachments/inlineMentionAttachments.ts`, `fileMentionResults.ts`).
+- [ ] **Step 2:** Map image file parts to the RPC prompt `images[]` (`{ type: "image", data, mimeType }`); decide non-image policy (path mention vs drop) and encode it in `sendPrompt`. Flip `attachments: true` only for images, or keep a narrower flag.
 - [ ] **Step 3: Gate + commit** — tests + manual image attach; `feat(omp): image attachments`.
 
 ---
 
 ## Self-Review
 
-- **Spec coverage:** the spec's remaining capability gaps (permissions, mcp,
-  agentSelection, attachments) and the "config/provider" phase item each have a
-  task. `forms`/`revert`/`turnDiff` remain intentionally `false` (no OMP analog)
-  and need no task.
-- **Placeholder scan:** no TBD; the discovery-first steps name the exact
-  commands and the decision each task must record.
-- **Type consistency:** `createOmpApprovals`/`createOmpConfig` names are used
-  consistently; capability keys match `AgentCapabilities`.
+- **Spec coverage:** remaining capability gaps (permissions, mcp, agentSelection,
+  attachments) and the config/provider phase item each have a task.
+  `forms`/`revert`/`turnDiff` stay `false` (no OMP analog).
+- **Placeholder scan:** no TBD; discovery steps name exact commands and the
+  decision each task records.
+- **Type consistency:** `createOmpApprovals`/`createOmpConfig` names consistent;
+  `PermissionRequest`/`PermissionReply` match `events.ts`/`model.ts`; capability
+  keys match `AgentCapabilities`.
