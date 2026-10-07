@@ -261,11 +261,6 @@ export const SETTINGS_REGISTRY = {
   agentNotifyToolEnabled: field({ scope: 'instance', parse: parseBoolean, ui: uiStore('agentNotifyToolEnabled', (v) => useUIStore.getState().setAgentNotifyToolEnabled(v)) }),
   agentToolsCodeMode: field({ scope: 'instance', parse: parseBoolean, ui: uiStore('agentToolsCodeMode', (v) => useUIStore.getState().setAgentToolsCodeMode(v)) }),
   agentMemoryToolEnabled: field({ scope: 'instance', parse: parseBoolean, ui: uiStore('agentMemoryToolEnabled', (v) => useUIStore.getState().setAgentMemoryToolEnabled(v)) }),
-  // Fork: offer the OMP and ACP runtimes in the composer's runtime picker. Off
-  // by default; the server mounts the runtime only when this is on (or the env
-  // flag forces it).
-  ompRuntimeEnabled: field({ scope: 'instance', parse: parseBoolean, ui: uiStore('ompRuntimeEnabled', (v) => useUIStore.getState().setOmpRuntimeEnabled(v)) }),
-  acpRuntimeEnabled: field({ scope: 'instance', parse: parseBoolean, ui: uiStore('acpRuntimeEnabled', (v) => useUIStore.getState().setAcpRuntimeEnabled(v)) }),
   // The isolated-spaces switch. The server reads it once at start; a change takes effect at the
   // next start, which the settings row says. Never shown in VS Code (decision 16 of the design).
   isolatedSpacesEnabled: field({ scope: 'instance', parse: parseBoolean, ui: uiStore('isolatedSpacesEnabled', (v) => useUIStore.getState().setIsolatedSpacesEnabled(v)) }),

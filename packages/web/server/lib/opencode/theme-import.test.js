@@ -4,8 +4,8 @@ import path from 'node:path';
 import os from 'node:os';
 import express from 'express';
 import request from 'supertest';
-import { createThemeRuntime } from './theme-runtime.js';
-import { registerSettingsUtilityRoutes, registerCommonRequestMiddleware } from './core-routes.js';
+import { createThemeRuntime } from '../openchamber/theme-runtime.js';
+import { registerSettingsUtilityRoutes, registerCommonRequestMiddleware } from '../openchamber/core-routes.js';
 
 const directories = [];
 afterEach(async () => {

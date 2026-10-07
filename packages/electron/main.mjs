@@ -1202,8 +1202,8 @@ const mapUpdaterProgressEvent = (payload) => ({
   data: payload.data,
 });
 
-import { pathLooksUserConfigured, mergePathValues } from '@openchamber/web/server/lib/opencode/path-utils.js';
-import { provideLoginShellEnvSnapshot } from '@openchamber/web/server/lib/opencode/login-shell-env.js';
+import { pathLooksUserConfigured, mergePathValues } from '@openchamber/web/server/lib/openchamber/path-utils.js';
+import { provideLoginShellEnvSnapshot } from '@openchamber/web/server/lib/openchamber/login-shell-env.js';
 
 // Merge the user's login-shell env (PATH, etc.) into this process before we
 // import/start the server in-process. The server and its children (opencode

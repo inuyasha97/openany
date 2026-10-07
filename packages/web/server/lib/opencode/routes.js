@@ -6,9 +6,9 @@ import path from 'path';
 import {
   buildAppliedResponse,
 } from './config-mutation-response.js';
-import { getClaudeCliAuthStatus } from './claude-cli-auth.js';
+import { getClaudeCliAuthStatus } from '../openchamber/claude-cli-auth.js';
 import { OPENCODE_CONFIG_DIR } from './shared.js';
-import { settingsSurfaceOf } from './settings-files.js';
+import { settingsSurfaceOf } from '../openchamber/settings-files.js';
 import { parseWebSearchSelection } from './config-v2.js';
 import { getWebSearchSource, setWarmingEnabled, setWebSearchSelection } from './websearch-config.js';
 import { ENTERPRISE_MODE_ERROR, isEnterpriseMode, isProviderConnectRequest } from '../enterprise-mode.js';

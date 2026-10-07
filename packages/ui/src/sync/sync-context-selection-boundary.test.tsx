@@ -10,6 +10,17 @@ import { useSessionUIStore } from './session-ui-store'
 import type { Message, Part } from '@/lib/opencode/model'
 
 // The provider's own data access goes through the `opencodeClient` singleton;
+
+import { registerAgentRuntime } from '@/lib/agent/registry';
+import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+
+// The registry's default runtime is the real OMP client; register a
+// client-backed double so this test drives app logic with its mocked client.
+registerAgentRuntime(createOpenCodeStubRuntime());
+// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
+// registry answers an unregistered id with the real OMP client, so register the
+// double under that id too.
+registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
 // this client only satisfies the prop and absorbs the event stream, so the
 // assertion below measures render boundaries and nothing else.
 const createSdk = () => OpenCode.make({

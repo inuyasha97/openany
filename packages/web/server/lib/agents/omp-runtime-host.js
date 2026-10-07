@@ -15,7 +15,14 @@
  * it does not know.
  */
 
+import { createOmpApprovals } from './omp-approvals.js';
+import { createOmpConfig } from './omp-config.js';
+
 export const OMP_FRAME_TYPE = 'openchamber:omp';
+
+/** A session process idle this long is disposed; the next use re-opens it. */
+const IDLE_DISPOSE_MS = 30 * 60_000;
+const IDLE_SWEEP_MS = 60_000;
 
 /**
  * @param {object} options
@@ -26,6 +33,7 @@ export const OMP_FRAME_TYPE = 'openchamber:omp';
 export function createOmpRuntimeHost({ adapter, broadcast, now }) {
   const clock = now ?? Date.now;
   const runtime = new adapter.OmpRuntime(adapter.createOmpHost());
+  const config = createOmpConfig();
   const projectors = new Map();
   const directories = new Map();
   const announced = new Set();
@@ -53,6 +61,17 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     broadcast({ type: OMP_FRAME_TYPE, properties });
   };
 
+  // Approvals ride the same control stream as projected events, and the UI
+  // routes a frame by its directory, so a permission frame carries the same
+  // directory the session's events do.
+  const approvals = createOmpApprovals({
+    broadcast: (frame) => {
+      const sessionId = frame.properties?.sessionID;
+      const directory = sessionId ? directories.get(sessionId) : undefined;
+      broadcast(directory ? { ...frame, properties: { ...frame.properties, directory } } : frame);
+    },
+  });
+
   /** Announces a session once, so the UI store materializes it before its messages. */
   const announceSession = (record) => {
     if (announced.has(record.id)) return;
@@ -61,7 +80,36 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     emit(record.id, [{ type: 'session.created', properties: { info: adapter.projectOmpSession(record, clock()) } }]);
   };
 
+  /** Drops every per-session map entry once the session's process is gone. */
+  const forgetSession = (id) => {
+    projectors.delete(id);
+    directories.delete(id);
+    announced.delete(id);
+    approvals.forget(id);
+  };
+
+  // One `omp` process per open session, so sweep the idle ones: without this
+  // the pool grows with every session the user opens. A swept session re-opens
+  // on its next use, and its per-session state goes with its process.
+  const idleSweep = setInterval(() => {
+    void runtime
+      .disposeIdle(IDLE_DISPOSE_MS)
+      .then((disposed) => {
+        for (const id of disposed) forgetSession(id);
+      })
+      .catch(() => {});
+  }, IDLE_SWEEP_MS);
+  idleSweep.unref?.();
+
   const unsubscribe = runtime.subscribe((sessionId, event) => {
+    if (event.type === 'extension_ui_request') {
+      try {
+        approvals.handleRequest(sessionId, event);
+      } catch (error) {
+        console.warn('[omp] approval mapping failed:', error instanceof Error ? error.message : error);
+      }
+      return;
+    }
     let events;
     try {
       events = projectorFor(sessionId).project(sessionId, event);
@@ -100,7 +148,58 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
 
     abort: (id) => runtime.abort(id),
 
+    renameSession: (id, title) => runtime.renameSession(id, title),
+
+    async deleteSession(id) {
+      const deleted = await runtime.deleteSession(id);
+      if (deleted) forgetSession(id);
+      return deleted;
+    },
+
+    listPermissions: (id) => approvals.pending(id),
+
+    async replyPermission(id, requestId, reply, value) {
+      const envelope = approvals.resolve(id, requestId, reply, value);
+      if (!envelope) return false;
+      await runtime.sendToSession(id, envelope);
+      return true;
+    },
+
+    async moveSession(id, toDirectory) {
+      await runtime.moveSession(id, toDirectory);
+      // Frames are routed by this directory, so the move has to follow.
+      rememberDirectory(id, toDirectory);
+    },
+
+    setModel: (id, provider, modelId) => runtime.setModel(id, provider, modelId),
+
+    getSessionStatus: (id) => runtime.getSessionStatus(id),
+
+    listModels: () => runtime.listModels(),
+
+    listCommands: () => runtime.listCommands(),
+
+    listMcpServers: (directory) => config.listMcp(directory),
+
+    setMcpEnabled: (name, enabled) => config.setMcpEnabled(name, enabled),
+
+    removeMcpServer: (name, scope, directory) => config.removeMcp(name, scope, directory),
+
+    addMcpServer: (definition, scope, directory) => config.addMcp(definition, scope, directory),
+
+    /**
+     * Releases every session process started in `directory` and forgets its
+     * per-session state. The worktree-removal path calls this so the folder is
+     * not locked while it is deleted.
+     */
+    async disposeSessionsInDirectory(directory) {
+      const disposed = await runtime.disposeSessionsInDirectory(directory);
+      for (const id of disposed) forgetSession(id);
+      return disposed.length;
+    },
+
     async dispose() {
+      clearInterval(idleSweep);
       unsubscribe();
       projectors.clear();
       directories.clear();

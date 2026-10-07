@@ -140,12 +140,6 @@
     "agentMemoryToolEnabled": {
       "scope": "instance"
     },
-    "ompRuntimeEnabled": {
-      "scope": "instance"
-    },
-    "acpRuntimeEnabled": {
-      "scope": "instance"
-    },
     "isolatedSpacesEnabled": {
       "scope": "instance"
     },

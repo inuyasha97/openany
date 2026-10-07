@@ -678,24 +678,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
-    id: 'sessions.runtime-omp',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.ompRuntime',
-    descriptionKey: 'settings.openchamber.tools.field.ompRuntimeInfo',
-    keywords: ['runtime', 'omp', 'oh my pi', 'agent', 'openchamber'],
-    // The adapters load only under Bun; the Electron desktop runs the server
-    // under Node, so the row is web-only for now.
-    isAvailable: (ctx) => ctx.isWeb && !ctx.isDesktop && !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.runtime-acp',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.acpRuntime',
-    descriptionKey: 'settings.openchamber.tools.field.acpRuntimeInfo',
-    keywords: ['runtime', 'acp', 'agent', 'protocol', 'openchamber'],
-    isAvailable: (ctx) => ctx.isWeb && !ctx.isDesktop && !ctx.isVSCode,
-  },
-  {
     id: 'routing.enabled',
     page: 'routing',
     titleKey: 'settings.routing.auto.enable',

@@ -19,10 +19,13 @@ const makeClient = (routes: Record<string, { status?: number; body: unknown }>) 
 }
 
 describe("OmpRuntimeClient", () => {
-  test("declares the omp id, no optional capabilities and an inert translator", () => {
+  test("declares the omp id, its capabilities and an inert translator", () => {
     const { client } = makeClient({})
     expect(client.id).toBe("omp")
-    expect(Object.values(client.capabilities)).toEqual([false, false, false, false, false, false, false, false, false, false, false, false, false, false, false])
+    expect(client.capabilities).toMatchObject({
+      rename: true, delete: true, move: true, commands: true, skills: true, permissions: true, mcp: true, modelSelection: true,
+      forms: false, revert: false, turnDiff: false, agentSelection: false,
+    })
     expect(client.translateEvent()).toEqual([])
   })
 
@@ -93,5 +96,93 @@ describe("OmpRuntimeClient", () => {
   test("surfaces an HTTP failure instead of an empty result", async () => {
     const { client } = makeClient({})
     await expect(client.listSessions()).rejects.toThrow("OMP request failed: 404")
+  })
+
+  test("renames, deletes and moves a session", async () => {
+    const { client, calls } = makeClient({
+      "PATCH /api/agents/omp/sessions/ses_a": { body: { ok: true } },
+      "DELETE /api/agents/omp/sessions/ses_a": { body: { ok: true } },
+      "POST /api/agents/omp/sessions/ses_a/move": { body: { ok: true } },
+    })
+    await client.renameSession("ses_a", "Renamed")
+    expect(await client.deleteSession("ses_a")).toBe(true)
+    await client.moveSession("ses_a", "/repo/b")
+    expect(calls).toEqual([
+      { url: "/api/agents/omp/sessions/ses_a", method: "PATCH", body: { title: "Renamed" } },
+      { url: "/api/agents/omp/sessions/ses_a", method: "DELETE", body: undefined },
+      { url: "/api/agents/omp/sessions/ses_a/move", method: "POST", body: { directory: "/repo/b" } },
+    ])
+  })
+
+  test("lists commands and derives skills", async () => {
+    const { client } = makeClient({
+      "GET /api/agents/omp/commands": { body: { commands: [
+        { name: "goal", source: "builtin", description: "g" },
+        { name: "commit", source: "skill", description: "c" },
+      ] } },
+    })
+    expect((await client.listCommands()).map((c) => c.name)).toEqual(["goal", "commit"])
+    expect((await client.listSkills()).map((s) => s.name)).toEqual(["commit"])
+  })
+
+  test("reads per-session busy status for the directory", async () => {
+    const { client } = makeClient({
+      "GET /api/agents/omp/sessions": { body: { sessions: [
+        { id: "ses_a", sessionPath: "/s/a.json", cwd: "/repo", title: "A" },
+        { id: "ses_b", sessionPath: "/s/b.json", cwd: "/other", title: "B" },
+      ] } },
+      "GET /api/agents/omp/sessions/ses_a/status": { body: { busy: true } },
+    })
+    expect(await client.getActiveStatus("/repo")).toEqual({ ses_a: { type: "busy" } })
+  })
+
+  test("returns null when the status snapshot cannot be read", async () => {
+    const { client } = makeClient({ "GET /api/agents/omp/sessions": { body: { sessions } } })
+    expect(await client.getActiveStatus("/repo")).toBeNull()
+  })
+
+  test("answers a permission and lists the pending ones", async () => {
+    const permission = { id: "ui_1", sessionID: "ses_a", action: "tool", resources: ["rm -rf build"], message: "Run bash?" }
+    const { client, calls } = makeClient({
+      "GET /api/agents/omp/sessions": { body: { sessions } },
+      "POST /api/agents/omp/sessions/ses_a/permissions/ui_1": { body: { ok: true } },
+      "GET /api/agents/omp/sessions/ses_a/permissions": { body: { permissions: [permission] } },
+    })
+    expect(await client.replyPermission("ses_a", "ui_1", "once")).toBe(true)
+    expect(calls[0]).toEqual({ url: "/api/agents/omp/sessions/ses_a/permissions/ui_1", method: "POST", body: { reply: "once" } })
+    expect(await client.getPermission("ses_a", "ui_1")).toEqual({ state: "ok", permission })
+    expect(await client.getPermission("ses_a", "ui_2")).toEqual({ state: "unknown" })
+    expect((await client.listPermissions()).map((entry) => entry.id)).toEqual(["ui_1"])
+  })
+
+  test("lists MCP servers and toggles one by name", async () => {
+    const { client, calls } = makeClient({
+      "GET /api/agents/omp/mcp": { body: { servers: [
+        { name: "files", scope: "user", enabled: true, type: "stdio", command: "files-bin" },
+        { name: "web", scope: "project", enabled: false, type: "http", url: "https://web" },
+      ] } },
+      "POST /api/agents/omp/mcp/files/enabled": { body: { ok: true } },
+    })
+    expect(await client.listMcpServers()).toEqual([
+      { name: "files", status: { status: "connected" } },
+      { name: "web", status: { status: "disabled" } },
+    ])
+    await client.disconnectMcpServer("files")
+    await client.connectMcpServer("files")
+    expect(calls).toEqual([
+      { url: "/api/agents/omp/mcp", method: "GET", body: undefined },
+      { url: "/api/agents/omp/mcp/files/enabled", method: "POST", body: { enabled: false } },
+      { url: "/api/agents/omp/mcp/files/enabled", method: "POST", body: { enabled: true } },
+    ])
+  })
+
+  test("switches a session's model", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/model": { body: { ok: true } },
+    })
+    await client.selectModel("ses_a", { providerID: "anthropic", id: "claude" })
+    expect(calls).toEqual([
+      { url: "/api/agents/omp/sessions/ses_a/model", method: "POST", body: { provider: "anthropic", modelId: "claude" } },
+    ])
   })
 })

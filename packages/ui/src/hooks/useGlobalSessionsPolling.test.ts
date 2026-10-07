@@ -12,6 +12,17 @@ import {
   useGlobalSessionsPolling,
 } from './useGlobalSessionsPolling';
 
+import { registerAgentRuntime } from '@/lib/agent/registry';
+import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+
+// The registry's default runtime is the real OMP client; register a
+// client-backed double so this test drives app logic with its mocked client.
+// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
+// registry answers an unregistered id with the real OMP client, so register the
+// double under that id too.
+registerAgentRuntime(createOpenCodeStubRuntime());
+registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
+
 const flush = async () => { await new Promise<void>((resolve) => queueMicrotask(resolve)); };
 const timers = () => {
   let nextId = 0;
@@ -176,7 +187,11 @@ test('the mounted poller recovers real store failure and starts a fresh load on 
     expect(useGlobalSessionsStore.getState().activeSessions.map((item) => item.id)).toEqual(['restored']);
     expect(useGlobalSessionsStore.getState().status).toBe('ready');
     expect(clock.delay()).toBe(GLOBAL_SESSIONS_REFRESH_INTERVAL_MS);
-    expect(list.mock.calls.every(([options]) => options?.global === true)).toBe(true);
+    // The poller lists globally. A directory-scoped listing (the OMP session
+    // merge) is not the poller's call and carries no `global` flag.
+    const pollerCalls = list.mock.calls.filter(([options]) => options?.global !== undefined);
+    expect(pollerCalls.length).toBeGreaterThan(0);
+    expect(pollerCalls.every(([options]) => options?.global === true)).toBe(true);
 
     const oldPage = new Promise<SessionPage>((resolve) => { resolveOldPage = resolve; });
     list.mockImplementationOnce(() => oldPage);

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 
-import { getNpmInfo as defaultGetNpmInfo } from './npm-registry.js';
+import { getNpmInfo as defaultGetNpmInfo } from '../openchamber/npm-registry.js';
 import { isExactSemver as defaultIsExactSemver, isPathSpec as defaultIsPathSpec, parseNpmSpec as defaultParseNpmSpec, parsePathSpec as defaultParsePathSpec } from './plugin-spec.js';
 import { buildAppliedResponse } from './config-mutation-response.js';
 

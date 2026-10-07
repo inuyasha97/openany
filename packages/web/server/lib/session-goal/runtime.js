@@ -26,7 +26,7 @@ import {
   readJevAnswers,
   readSmallModelAnswers,
 } from './audit.js';
-import { readMergedSettingsSync } from '../opencode/settings-files.js';
+import { readMergedSettingsSync } from '../openchamber/settings-files.js';
 import { createSessionActivityProbe } from '../opencode/session-activity.js';
 import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
 

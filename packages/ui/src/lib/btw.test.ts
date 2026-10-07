@@ -4,6 +4,17 @@ import type { MessagePage } from '@/lib/opencode/client';
 import type { StartBtwInput } from './btw';
 import { normalizePath } from '@/lib/pathNormalization';
 
+import { registerAgentRuntime } from '@/lib/agent/registry';
+import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+
+// The registry's default runtime is the real OMP client; register a
+// client-backed double so this test drives app logic with its mocked client.
+registerAgentRuntime(createOpenCodeStubRuntime());
+// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
+// registry answers an unregistered id with the real OMP client, so register the
+// double under that id too.
+registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
+
 type ForkOptions = { before?: string; directory?: string | null };
 let forkSessionImpl: (sessionId: string, options?: ForkOptions) => Promise<Session>;
 let getSessionMessagesImpl: (id: string, options?: { limit?: number }, directory?: string | null) => Promise<MessagePage>;

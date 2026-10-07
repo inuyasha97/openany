@@ -23,7 +23,6 @@ import { ModelControls } from '../../ModelControls';
 import { ComposerActionButtons } from './ComposerActionButtons';
 import { ComposerAttachmentControls } from './ComposerAttachmentControls';
 import { FocusModeButton } from './FocusModeButton';
-import { RuntimeControl } from './RuntimeControl';
 import { PermissionAutoAcceptButton } from './PermissionAutoAcceptButton';
 import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -180,7 +179,6 @@ export function ComposerFooter(props: ComposerFooterProps) {
                                 permissionMode={permissionMode}
                                 handlePermissionModeCycle={onCyclePermissionMode}
                             /> : null}
-                            {!isBtw ? <RuntimeControl /> : null}
                             {!isBtw ? <SessionGoalButton
                                 sessionId={currentSessionId}
                                 directory={directory}
@@ -273,7 +271,6 @@ export function ComposerFooter(props: ComposerFooterProps) {
                         {!isBtw ? <SessionGoalObjectiveCounter length={messageLength} /> : null}
                     </div>
                     <div className={cn('flex items-center flex-1 justify-end', footerGapClass, 'md:gap-x-3')}>
-                        {!isBtw && !parallelRun ? <RuntimeControl /> : null}
                         {parallelRun ? <div className="flex-1" /> : isBtw ? <ModelControls className="flex-1 min-w-0 justify-end" sessionId={modelSessionId ?? null} selection={btwSelection} /> : showModelControls ? <MemoModelControls className={cn('flex-1 min-w-0 justify-end')} onRunInParallel={onRunInParallel} /> : <div className="flex-1" />}
                         {!isBtw ? <MemoComposerDictation
                             radius={chatInputRadius}

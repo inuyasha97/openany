@@ -10,6 +10,9 @@ const createFakeAdapter = ({ projectImpl } = {}) => {
     aborted: [],
     disposed: false,
     messages: [],
+    sent: [],
+    disposedDirectories: [],
+    disposedSessionIds: [],
     emit(sessionId, event) {
       subscriber?.(sessionId, event);
     },
@@ -29,11 +32,22 @@ const createFakeAdapter = ({ projectImpl } = {}) => {
     async getSession(id) {
       return { id };
     },
+    async sendToSession(id, frame) {
+      runtime.sent.push([id, frame]);
+    },
     async abort(id) {
       runtime.aborted.push(id);
     },
     async dispose() {
       runtime.disposed = true;
+    },
+    async disposeIdle() {
+      return 0;
+    },
+    async moveSession() {},
+    async disposeSessionsInDirectory(directory) {
+      runtime.disposedDirectories.push(directory);
+      return runtime.disposedSessionIds;
     },
     subscribe(listener) {
       subscriber = listener;
@@ -206,5 +220,54 @@ describe('createOmpRuntimeHost', () => {
 
     await host.dispose();
     expect(runtime.disposed).toBe(true);
+  });
+
+  it('drops a session\'s approvals when its process is disposed for a directory', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    runtime.disposedSessionIds = ['ses_new'];
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+    await host.createSession({ cwd: '/repo' });
+    runtime.emit('ses_new', { type: 'extension_ui_request', id: 'ui_1', method: 'confirm', title: 't', message: 'm' });
+    expect(host.listPermissions('ses_new')).toHaveLength(1);
+
+    await host.disposeSessionsInDirectory('/repo');
+
+    expect(runtime.disposedDirectories).toEqual(['/repo']);
+    expect(host.listPermissions('ses_new')).toHaveLength(0);
+  });
+
+  it('routes later frames to the new directory after a move', async () => {
+    const frames = [];
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: (frame) => frames.push(frame) });
+    await host.createSession({ cwd: '/repo' });
+
+    await host.moveSession('ses_new', '/repo/b');
+    runtime.emit('ses_new', { type: 'agent_end' });
+
+    expect(eventFrames(frames).at(-1).properties.directory).toBe('/repo/b');
+  });
+
+  it('surfaces an extension ui request as a permission and answers it', async () => {
+    const frames = [];
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: (frame) => frames.push(frame) });
+    await host.createSession({ cwd: '/repo' });
+
+    runtime.emit('ses_new', { type: 'extension_ui_request', id: 'ui_1', method: 'confirm', title: 'Run bash?', message: 'rm -rf build' });
+
+    const asked = frames.find((frame) => frame.properties.events[0]?.type === 'permission.asked');
+    expect(asked.properties.directory).toBe('/repo');
+    expect(asked.properties.events[0].properties).toMatchObject({ id: 'ui_1', sessionID: 'ses_new', resources: ['rm -rf build'] });
+    // The frame is a question, not a projected event: the only event-bearing
+    // frame is the permission itself.
+    const projected = eventFrames(frames);
+    expect(projected).toHaveLength(1);
+    expect(projected[0].properties.events[0].type).toBe('permission.asked');
+    expect(host.listPermissions('ses_new')).toHaveLength(1);
+
+    expect(await host.replyPermission('ses_new', 'ui_1', 'once')).toBe(true);
+    expect(runtime.sent).toEqual([['ses_new', { type: 'extension_ui_response', id: 'ui_1', confirmed: true }]]);
+    expect(host.listPermissions('ses_new')).toHaveLength(0);
   });
 });

@@ -14,6 +14,18 @@ const createHost = (overrides = {}) => {
     getMessages: vi.fn(async () => ({ items: [], cursor: {} })),
     prompt: vi.fn(async () => true),
     abort: vi.fn(async () => {}),
+    renameSession: vi.fn(async () => {}),
+    deleteSession: vi.fn(async () => true),
+    moveSession: vi.fn(async () => {}),
+    setModel: vi.fn(async () => {}),
+    getSessionStatus: vi.fn(async () => ({ busy: false })),
+    listModels: vi.fn(async () => []),
+    listCommands: vi.fn(async () => []),
+    listPermissions: vi.fn(async () => []),
+    replyPermission: vi.fn(async () => true),
+    listMcpServers: vi.fn(async () => []),
+    setMcpEnabled: vi.fn(async () => true),
+    removeMcpServer: vi.fn(async () => true),
     ...overrides,
   };
 };
@@ -123,5 +135,86 @@ describe('OMP routes', () => {
 
     expect(response.status).toBe(500);
     expect(response.body).toEqual({ error: 'store unavailable' });
+  });
+
+  it('serves session mutations', async () => {
+    const app = createApp(createHost());
+
+    expect((await request(app).patch('/api/agents/omp/sessions/ses_1').send({ title: 'Renamed' })).body).toEqual({ ok: true });
+    expect((await request(app).delete('/api/agents/omp/sessions/ses_1')).body).toEqual({ ok: true });
+    expect((await request(app).post('/api/agents/omp/sessions/ses_1/move').send({ directory: '/repo/b' })).body).toEqual({ ok: true });
+    expect((await request(app).post('/api/agents/omp/sessions/ses_1/model').send({ provider: 'anthropic', modelId: 'claude' })).body).toEqual({ ok: true });
+  });
+
+  it('rejects a mutation body that fails validation', async () => {
+    const app = createApp(createHost());
+
+    expect((await request(app).patch('/api/agents/omp/sessions/ses_1').send({ title: '' })).status).toBe(400);
+    expect((await request(app).post('/api/agents/omp/sessions/ses_1/move').send({})).status).toBe(400);
+    expect((await request(app).post('/api/agents/omp/sessions/ses_1/model').send({ provider: 'anthropic' })).status).toBe(400);
+  });
+
+  it('answers 404 when deleting an unknown session', async () => {
+    const host = createHost({ deleteSession: vi.fn(async () => false) });
+    const response = await request(createApp(host)).delete('/api/agents/omp/sessions/missing');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Unknown OMP session' });
+  });
+
+  it('serves status, models and commands', async () => {
+    const app = createApp(createHost());
+
+    expect((await request(app).get('/api/agents/omp/sessions/ses_1/status')).body).toEqual({ busy: false });
+    expect((await request(app).get('/api/agents/omp/models')).body).toEqual({ models: [] });
+    expect((await request(app).get('/api/agents/omp/commands')).body).toEqual({ commands: [] });
+  });
+
+  it('lists and answers permissions', async () => {
+    const host = createHost({ listPermissions: vi.fn(async () => [{ id: 'ui_1', sessionID: 'ses_1', action: 'tool', resources: ['m'] }]) });
+    const app = createApp(host);
+
+    expect((await request(app).get('/api/agents/omp/sessions/ses_1/permissions')).body).toEqual({
+      permissions: [{ id: 'ui_1', sessionID: 'ses_1', action: 'tool', resources: ['m'] }],
+    });
+
+    const answered = await request(app).post('/api/agents/omp/sessions/ses_1/permissions/ui_1').send({ reply: 'once' });
+    expect(answered.body).toEqual({ ok: true });
+    expect(host.replyPermission).toHaveBeenCalledWith('ses_1', 'ui_1', 'once', undefined);
+
+    expect((await request(app).post('/api/agents/omp/sessions/ses_1/permissions/ui_1').send({ reply: 'maybe' })).status).toBe(400);
+  });
+
+  it('answers 404 when the permission was never asked', async () => {
+    const host = createHost({ replyPermission: vi.fn(async () => false) });
+    const response = await request(createApp(host)).post('/api/agents/omp/sessions/ses_1/permissions/ui_9').send({ reply: 'reject' });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Unknown OMP permission' });
+  });
+
+  it('lists and toggles MCP servers', async () => {
+    const host = createHost({ listMcpServers: vi.fn(async () => [{ name: 'files', scope: 'user', enabled: true, type: 'stdio' }]) });
+    const app = createApp(host);
+
+    expect((await request(app).get('/api/agents/omp/mcp?directory=/repo')).body).toEqual({
+      servers: [{ name: 'files', scope: 'user', enabled: true, type: 'stdio' }],
+    });
+    expect(host.listMcpServers).toHaveBeenCalledWith('/repo');
+
+    expect((await request(app).post('/api/agents/omp/mcp/files/enabled').send({ enabled: false })).body).toEqual({ ok: true });
+    expect(host.setMcpEnabled).toHaveBeenCalledWith('files', false);
+
+    expect((await request(app).post('/api/agents/omp/mcp/files/enabled').send({ enabled: 'yes' })).status).toBe(400);
+    expect((await request(app).delete('/api/agents/omp/mcp/files?scope=project&directory=/repo')).body).toEqual({ ok: true });
+    expect(host.removeMcpServer).toHaveBeenCalledWith('files', 'project', '/repo');
+  });
+
+  it('answers 404 when removing an unknown MCP server', async () => {
+    const host = createHost({ removeMcpServer: vi.fn(async () => false) });
+    const response = await request(createApp(host)).delete('/api/agents/omp/mcp/missing');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Unknown OMP MCP server' });
   });
 });

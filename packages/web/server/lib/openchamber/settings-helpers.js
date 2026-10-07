@@ -627,12 +627,6 @@ export const createSettingsHelpers = (dependencies) => {
     if (typeof candidate.agentMemoryToolEnabled === 'boolean') {
       result.agentMemoryToolEnabled = candidate.agentMemoryToolEnabled;
     }
-    if (typeof candidate.ompRuntimeEnabled === 'boolean') {
-      result.ompRuntimeEnabled = candidate.ompRuntimeEnabled;
-    }
-    if (typeof candidate.acpRuntimeEnabled === 'boolean') {
-      result.acpRuntimeEnabled = candidate.acpRuntimeEnabled;
-    }
     if (typeof candidate.agentNotifyToolEnabled === 'boolean') {
       result.agentNotifyToolEnabled = candidate.agentNotifyToolEnabled;
     }

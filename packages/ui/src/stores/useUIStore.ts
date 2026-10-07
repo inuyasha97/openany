@@ -1025,10 +1025,6 @@ interface UIStore {
   browserProvider: string;
   agentMemoryToolEnabled: boolean;
   agentNotifyToolEnabled: boolean;
-  /** Fork: offer the OMP runtime in the composer's runtime picker. */
-  ompRuntimeEnabled: boolean;
-  /** Fork: offer the ACP runtime in the composer's runtime picker. */
-  acpRuntimeEnabled: boolean;
   /** Whether OpenChamber's agent tools sit behind OpenCode's Code Mode instead of being direct tools. */
   agentToolsCodeMode: boolean;
   /** The isolated-spaces switch as saved; the server applies it at its next start. */
@@ -1257,8 +1253,6 @@ interface UIStore {
   setBrowserProvider: (value: string) => void;
   setAgentMemoryToolEnabled: (value: boolean) => void;
   setAgentNotifyToolEnabled: (value: boolean) => void;
-  setOmpRuntimeEnabled: (value: boolean) => void;
-  setAcpRuntimeEnabled: (value: boolean) => void;
   setAgentToolsCodeMode: (value: boolean) => void;
   setIsolatedSpacesEnabled: (value: boolean) => void;
   setPermissionDefaultMode: (value: PermissionMode) => void;
@@ -1452,8 +1446,6 @@ export const useUIStore = create<UIStore>()(
         browserProvider: 'builtin',
         agentMemoryToolEnabled: false,
         agentNotifyToolEnabled: false,
-        ompRuntimeEnabled: false,
-        acpRuntimeEnabled: false,
         agentToolsCodeMode: false,
         isolatedSpacesEnabled: false,
         permissionDefaultMode: 'ask',
@@ -2828,12 +2820,6 @@ export const useUIStore = create<UIStore>()(
         setAgentMemoryToolEnabled: (value) => {
           set({ agentMemoryToolEnabled: value });
         },
-        setOmpRuntimeEnabled: (value) => {
-          set({ ompRuntimeEnabled: value });
-        },
-        setAcpRuntimeEnabled: (value) => {
-          set({ acpRuntimeEnabled: value });
-        },
         setIsolatedSpacesEnabled: (value) => {
           set({ isolatedSpacesEnabled: value });
         },
@@ -3322,8 +3308,6 @@ export const useUIStore = create<UIStore>()(
           browserProvider: state.browserProvider,
           agentMemoryToolEnabled: state.agentMemoryToolEnabled,
           agentNotifyToolEnabled: state.agentNotifyToolEnabled,
-          ompRuntimeEnabled: state.ompRuntimeEnabled,
-          acpRuntimeEnabled: state.acpRuntimeEnabled,
           agentToolsCodeMode: state.agentToolsCodeMode,
           isolatedSpacesEnabled: state.isolatedSpacesEnabled,
           permissionDefaultMode: state.permissionDefaultMode,

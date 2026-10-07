@@ -12,6 +12,17 @@ import * as worktreeBootstrap from '@/lib/worktrees/worktreeBootstrap';
 import * as projectConfig from '@/lib/openchamberConfig';
 import * as sharedTrust from '@/lib/sharedTrustConfirmation';
 
+import { registerAgentRuntime } from '@/lib/agent/registry';
+import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+
+// The registry's default runtime is the real OMP client; register a
+// client-backed double so this test drives app logic with its mocked client.
+registerAgentRuntime(createOpenCodeStubRuntime());
+// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
+// registry answers an unregistered id with the real OMP client, so register the
+// double under that id too.
+registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
+
 const created: AgentSession = {
   id: 'background-session', runtimeId: 'opencode', nativeSessionId: 'background-session', directory: '/project-b', title: 'Task', projectID: 'b', cost: 0,
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },

@@ -8,7 +8,6 @@
 
 import type { Session } from "@/lib/opencode/model"
 import type { AgentSession } from "./contract"
-import { isAcpRuntimeAvailable } from "./acp-availability"
 import { isOmpRuntimeAvailable } from "./omp-availability"
 import { getAgentRuntime } from "./registry"
 
@@ -39,6 +38,5 @@ const listSafely = async (runtimeId: string): Promise<AgentSession[]> => {
 export const listAdditionalRuntimeSessions = async (): Promise<AgentSession[]> => {
   const sessions: AgentSession[] = []
   if (await isOmpRuntimeAvailable()) sessions.push(...(await listSafely("omp")))
-  if (await isAcpRuntimeAvailable()) sessions.push(...(await listSafely("acp")))
   return sessions
 }

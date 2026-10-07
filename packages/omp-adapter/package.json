@@ -9,7 +9,6 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@oh-my-pi/pi-coding-agent": "18.1.11",
     "@openchamber/ui": "workspace:*"
   }
 }

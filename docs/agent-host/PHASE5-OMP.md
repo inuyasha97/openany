@@ -108,3 +108,66 @@ Capability gating (Chặng 2, started): `resolveSessionCapabilities(sessionId, d
 - No UI affordance creates or lists OMP sessions, so nothing user-reachable uses the client. That affordance is a product decision for the maintainer; the phase's engineering is complete without it. The four questions it has to answer are in the proposal: entry point, whether OMP sessions share the OpenCode sidebar/project list, directory scoping, and model/agent selection.
 
 
+
+## OMP-only runtime plans (2026-10-07): agent selection stays off
+
+P5 Task 4 asked whether OMP's RPC surface exposes model roles well enough to
+enable the composer's agent picker.
+
+Finding: it does not. `get_state` returns the session's current `model` and
+`thinkingLevel`; the model commands are `set_model` and `cycle_model`. No
+command selects an OMP role (`smol`, `slow`, `plan`) for a session, and no RPC
+response lists them. Roles live in OMP's own configuration, not per session
+over RPC.
+
+Decision: `agentSelection` stays `false` in `OmpRuntimeClient`; `listAgents`
+and `selectAgent` keep rejecting through the `unsupported` helper, and the
+composer hides the agent picker for an OMP session by capability, not by
+runtime name.
+
+## OMP-only runtime plans (2026-10-07): what landed
+
+The `docs/superpowers/plans/` set moves this fork to OMP as the only runtime.
+Landed and verified:
+
+- **RPC adapter** (`packages/omp-adapter/src/`): `rpc-client.ts` (JSONL framing,
+  request/response correlation by `id`, protocol v2 negotiation with v1
+  fallback and `rpc_chunk` reassembly, outbound `send`), `session-store.ts`
+  (`~/.omp/agent/sessions` scan, `title`/`session` header parse, delete, move),
+  `rpc-host.ts` (`omp --mode rpc` per open session, `resolveOmpCommand`:
+  `OPENCHAMBER_OMP_PATH` → `OPENCHAMBER_OMP_BIN` → `OMP_BINARY` →
+  `OPENCHAMBER_BUNDLED_OMP_CLI_DIR` → `resourcesPath/omp-cli` → `PATH`).
+  `sdk-host.ts` and the `@oh-my-pi/pi-coding-agent` dependency are gone.
+- **Process pool**: a session process is spawned on demand and swept when idle
+  (`OmpRuntime.disposeIdle`, 30 min idle, 60 s sweep in the server host), so the
+  pool does not grow with every session the user opens. Verified against the
+  real binary: two opened sessions → two `omp --mode rpc` processes → zero after
+  the sweep.
+- **Opening a session needs its cwd**: OMP returns `{ cancelled: true }` from
+  `switch_session` when the working directory would change, so
+  `OmpRuntime.getSession` starts the process in the session's own `cwd`.
+- **Server host** (`packages/web/server/lib/agents/`): `omp-routes.js` (sessions,
+  prompt, abort, messages, rename, delete, move, model, status, models,
+  commands, permissions, MCP), `omp-runtime-host.js` (per-session projector,
+  `openchamber:omp` frames, idle sweep), `omp-approvals.js` (OMP
+  `extension_ui_request` ↔ `permission.asked`/`permission.replied`),
+  `omp-config.js` (MCP `mcp.json` read/write, cross-checked against OMP's own
+  reader). The routes are always registered; there is no flag or setting gate.
+- **UI client**: `OmpRuntimeClient` capabilities now `commands`, `skills`,
+  `rename`, `delete`, `move`, `permissions`, `mcp`, `modelSelection` (model
+  roles stay off — see the note above).
+- **Module split**: the OpenChamber-owned server modules moved from
+  `lib/opencode/` to `lib/openchamber/`; the OpenCode-specific modules stayed
+  behind pending removal.
+- **Electron**: `prepare-omp-cli.mjs` stages the pinned OMP binary into
+  `resources/omp-cli` and `extraResources` ships it.
+
+Not landed, and why: removing OpenCode needs a product decision. Seventeen
+server feature areas outside `lib/opencode/` (scheduler, quota, spaces,
+small-model, session-goal, session-assist, session-work, message-queue,
+notifications, context-obligatory, markdown-image-grants, tts, skills-catalog,
+openchamber-control, openchamber-sessions, routing, git) talk to OpenCode over
+`@opencode/client`, and the shared UI's sync layer is driven by
+`opencodeClient.getSdkClient()`. The plan's P3 file lists do not cover them, and
+the plan also forbids deleting OpenChamber-owned features, so each needs an OMP
+transport designed before it can be ported.

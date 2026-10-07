@@ -20,4 +20,5 @@ export type {
   OmpUsage,
   OmpUserMessage,
 } from "./model"
-export { createOmpHost } from "./sdk-host"
+export { createOmpHost } from "./rpc-host"
+export type { OmpHostOptions } from "./rpc-host"

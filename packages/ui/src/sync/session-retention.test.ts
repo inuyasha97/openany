@@ -10,6 +10,17 @@ import { useSessionUIStore } from './session-ui-store';
 import { replaceGlobalSessionStatusById } from './global-session-status';
 import { buildSessionRetentionCandidates, runSessionRetentionCleanup, useSessionRetentionRunStore } from './session-retention';
 
+import { registerAgentRuntime } from '@/lib/agent/registry';
+import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+
+// The registry's default runtime is the real OMP client; register a
+// client-backed double so this test drives app logic with its mocked client.
+registerAgentRuntime(createOpenCodeStubRuntime());
+// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
+// registry answers an unregistered id with the real OMP client, so register the
+// double under that id too.
+registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
+
 const now = Date.now();
 const day = 86_400_000;
 const session = (id: string, patch: Partial<Session> = {}): AgentSession => ({

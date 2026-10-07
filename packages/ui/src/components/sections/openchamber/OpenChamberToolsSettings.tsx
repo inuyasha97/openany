@@ -20,9 +20,6 @@ import { BUILTIN_BROWSER_PROVIDER, browserProviderGuests } from '@/lib/guests/br
 import { loadGuestCatalog } from '@/lib/guests/load-catalog';
 import { useGuestsStore } from '@/lib/guests/store';
 import { updateDesktopSettings } from '@/lib/persistence';
-import { isElectronShell, isVSCodeRuntime } from '@/lib/desktop';
-import { resetAcpRuntimeAvailable } from '@/lib/agent/acp-availability';
-import { resetOmpRuntimeAvailable } from '@/lib/agent/omp-availability';
 import { useAgentMemoryStore } from '@/stores/useAgentMemoryStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useI18n } from '@/lib/i18n';
@@ -98,10 +95,6 @@ export const OpenChamberToolsSettings: React.FC = () => {
   const setAgentNotifyToolEnabled = useUIStore((state) => state.setAgentNotifyToolEnabled);
   const agentToolsCodeMode = useUIStore((state) => state.agentToolsCodeMode);
   const setAgentToolsCodeMode = useUIStore((state) => state.setAgentToolsCodeMode);
-  const ompRuntimeEnabled = useUIStore((state) => state.ompRuntimeEnabled);
-  const setOmpRuntimeEnabled = useUIStore((state) => state.setOmpRuntimeEnabled);
-  const acpRuntimeEnabled = useUIStore((state) => state.acpRuntimeEnabled);
-  const setAcpRuntimeEnabled = useUIStore((state) => state.setAcpRuntimeEnabled);
 
   const handleAgentControlToolChange = React.useCallback((enabled: boolean) => {
     setAgentControlToolEnabled(enabled);
@@ -122,19 +115,6 @@ export const OpenChamberToolsSettings: React.FC = () => {
     setAgentToolsCodeMode(enabled);
     void updateDesktopSettings({ agentToolsCodeMode: enabled });
   }, [setAgentToolsCodeMode]);
-
-  // The server serves the runtime only while its setting is on. Clearing the
-  // cached availability probe after the write makes the composer re-read it, so
-  // the picker appears (or goes) without a reload.
-  const handleOmpRuntimeChange = React.useCallback((enabled: boolean) => {
-    setOmpRuntimeEnabled(enabled);
-    void updateDesktopSettings({ ompRuntimeEnabled: enabled }).finally(() => resetOmpRuntimeAvailable());
-  }, [setOmpRuntimeEnabled]);
-
-  const handleAcpRuntimeChange = React.useCallback((enabled: boolean) => {
-    setAcpRuntimeEnabled(enabled);
-    void updateDesktopSettings({ acpRuntimeEnabled: enabled }).finally(() => resetAcpRuntimeAvailable());
-  }, [setAcpRuntimeEnabled]);
 
   // The dropdown lists installed extensions, so the catalog has to be loaded
   // here too: this page can be the first thing opened after a fresh start.
@@ -272,33 +252,6 @@ export const OpenChamberToolsSettings: React.FC = () => {
         ariaLabel={t('settings.openchamber.tools.field.agentToolsCodeModeAria')}
         info={t('settings.openchamber.tools.field.agentToolsCodeModeInfo')}
       />
-
-      {/* Fork: additional agent runtimes. Each is off by default; the server
-          serves the runtime only while the switch is on. The adapters load only
-          under Bun, so the switches are web-only (the Electron desktop runs the
-          server under Node). */}
-      {!isElectronShell() && !isVSCodeRuntime() ? (
-        <>
-          <SettingsCheckboxRow
-            className="mt-4"
-            settingsItem="sessions.runtime-omp"
-            checked={ompRuntimeEnabled}
-            onChange={handleOmpRuntimeChange}
-            label={t('settings.openchamber.tools.field.ompRuntime')}
-            ariaLabel={t('settings.openchamber.tools.field.ompRuntime')}
-            info={t('settings.openchamber.tools.field.ompRuntimeInfo')}
-          />
-          <SettingsCheckboxRow
-            className="mt-4"
-            settingsItem="sessions.runtime-acp"
-            checked={acpRuntimeEnabled}
-            onChange={handleAcpRuntimeChange}
-            label={t('settings.openchamber.tools.field.acpRuntime')}
-            ariaLabel={t('settings.openchamber.tools.field.acpRuntime')}
-            info={t('settings.openchamber.tools.field.acpRuntimeInfo')}
-          />
-        </>
-      ) : null}
     </SettingsSection>
   );
 };

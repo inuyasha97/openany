@@ -434,3 +434,15 @@ describe("createEventPipeline over the WebSocket transport", () => {
     expect(delivered).toEqual([])
   })
 })
+
+
+import { registerAgentRuntime } from '@/lib/agent/registry';
+import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+
+// The registry's default runtime is the real OMP client; register a
+// client-backed double so this test drives app logic with its mocked client.
+registerAgentRuntime(createOpenCodeStubRuntime());
+// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
+// registry answers an unregistered id with the real OMP client, so register the
+// double under that id too.
+registerAgentRuntime(createOpenCodeStubRuntime('opencode'));

@@ -2,7 +2,7 @@ import fs from 'fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import os from 'os';
 import path from 'path';
-import { readMergedSettingsSync } from '../opencode/settings-files.js';
+import { readMergedSettingsSync } from '../openchamber/settings-files.js';
 import {
   findModelInfo,
   getDefaultModelInfo,

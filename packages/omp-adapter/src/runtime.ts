@@ -18,6 +18,8 @@ export type OmpSessionInfo = {
   title: string
 }
 
+export type OmpOutboundFrame = { type: string; id?: string; [key: string]: unknown }
+
 export type OmpSessionHandle = {
   id: string
   prompt: (text: string) => Promise<boolean>
@@ -26,17 +28,28 @@ export type OmpSessionHandle = {
   dispose: () => Promise<void>
   sessionFile: string | undefined
   /** The session's current message history, oldest first. */
-  messages: () => readonly OmpMessage[]
+  messages: () => Promise<readonly OmpMessage[]>
+  /** Writes an unsolicited frame to this session's RPC process (e.g. an extension-UI reply). */
+  send: (frame: OmpOutboundFrame) => void
 }
 
 export type OmpHost = {
   listSessions: () => Promise<OmpSessionInfo[]>
   openSession: (input: { sessionPath?: string; cwd?: string }) => Promise<OmpSessionHandle>
+  renameSession: (id: string, title: string) => Promise<void>
+  deleteSession: (id: string) => Promise<boolean>
+  moveSession: (id: string, toDirectory: string) => Promise<void>
+  setModel: (id: string, provider: string, modelId: string) => Promise<void>
+  listModels: () => Promise<unknown[]>
+  listCommands: () => Promise<unknown[]>
+  getSessionStatus: (id: string) => Promise<{ busy: boolean }>
 }
 
 export class OmpRuntime {
   private readonly sessions = new Map<string, OmpSessionHandle>()
   private readonly unsubscribes = new Map<string, () => void>()
+  private readonly lastUsedAt = new Map<string, number>()
+  private readonly cwdBySession = new Map<string, string>()
   private readonly listeners = new Set<(sessionId: string, event: OmpEvent) => void>()
 
   constructor(private readonly host: OmpHost) {}
@@ -46,15 +59,69 @@ export class OmpRuntime {
   }
 
   async createSession(input: { cwd?: string } = {}): Promise<OmpSessionHandle> {
-    return this.attach(await this.host.openSession({ cwd: input.cwd }))
+    const handle = this.attach(await this.host.openSession({ cwd: input.cwd }))
+    if (input.cwd) this.cwdBySession.set(handle.id, input.cwd)
+    return handle
   }
 
   async getSession(id: string): Promise<OmpSessionHandle> {
     const existing = this.sessions.get(id)
-    if (existing) return existing
+    if (existing) {
+      this.lastUsedAt.set(id, Date.now())
+      return existing
+    }
     const info = (await this.host.listSessions()).find((session) => session.id === id)
     if (!info) throw new Error(`unknown omp session: ${id}`)
-    return this.attach(await this.host.openSession({ sessionPath: info.sessionPath }))
+    // OMP declines a switch that changes the working directory, so the process
+    // has to start in the session's own cwd.
+    const handle = this.attach(await this.host.openSession({ sessionPath: info.sessionPath, cwd: info.cwd }))
+    if (info.cwd) this.cwdBySession.set(handle.id, info.cwd)
+    return handle
+  }
+
+  /**
+   * Disposes every session process idle for at least `maxIdleMs`. Each open
+   * session is one `omp` process, so an unbounded pool would grow with every
+   * session the user opens; a later call re-opens the session on demand.
+   */
+  async disposeIdle(maxIdleMs: number, now: number = Date.now()): Promise<string[]> {
+    const idle = [...this.lastUsedAt]
+      .filter(([id, at]) => now - at >= maxIdleMs && this.sessions.has(id))
+      .map(([id]) => id)
+    for (const id of idle) await this.disposeSession(id)
+    return idle
+  }
+
+  /**
+   * Disposes every open session process started in `directory`. A worktree
+   * cannot be removed while a process still holds its folder, so the worktree
+   * removal path releases them first.
+   */
+  async disposeSessionsInDirectory(directory: string): Promise<string[]> {
+    const target = directory.replace(/\/+$/, "")
+    const ids = [...this.cwdBySession]
+      .filter(([id, cwd]) => cwd.replace(/\/+$/, "") === target && this.sessions.has(id))
+      .map(([id]) => id)
+    for (const id of ids) await this.disposeSession(id)
+    return ids
+  }
+
+  private async disposeSession(id: string): Promise<void> {
+    const handle = this.sessions.get(id)
+    this.sessions.delete(id)
+    this.lastUsedAt.delete(id)
+    this.cwdBySession.delete(id)
+    try {
+      this.unsubscribes.get(id)?.()
+    } catch {
+      /* ignore */
+    }
+    this.unsubscribes.delete(id)
+    try {
+      await handle?.dispose()
+    } catch {
+      /* best-effort teardown */
+    }
   }
 
   async prompt(id: string, text: string): Promise<boolean> {
@@ -67,6 +134,39 @@ export class OmpRuntime {
 
   async abort(id: string): Promise<void> {
     return (await this.getSession(id)).abort()
+  }
+
+  renameSession(id: string, title: string): Promise<void> {
+    return this.host.renameSession(id, title)
+  }
+
+  deleteSession(id: string): Promise<boolean> {
+    return this.host.deleteSession(id)
+  }
+
+  moveSession(id: string, toDirectory: string): Promise<void> {
+    return this.host.moveSession(id, toDirectory)
+  }
+
+  setModel(id: string, provider: string, modelId: string): Promise<void> {
+    return this.host.setModel(id, provider, modelId)
+  }
+
+  listModels(): Promise<unknown[]> {
+    return this.host.listModels()
+  }
+
+  listCommands(): Promise<unknown[]> {
+    return this.host.listCommands()
+  }
+
+  getSessionStatus(id: string): Promise<{ busy: boolean }> {
+    return this.host.getSessionStatus(id)
+  }
+
+  async sendToSession(id: string, frame: OmpOutboundFrame): Promise<void> {
+    const handle = await this.getSession(id)
+    handle.send(frame)
   }
 
   subscribe(listener: (sessionId: string, event: OmpEvent) => void): () => void {
@@ -88,6 +188,8 @@ export class OmpRuntime {
       }
     }
     this.unsubscribes.clear()
+    this.lastUsedAt.clear()
+    this.cwdBySession.clear()
     for (const handle of handles) {
       try {
         await handle.dispose()
@@ -99,6 +201,7 @@ export class OmpRuntime {
 
   private attach(handle: OmpSessionHandle): OmpSessionHandle {
     this.sessions.set(handle.id, handle)
+    this.lastUsedAt.set(handle.id, Date.now())
     this.unsubscribes.set(handle.id, handle.subscribe((event) => this.emit(handle.id, event)))
     return handle
   }

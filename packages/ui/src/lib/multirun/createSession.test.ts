@@ -3,6 +3,17 @@ import { z } from 'zod';
 import type { Metadata, Session } from '@/lib/opencode/model';
 import { getMultiRunIdentity, type MultiRunIdentity } from './identity';
 
+import { registerAgentRuntime } from '@/lib/agent/registry';
+import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+
+// The registry's default runtime is the real OMP client; register a
+// client-backed double so this test drives app logic with its mocked client.
+registerAgentRuntime(createOpenCodeStubRuntime());
+// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
+// registry answers an unregistered id with the real OMP client, so register the
+// double under that id too.
+registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
+
 const identity: Omit<MultiRunIdentity, 'key'> = {
   group: { kind: 'id', id: '9f512893-6e63-4e49-a534-5de733ca103e' },
   groupSlug: 'bench', providerID: 'openrouter', modelID: 'vendor/model', role: 'run',

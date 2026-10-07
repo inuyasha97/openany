@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { clearAppImageArgv0FromProcessEnv } from '../inherited-env.js';
-import { mergePathValues } from './path-utils.js';
+import { mergePathValues } from '../openchamber/path-utils.js';
 
 // Login-shell probes source the user's rc files. A slow or interactive rc
 // (nvm, pyenv, a prompt waiting for input) must not hold server startup

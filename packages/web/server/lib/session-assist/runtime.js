@@ -5,7 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { OpenCode } from '@opencode/client';
-import { readMergedSettingsSync } from '../opencode/settings-files.js';
+import { readMergedSettingsSync } from '../openchamber/settings-files.js';
 import { loadAssistContext, newestContentId } from './context.js';
 import { buildAssistPrompt, buildAssistSystemPrompt } from './prompt.js';
 

@@ -10,7 +10,7 @@ import {
 } from '../../proxy-headers.js';
 import { createRealpathCache } from '../path-realpath-cache.js';
 import { DEFAULT_UPSTREAM_STALL_TIMEOUT_MS } from '../event-stream/upstream-reader.js';
-import { recordStartupPerformance } from './startup-performance.js';
+import { recordStartupPerformance } from '../openchamber/startup-performance.js';
 import { getWorktreeBootstrapStatus } from '../git/service.js';
 
 const DEFAULT_SSE_HEARTBEAT_INTERVAL_MS = 20_000;

@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import yaml from 'yaml';
 import { parse as parseJsonc, printParseErrorCode, type ParseError } from 'jsonc-parser';
-import { resolveNpmRegistryRequest } from '../../web/server/lib/opencode/npm-registry-config.js';
+import { resolveNpmRegistryRequest } from '../../web/server/lib/openchamber/npm-registry-config.js';
 import {
   toAgentEntity,
   fromAgentEntity,

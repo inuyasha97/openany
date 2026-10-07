@@ -13,7 +13,7 @@ import os from 'os';
 import crypto from 'crypto';
 import http2 from 'node:http2';
 import { createUiAuth } from './lib/ui-auth/ui-auth.js';
-import { createTunnelAuth } from './lib/opencode/tunnel-auth.js';
+import { createTunnelAuth } from './lib/openchamber/tunnel-auth.js';
 import { createManagedTunnelConfigRuntime } from './lib/tunnels/managed-config.js';
 import { createTunnelProviderRegistry } from './lib/tunnels/registry.js';
 import { createCloudflareTunnelProvider } from './lib/tunnels/providers/cloudflare.js';
@@ -55,32 +55,32 @@ import {
 import { createFsSearchRuntime as createFsSearchRuntimeFactory } from './lib/fs/search.js';
 import { createOpenCodeLifecycleRuntime } from './lib/opencode/lifecycle.js';
 import { createOpenCodeEnvRuntime } from './lib/opencode/env-runtime.js';
-import { providedLoginShellEnvSnapshot } from './lib/opencode/login-shell-env.js';
+import { providedLoginShellEnvSnapshot } from './lib/openchamber/login-shell-env.js';
 import { resolveOpenCodeEnvConfig } from './lib/opencode/env-config.js';
-import { createHmrStateRuntime } from './lib/opencode/hmr-state-runtime.js';
+import { createHmrStateRuntime } from './lib/openchamber/hmr-state-runtime.js';
 import { createOpenCodeNetworkRuntime } from './lib/opencode/network-runtime.js';
 import { createOpenCodeAuthStateRuntime } from './lib/opencode/auth-state-runtime.js';
-import { createProjectDirectoryRuntime } from './lib/opencode/project-directory-runtime.js';
-import { createSettingsNormalizationRuntime } from './lib/opencode/settings-normalization-runtime.js';
-import { createSettingsHelpers } from './lib/opencode/settings-helpers.js';
-import { createThemeRuntime } from './lib/opencode/theme-runtime.js';
+import { createProjectDirectoryRuntime } from './lib/openchamber/project-directory-runtime.js';
+import { createSettingsNormalizationRuntime } from './lib/openchamber/settings-normalization-runtime.js';
+import { createSettingsHelpers } from './lib/openchamber/settings-helpers.js';
+import { createThemeRuntime } from './lib/openchamber/theme-runtime.js';
 import { createFeatureRoutesRuntime } from './lib/opencode/feature-routes-runtime.js';
-// Fork-owned OMP agent runtime; off unless OPENCHAMBER_OMP_RUNTIME=1.
+// Fork-owned OMP agent runtime; the only runtime in this fork.
 import { installAcpAgentRuntime, installOmpAgentRuntime } from './lib/agents/index.js';
-import { parseServeCliOptions } from './lib/opencode/cli-options.js';
+import { parseServeCliOptions } from './lib/openchamber/cli-options.js';
 import {
   registerAuthAndAccessRoutes,
   registerCommonRequestMiddleware,
   registerServerStatusRoutes,
-} from './lib/opencode/core-routes.js';
-import { registerOpenChamberRoutes } from './lib/opencode/openchamber-routes.js';
+} from './lib/openchamber/core-routes.js';
+import { registerOpenChamberRoutes } from './lib/openchamber/openchamber-routes.js';
 import { createServerUtilsRuntime } from './lib/opencode/server-utils-runtime.js';
-import { createStaticRoutesRuntime } from './lib/opencode/static-routes-runtime.js';
-import { createSettingsRuntime } from './lib/opencode/settings-runtime.js';
+import { createStaticRoutesRuntime } from './lib/openchamber/static-routes-runtime.js';
+import { createSettingsRuntime } from './lib/openchamber/settings-runtime.js';
 import { createOpenCodeResolutionRuntime } from './lib/opencode/opencode-resolution-runtime.js';
 import { runOpenCodeCliUpgrade } from './lib/opencode/cli-upgrade.js';
 import { resolveOpenCodeUpgradeCapability } from './lib/opencode/upgrade-capability.js';
-import { createBootstrapRuntime } from './lib/opencode/bootstrap-runtime.js';
+import { createBootstrapRuntime } from './lib/openchamber/bootstrap-runtime.js';
 import { createSessionRuntime } from './lib/opencode/session-runtime.js';
 import { configureOpenCodeRuntimeProviders, resetOpenCodeRuntimeProviders } from './lib/small-model/client.js';
 import { createOpenCodeWatcherRuntime } from './lib/opencode/watcher.js';
@@ -90,10 +90,10 @@ import { createContextObligatoryRuntime } from './lib/context-obligatory/runtime
 import { createLinearSessionStatusRuntime } from './lib/linear/status-runtime.js';
 import { createSessionKnowledgeRuntime } from './lib/session-knowledge/runtime.js';
 import { createScheduledTasksRuntime } from './lib/scheduled-tasks/runtime.js';
-import { createServerStartupRuntime } from './lib/opencode/server-startup-runtime.js';
-import { createTunnelWiringRuntime } from './lib/opencode/tunnel-wiring-runtime.js';
+import { createServerStartupRuntime } from './lib/openchamber/server-startup-runtime.js';
+import { createTunnelWiringRuntime } from './lib/openchamber/tunnel-wiring-runtime.js';
 import { createStartupPipelineRuntime } from './lib/opencode/startup-pipeline-runtime.js';
-import { runCliEntryIfMain } from './lib/opencode/cli-entry-runtime.js';
+import { runCliEntryIfMain } from './lib/openchamber/cli-entry-runtime.js';
 import { registerNotificationRoutes } from './lib/notifications/routes.js';
 import { createNotificationEmitterRuntime } from './lib/notifications/emitter-runtime.js';
 import { createNotificationTriggerRuntime } from './lib/notifications/runtime.js';
@@ -135,7 +135,7 @@ import { createBrowserControlRouter } from './lib/browser-control/provider.js';
 import { createDevServerScanner } from './lib/dev-servers/routes.js';
 import { createDevTunnelRuntime } from './lib/dev-tunnel/runtime.js';
 import { registerBrowserControlRoutes } from './lib/browser-control/routes.js';
-import { createManagedConfigRuntime } from './lib/opencode/managed-config-file.js';
+import { createManagedConfigRuntime } from './lib/openchamber/managed-config-file.js';
 import { createOpenChamberSessionService } from './lib/openchamber-sessions/routes.js';
 import { createSessionMetadataStore, createOpenCodeSessionMetadata } from './lib/openchamber-sessions/session-metadata-store.js';
 import { createScheduledTaskService } from './lib/scheduled-tasks/service.js';
@@ -655,7 +655,7 @@ let openCodeNotReadySince = 0;
 let isExternalOpenCode = false;
 let exitOnShutdown = true;
 let uiAuthController = null;
-// Fork-owned OMP agent runtime host; null unless OPENCHAMBER_OMP_RUNTIME=1.
+// Fork-owned OMP agent runtime host; created on the first request.
 let ompAgentRuntime = null;
 // Fork-owned ACP agent runtime host; null unless OPENCHAMBER_ACP_RUNTIME=1.
 let acpAgentRuntime = null;
@@ -2262,6 +2262,9 @@ async function main(options = {}) {
     },
     surfaceViewerHeaders: (guestId, viewerId) => guestSurfaceRuntime?.viewerHeaders(guestId, viewerId) ?? null,
     builtInExtensionsDir: options.builtInExtensionsDir,
+    // Fork: the OMP runtime host, for the worktree-removal disposal hook. A
+    // getter because the host is installed after the feature routes register.
+    getOmpRuntime: () => ompAgentRuntime,
     openchamberUserConfigRoot: OPENCHAMBER_USER_CONFIG_ROOT,
     managedChatsRoot: OPENCHAMBER_CHATS_DIR,
     normalizeDirectoryPath,
@@ -2320,16 +2323,12 @@ async function main(options = {}) {
     routingRuntime,
   });
 
-  // Fork: mount the OMP agent runtime when enabled. Registered before the
-  // generic OpenCode proxy (installed later, on OpenCode start) so its explicit
-  // routes win. Off by default, so the OpenCode-only path is unchanged.
-  // Fork: register the OMP/ACP routes. Each is served only when its env flag
-  // forces it on or the matching setting is enabled, read per request so a
-  // settings toggle takes effect without a restart.
+  // Fork: register the OMP/ACP routes. OMP is the runtime and is always
+  // served; ACP is still served only when its env flag forces it on or the
+  // matching setting is enabled, read per request.
   ompAgentRuntime = await installOmpAgentRuntime({
     app,
     broadcast: broadcastOpenChamberUiEvent,
-    isSettingEnabled: async () => (await readSettingsFromDiskMigrated())?.ompRuntimeEnabled === true,
   });
   acpAgentRuntime = await installAcpAgentRuntime({
     app,

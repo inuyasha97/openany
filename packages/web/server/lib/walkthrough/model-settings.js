@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { readMergedSettingsSync } from '../opencode/settings-files.js';
+import { readMergedSettingsSync } from '../openchamber/settings-files.js';
 
 // The walkthrough may run on a different model than the rest of the small-model
 // callers. Those callers want cheap and fast; this one needs structured output

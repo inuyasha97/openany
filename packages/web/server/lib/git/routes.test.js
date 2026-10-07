@@ -239,13 +239,13 @@ describe('git worktree removal instance disposal', () => {
     vi.unstubAllGlobals();
   });
 
-  it('passes a disposal hook that targets the removed worktree when the runtime helpers are wired', async () => {
+  it('passes the runtime disposal hook to removeWorktree', async () => {
     gitLibraries.removeWorktree.mockResolvedValue(true);
+    const disposeWorktreeInstance = vi.fn().mockResolvedValue(undefined);
     const { app, getRoute } = createRouteRegistry();
     registerGitRoutes(app, {
       emitWorktreeChanged: vi.fn(),
-      buildOpenCodeUrl: (routePath) => `http://opencode.test${routePath}`,
-      getOpenCodeAuthHeaders: () => ({ Authorization: 'Bearer test' }),
+      disposeWorktreeInstance,
     });
 
     const response = createMockResponse();
@@ -262,29 +262,16 @@ describe('git worktree removal instance disposal', () => {
     }));
 
     const disposeInstance = gitLibraries.removeWorktree.mock.calls[0][1].disposeInstance;
-    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
     await disposeInstance('/repo/wt');
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [input, init] = fetchMock.mock.calls[0];
-    const request = new Request(input, init);
-    // OpenCode 2's location eviction; the v1 /instance/dispose route is gone.
-    expect(request.method).toBe('DELETE');
-    const url = new URL(request.url);
-    expect(url.origin + url.pathname).toBe('http://opencode.test/api/debug/location');
-    expect(url.searchParams.get('location[directory]')).toBe('/repo/wt');
-    expect(request.headers.get('authorization')).toBe('Bearer test');
+    expect(disposeWorktreeInstance).toHaveBeenCalledWith('/repo/wt');
   });
 
-  it('rejects disposal errors so the removal wrapper can warn without failing', async () => {
+  it('propagates disposal errors so the removal wrapper can warn without failing', async () => {
     gitLibraries.removeWorktree.mockResolvedValue(true);
-    fetchMock.mockResolvedValue(createJsonResponse({ name: 'BadRequest', data: { message: 'Bad request' } }, 400));
+    const disposeWorktreeInstance = vi.fn().mockRejectedValue(new Error('Bad request'));
 
     const { app, getRoute } = createRouteRegistry();
-    registerGitRoutes(app, {
-      buildOpenCodeUrl: () => 'http://opencode.test/',
-      getOpenCodeAuthHeaders: () => ({}),
-    });
+    registerGitRoutes(app, { disposeWorktreeInstance });
 
     await getRoute('DELETE', '/api/git/worktrees')(
       { query: { directory: '/repo' }, body: { directory: '/repo/wt' } },

@@ -1,7 +1,16 @@
-# OpenCode Module Documentation
+# OpenChamber server module documentation
+
+> This directory (`lib/openchamber/`) holds the OpenChamber-owned modules that
+> used to live in `lib/opencode/`. The OpenCode-specific modules those entries
+> described (`auth.js`, `auth-state-runtime.js`, `routes.js`, `lifecycle.js`,
+> …) are still in `lib/opencode/` and are scheduled for removal with the rest of
+> the OpenCode runtime. Where an entry below names
+> `packages/web/server/lib/opencode/<module>`, read
+> `packages/web/server/lib/openchamber/<module>` for the modules that moved here.
 
 ## Purpose
-This module provides OpenCode server integration utilities for the web server runtime, including configuration management and provider authentication.
+This module provides OpenChamber's server-side configuration, settings, theme,
+tunnel and static-route utilities for the web server runtime.
 
 ## Entrypoints and structure
 - `packages/web/server/lib/opencode/index.js`: public entrypoint (currently baseline placeholder).

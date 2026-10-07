@@ -20,15 +20,15 @@ import { registerPermissionAutoAcceptRoutes } from '../permission-auto-accept/ru
 import { registerMessageQueueRoutes } from '../message-queue/runtime.js';
 import { registerRoutingPromptRewrite, registerRoutingRoutes } from '../routing/routes.js';
 import { registerConfigEntityRoutes } from './config-entity-routes.js';
-import { registerSettingsUtilityRoutes } from './core-routes.js';
-import { registerProjectIconRoutes } from './project-icon-routes.js';
+import { registerSettingsUtilityRoutes } from '../openchamber/core-routes.js';
+import { registerProjectIconRoutes } from '../openchamber/project-icon-routes.js';
 import { registerScheduledTaskRoutes } from '../scheduled-tasks/routes.js';
 import { registerOpenChamberSessionRoutes } from '../openchamber-sessions/routes.js';
 import { registerOpenChamberControlRoutes } from '../openchamber-control/routes.js';
 import { registerMarkdownImageGrantRoutes } from '../markdown-image-grants/routes.js';
 import { registerSkillRoutes } from './skill-routes.js';
 import { registerPluginRoutes } from './plugin-routes.js';
-import { getNpmInfo, clearCache as clearNpmCache } from './npm-registry.js';
+import { getNpmInfo, clearCache as clearNpmCache } from '../openchamber/npm-registry.js';
 import { parseNpmSpec, parsePathSpec, isExactSemver } from './plugin-spec.js';
 import { registerOpenCodeRoutes } from './routes.js';
 import { getProviderSources, removeProviderConfig, upsertProviderConfig } from './providers.js';
@@ -57,6 +57,20 @@ import { parseSkillRepoSource } from '../skills-catalog/source.js';
 import { scanSkillsRepository } from '../skills-catalog/scan.js';
 import { installSkillsFromRepository } from '../skills-catalog/install.js';
 import { fetchGitHubRepoMetas } from '../skills-catalog/github-meta.js';
+
+/**
+ * The worktree-removal hook: releases every session process the agent runtime
+ * holds in that directory, so the folder is not locked while it is removed.
+ * `undefined` when no runtime is mounted, which makes `removeWorktree` skip
+ * disposal.
+ */
+const createWorktreeInstanceDisposer = (getOmpRuntime) => {
+  if (typeof getOmpRuntime !== 'function') return undefined;
+  return async (worktreeDirectory) => {
+    const host = await Promise.resolve(getOmpRuntime()).catch(() => null);
+    await host?.disposeSessionsInDirectory?.(worktreeDirectory);
+  };
+};
 
 export const createFeatureRoutesRuntime = (dependencies) => {
   const {
@@ -334,8 +348,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
     await registerBuiltInGuests({ persistPath: extensionsPersistPath(openchamberDataDir), root: routeDependencies.builtInExtensionsDir });
     registerGuestRoutes(app, { openchamberDataDir, openchamberVersion, resolveGitBinaryForSpawn, resolveOptionalProjectDirectory, getSmallModelService, onGuestDeactivated, surfaceViewerHeaders });
     registerGitRoutes(app, {
-      buildOpenCodeUrl,
-      getOpenCodeAuthHeaders,
+      disposeWorktreeInstance: createWorktreeInstanceDisposer(routeDependencies.getOmpRuntime),
       emitWorktreeChanged: ({ directories, at }) => {
         const clients = getOpenChamberEventClients();
         for (const client of clients) {

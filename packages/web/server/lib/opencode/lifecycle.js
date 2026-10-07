@@ -4,7 +4,7 @@ import net from 'node:net';
 import { stripAppImageArgv0Leak } from '../inherited-env.js';
 import { registerManagedProcess, unregisterManagedProcess, reapOrphanedProcesses } from './managed-process-registry.js';
 import { applyProviderEnvAliases } from './provider-env-aliases.js';
-import { recordStartupPerformance } from './startup-performance.js';
+import { recordStartupPerformance } from '../openchamber/startup-performance.js';
 import { topUpV1Migration } from './v1-migration-topup.js';
 
 const parsePositiveInt = (value, fallback) => {
