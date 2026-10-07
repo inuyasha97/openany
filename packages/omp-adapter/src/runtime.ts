@@ -6,7 +6,7 @@
  * testable with a fake and the real SDK binding stays in one place.
  */
 
-import type { OmpEvent, OmpMessage } from "./model"
+import type { OmpEvent, OmpImageContent, OmpMessage } from "./model"
 
 export type { OmpEvent }
 
@@ -20,9 +20,42 @@ export type OmpSessionInfo = {
 
 export type OmpOutboundFrame = { type: string; id?: string; [key: string]: unknown }
 
+/** One OAuth provider OMP can log in to (`get_login_providers`). */
+export type OmpLoginProvider = {
+  id: string
+  name: string
+  available: boolean
+  authenticated: boolean
+}
+
+export type OmpLoginResult = { providerId: string }
+
+/**
+ * Called for every unsolicited frame the login process emits; `reply` writes a
+ * response frame back to that same process. OMP answers `input` (its manual
+ * code prompt) and waits for one; `open_url`, `notify` and the presentation
+ * frames expect none, so replying to those would write a frame the server
+ * never reads.
+ */
+export type OmpLoginFrameHandler = (frame: OmpOutboundFrame, reply: (frame: OmpOutboundFrame) => void) => void
+
+export type OmpLoginOptions = {
+  onFrame?: OmpLoginFrameHandler
+}
+
+/**
+ * What a prompt may carry beyond its text. OMP's `prompt` command takes
+ * `images?: ImageContent[]` (`modes/rpc/rpc-types.ts`); the block shape is the
+ * one `model.ts` already uses for a user message's image content.
+ */
+export type OmpPromptOptions = {
+  /** Images sent with the prompt, in order. */
+  images?: readonly OmpImageContent[]
+}
+
 export type OmpSessionHandle = {
   id: string
-  prompt: (text: string) => Promise<boolean>
+  prompt: (text: string, options?: OmpPromptOptions) => Promise<boolean>
   abort: () => Promise<void>
   subscribe: (listener: (event: OmpEvent) => void) => () => void
   dispose: () => Promise<void>
@@ -42,6 +75,8 @@ export type OmpHost = {
   setModel: (id: string, provider: string, modelId: string) => Promise<void>
   listModels: () => Promise<unknown[]>
   listCommands: () => Promise<unknown[]>
+  listLoginProviders: () => Promise<OmpLoginProvider[]>
+  login: (providerId: string, options?: OmpLoginOptions) => Promise<OmpLoginResult>
   getSessionStatus: (id: string) => Promise<{ busy: boolean }>
 }
 
@@ -124,8 +159,8 @@ export class OmpRuntime {
     }
   }
 
-  async prompt(id: string, text: string): Promise<boolean> {
-    return (await this.getSession(id)).prompt(text)
+  async prompt(id: string, text: string, options?: OmpPromptOptions): Promise<boolean> {
+    return (await this.getSession(id)).prompt(text, options)
   }
 
   async getMessages(id: string): Promise<readonly OmpMessage[]> {
@@ -158,6 +193,14 @@ export class OmpRuntime {
 
   listCommands(): Promise<unknown[]> {
     return this.host.listCommands()
+  }
+
+  listLoginProviders(): Promise<OmpLoginProvider[]> {
+    return this.host.listLoginProviders()
+  }
+
+  login(providerId: string, options?: OmpLoginOptions): Promise<OmpLoginResult> {
+    return this.host.login(providerId, options)
   }
 
   getSessionStatus(id: string): Promise<{ busy: boolean }> {

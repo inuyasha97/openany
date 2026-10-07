@@ -15,6 +15,7 @@ import { ParallelComposerStrip } from './composer/parallel/ParallelComposerStrip
 import {
     ACCEPTED_ATTACHMENT_EXTENSIONS,
     ATTACHMENT_ACCEPT,
+    IMAGE_ATTACHMENT_ACCEPT,
     getUnsupportedAttachmentInputs,
     isDocumentAttachmentFilename,
     type AttachmentInputModality,
@@ -31,6 +32,7 @@ import { useSnippetsStore } from '@/stores/useSnippetsStore';
 import { renderMagicPrompt } from '@/lib/magicPrompts';
 import { startReviewFlow } from '@/lib/reviewFlow';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import {
     createChatDraftIdentity,
@@ -3229,6 +3231,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
     const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+    // A picked file reaches the prompt as bytes, so it survives only when the
+    // runtime takes images inline. One that takes every other file as a path
+    // mention cannot receive a picked file at all, and its picker says so.
+    // VS Code picks carry a path and are unaffected.
+    const draftRuntimeId = useSessionUIStore((state) => state.newSessionDraft.runtimeId);
+    const attachmentAccept = resolveSessionCapabilities(
+        currentSessionId,
+        newSessionDraftOpen ? draftRuntimeId : undefined,
+    ).attachmentKinds === 'images' ? IMAGE_ATTACHMENT_ACCEPT : ATTACHMENT_ACCEPT;
+
     const attachFiles = React.useCallback(async (files: FileList | File[]) => {
         const attachmentDraftKey = useInputStore.getState().attachmentDraftKey;
         const list = Array.isArray(files) ? files : Array.from(files);
@@ -4197,7 +4209,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             multiple
             className="hidden"
             onChange={handleLocalFileSelect}
-            accept={ATTACHMENT_ACCEPT}
+            accept={attachmentAccept}
         />
 
         {/* Mobile attachment sheet: replaces the dropdown (which stole focus and

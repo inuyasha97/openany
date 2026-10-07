@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { OmpRuntime, type OmpEvent, type OmpHost, type OmpSessionHandle, type OmpSessionInfo } from "./runtime"
+import { OmpRuntime, type OmpEvent, type OmpHost, type OmpPromptOptions, type OmpSessionHandle, type OmpSessionInfo } from "./runtime"
 
 type FakeHandle = OmpSessionHandle & {
   promptCalls: string[]
+  promptOptions: Array<OmpPromptOptions | undefined>
   abortCalls: number
   disposed: boolean
   sent: Array<{ type: string; id?: string; [key: string]: unknown }>
@@ -14,12 +15,14 @@ const makeHandle = (id: string): FakeHandle => {
   const handle: FakeHandle = {
     id,
     promptCalls: [],
+    promptOptions: [],
     abortCalls: 0,
     disposed: false,
     sent: [],
     sessionFile: `/sessions/${id}.json`,
-    prompt: async (text) => {
+    prompt: async (text, options) => {
       handle.promptCalls.push(text)
+      handle.promptOptions.push(options)
       return true
     },
     abort: async () => {
@@ -54,6 +57,7 @@ const makeHost = (infos: OmpSessionInfo[]): {
   moved: Array<[string, string]>
   models: Array<[string, string, string]>
   openInputs: Array<{ sessionPath?: string; cwd?: string }>
+  logins: string[]
 } => {
   const handles = new Map<string, FakeHandle>()
   const opened: string[] = []
@@ -62,6 +66,7 @@ const makeHost = (infos: OmpSessionInfo[]): {
   const moved: Array<[string, string]> = []
   const models: Array<[string, string, string]> = []
   const openInputs: Array<{ sessionPath?: string; cwd?: string }> = []
+  const logins: string[] = []
   const host: OmpHost = {
     listSessions: async () => infos,
     openSession: async (input) => {
@@ -87,9 +92,14 @@ const makeHost = (infos: OmpSessionInfo[]): {
     },
     listModels: async () => [{ provider: "anthropic", id: "claude" }],
     listCommands: async () => [{ name: "goal", source: "builtin" }],
+    listLoginProviders: async () => [{ id: "anthropic", name: "Anthropic", available: true, authenticated: false }],
+    login: async (providerId) => {
+      logins.push(providerId)
+      return { providerId }
+    },
     getSessionStatus: async () => ({ busy: false }),
   }
-  return { host, opened, handles, renamed, deleted, moved, models, openInputs }
+  return { host, opened, handles, renamed, deleted, moved, models, openInputs, logins }
 }
 
 describe("OmpRuntime", () => {
@@ -105,6 +115,15 @@ describe("OmpRuntime", () => {
     expect(created.id).toBe("new-session")
     await runtime.prompt("new-session", "hi")
     expect(handles.get("new-session")?.promptCalls).toEqual(["hi"])
+  })
+
+  test("carries prompt options through to the session handle", async () => {
+    const { host, handles } = makeHost([])
+    const runtime = new OmpRuntime(host)
+    await runtime.createSession({ cwd: "/repo" })
+    const images = [{ type: "image" as const, data: "QUJD", mimeType: "image/png" }]
+    await runtime.prompt("new-session", "look", { images })
+    expect(handles.get("new-session")?.promptOptions).toEqual([{ images }])
   })
 
   test("reuses an attached session instead of opening it again", async () => {
@@ -157,6 +176,14 @@ describe("OmpRuntime", () => {
     expect(await runtime.listModels()).toEqual([{ provider: "anthropic", id: "claude" }])
     expect(await runtime.listCommands()).toEqual([{ name: "goal", source: "builtin" }])
     expect(await runtime.getSessionStatus("ses_a")).toEqual({ busy: false })
+  })
+
+  test("reads login providers and starts a login through the host", async () => {
+    const { host, logins } = makeHost([])
+    const runtime = new OmpRuntime(host)
+    expect(await runtime.listLoginProviders()).toEqual([{ id: "anthropic", name: "Anthropic", available: true, authenticated: false }])
+    expect(await runtime.login("anthropic")).toEqual({ providerId: "anthropic" })
+    expect(logins).toEqual(["anthropic"])
   })
 
   test("writes an unsolicited frame to the session process", async () => {

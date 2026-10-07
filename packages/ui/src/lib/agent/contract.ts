@@ -34,6 +34,13 @@ export type AgentCapabilities = {
   move: boolean
   /** The runtime accepts file attachments on a prompt. */
   attachments: boolean
+  /**
+   * Which files the composer may offer when `attachments` is on. `"any"`
+   * (absent) is the composer's full list; `"images"` means only images survive
+   * the send, because the runtime takes every other file as a path mention
+   * rather than as bytes.
+   */
+  attachmentKinds?: "any" | "images"
 }
 
 export type CreateSessionParams = {

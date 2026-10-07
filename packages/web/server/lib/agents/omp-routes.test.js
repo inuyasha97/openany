@@ -21,6 +21,8 @@ const createHost = (overrides = {}) => {
     getSessionStatus: vi.fn(async () => ({ busy: false })),
     listModels: vi.fn(async () => []),
     listCommands: vi.fn(async () => []),
+    listLoginProviders: vi.fn(async () => []),
+    login: vi.fn(async (providerId) => ({ providerId })),
     listPermissions: vi.fn(async () => []),
     replyPermission: vi.fn(async () => true),
     listMcpServers: vi.fn(async () => []),
@@ -80,7 +82,7 @@ describe('OMP routes', () => {
     const app = createApp(host);
 
     expect((await request(app).post('/api/agents/omp/sessions/ses_a/prompt').send({ text: 'hi' })).body).toEqual({ ok: true });
-    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'hi', undefined);
+    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'hi', undefined, undefined);
 
     expect((await request(app).post('/api/agents/omp/sessions/ses_a/prompt').send({ text: '' })).status).toBe(400);
   });
@@ -90,7 +92,47 @@ describe('OMP routes', () => {
     const response = await request(createApp(host)).post('/api/agents/omp/sessions/ses_a/prompt').send({ text: 'hi', messageId: 'client-1' });
 
     expect(response.status).toBe(200);
-    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'hi', 'client-1');
+    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'hi', 'client-1', undefined);
+  });
+
+  it('passes a prompt\'s images through to the host', async () => {
+    const host = createHost();
+    const images = [{ type: 'image', data: 'QUJD', mimeType: 'image/png' }];
+    const response = await request(createApp(host)).post('/api/agents/omp/sessions/ses_a/prompt').send({ text: 'look', images });
+
+    expect(response.status).toBe(200);
+    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'look', undefined, images);
+  });
+
+  it('accepts an image-only prompt but not an empty one', async () => {
+    const host = createHost();
+    const app = createApp(host);
+    const images = [{ type: 'image', data: 'QUJD', mimeType: 'image/png' }];
+
+    expect((await request(app).post('/api/agents/omp/sessions/ses_a/prompt').send({ text: '', images })).status).toBe(200);
+    expect((await request(app).post('/api/agents/omp/sessions/ses_a/prompt').send({ text: '   ' })).status).toBe(400);
+  });
+
+  it('rejects an image that is not one', async () => {
+    const host = createHost();
+    const response = await request(createApp(host))
+      .post('/api/agents/omp/sessions/ses_a/prompt')
+      .send({ text: 'look', images: [{ type: 'file', data: 'QUJD', mimeType: 'image/png' }] });
+
+    expect(response.status).toBe(400);
+    expect(host.prompt).not.toHaveBeenCalled();
+  });
+
+  it('accepts an image larger than the other routes\' body limit', async () => {
+    const host = createHost();
+    // A plain screenshot base64-encodes past the 1mb the shared parser allows.
+    const data = 'A'.repeat(1_500_000);
+    const response = await request(createApp(host))
+      .post('/api/agents/omp/sessions/ses_a/prompt')
+      .send({ text: 'look', images: [{ type: 'image', data, mimeType: 'image/png' }] });
+
+    expect(response.status).toBe(200);
+    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'look', undefined, [{ type: 'image', data, mimeType: 'image/png' }]);
   });
 
   it('reads session messages', async () => {
@@ -216,5 +258,39 @@ describe('OMP routes', () => {
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: 'Unknown OMP MCP server' });
+  });
+
+  it('lists the login providers OMP offers', async () => {
+    const providers = [{ id: 'anthropic', name: 'Anthropic', available: true, authenticated: false }];
+    const host = createHost({ listLoginProviders: vi.fn(async () => providers) });
+    const response = await request(createApp(host)).get('/api/agents/omp/login/providers');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ providers });
+  });
+
+  it('starts a login and answers with the URL and its login id', async () => {
+    const host = createHost({
+      login: vi.fn(async (providerId) => ({ providerId, loginId: 'omp-login-1', url: 'https://auth.example/start', launchUrl: 'http://127.0.0.1:1/launch' })),
+    });
+    const response = await request(createApp(host)).post('/api/agents/omp/login').send({ providerId: 'anthropic' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ providerId: 'anthropic', loginId: 'omp-login-1', url: 'https://auth.example/start', launchUrl: 'http://127.0.0.1:1/launch' });
+    expect(host.login).toHaveBeenCalledWith('anthropic');
+  });
+
+  it('rejects a missing provider and maps a refused login to 500', async () => {
+    const host = createHost({
+      login: vi.fn(async (providerId) => {
+        throw new Error(`Unknown OAuth provider: ${providerId}`);
+      }),
+    });
+    const app = createApp(host);
+
+    expect((await request(app).post('/api/agents/omp/login').send({ providerId: '' })).status).toBe(400);
+    const refused = await request(app).post('/api/agents/omp/login').send({ providerId: 'nope' });
+    expect(refused.status).toBe(500);
+    expect(refused.body).toEqual({ error: 'Unknown OAuth provider: nope' });
   });
 });

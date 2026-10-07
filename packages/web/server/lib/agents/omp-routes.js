@@ -15,14 +15,27 @@ import express from 'express';
 import { z } from 'zod';
 
 const parseJsonBody = express.json({ limit: '1mb' });
+// A prompt may carry base64 images (`ImageContent[]`), which overshoot the 1mb
+// the other routes need by far. Only this route gets the larger budget.
+const parsePromptBody = express.json({ limit: '64mb' });
 
 const createBodySchema = z.object({ cwd: z.string().min(1).optional() }).optional();
-const promptBodySchema = z.object({ text: z.string().min(1), messageId: z.string().min(1).optional() });
+const promptImageSchema = z.object({
+  type: z.literal('image'),
+  data: z.string().min(1),
+  mimeType: z.string().min(1),
+});
+const promptBodySchema = z.object({
+  text: z.string(),
+  messageId: z.string().min(1).optional(),
+  images: z.array(promptImageSchema).optional(),
+}).refine((body) => body.text.trim().length > 0 || (body.images?.length ?? 0) > 0);
 const renameBodySchema = z.object({ title: z.string().min(1) });
 const moveBodySchema = z.object({ directory: z.string().min(1) });
 const modelBodySchema = z.object({ provider: z.string().min(1), modelId: z.string().min(1) });
 const permissionReplySchema = z.object({ reply: z.enum(['once', 'always', 'reject']), value: z.string().optional() });
 const mcpEnabledSchema = z.object({ enabled: z.boolean() });
+const loginBodySchema = z.object({ providerId: z.string().min(1) });
 
 const isUnknownSession = (error) => {
   const message = error instanceof Error ? error.message : '';
@@ -87,14 +100,15 @@ export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
     }
   });
 
-  app.post('/api/agents/omp/sessions/:id/prompt', parseJsonBody, async (req, res) => {
+  app.post('/api/agents/omp/sessions/:id/prompt', parsePromptBody, async (req, res) => {
     if (await rejectIfDisabled(res)) return;
     const parsed = promptBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: 'text must be a non-empty string' });
+      return res.status(400).json({ error: 'text must be a non-empty string unless the prompt carries images' });
     }
     try {
-      const accepted = await (await getHost()).prompt(req.params.id, parsed.data.text, parsed.data.messageId);
+      const { text, messageId, images } = parsed.data;
+      const accepted = await (await getHost()).prompt(req.params.id, text, messageId, images);
       return res.json({ ok: accepted === true });
     } catch (error) {
       return respondWithError(res, error, 'Failed to prompt OMP session');
@@ -188,6 +202,33 @@ export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
       return res.json({ commands: await (await getHost()).listCommands() });
     } catch (error) {
       return respondWithError(res, error, 'Failed to list OMP commands');
+    }
+  });
+
+  app.get('/api/agents/omp/login/providers', async (_req, res) => {
+    if (await rejectIfDisabled(res)) return;
+    try {
+      return res.json({ providers: await (await getHost()).listLoginProviders() });
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to list OMP login providers');
+    }
+  });
+
+  /**
+   * Starts a login and answers as soon as OMP has something for the user: the
+   * browser URL, or (with the `loginId`) completion. The login keeps running
+   * after this response, so the UI confirms it through `login/providers`.
+   */
+  app.post('/api/agents/omp/login', parseJsonBody, async (req, res) => {
+    if (await rejectIfDisabled(res)) return;
+    const parsed = loginBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'providerId must be a non-empty string' });
+    }
+    try {
+      return res.json(await (await getHost()).login(parsed.data.providerId));
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to start OMP login');
     }
   });
 

@@ -48,6 +48,35 @@ describe("createOmpHost", () => {
     await handle.dispose()
   })
 
+  test("carries a prompt's images in the rpc frame and omits the field when empty", async () => {
+    const fake = fakeChild()
+    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
+    const host = createOmpHost({ spawn: () => fake.child, store })
+    const handlePromise = host.openSession({ cwd: "/repo" })
+    fake.emit(JSON.stringify({ type: "ready" }))
+    await Promise.resolve()
+    const stateReq = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string }
+    fake.emit(JSON.stringify({ id: stateReq.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_1" } }))
+    const handle = await handlePromise
+
+    const images = [{ type: "image" as const, data: "QUJD", mimeType: "image/png" }]
+    const pictured = handle.prompt("look", { images })
+    const picked = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; message?: string; images?: unknown }
+    expect(picked.message).toBe("look")
+    expect(picked.images).toEqual(images)
+    fake.emit(JSON.stringify({ id: picked.id, type: "response", command: "prompt", success: true, data: { agentInvoked: true } }))
+    expect(await pictured).toBe(true)
+
+    const plain = handle.prompt("plain")
+    const bare = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string }
+    expect(bare.type).toBe("prompt")
+    expect(bare).not.toHaveProperty("images")
+    fake.emit(JSON.stringify({ id: bare.id, type: "response", command: "prompt", success: true, data: { agentInvoked: true } }))
+    expect(await plain).toBe(true)
+
+    await handle.dispose()
+  })
+
   test("lists sessions through the store", async () => {
     const store = {
       list: async () => [{ id: "ses_1", sessionPath: "/s/ses_1.jsonl", cwd: "/repo", title: "t" }],
@@ -121,6 +150,76 @@ describe("createOmpHost", () => {
 
     expect(await pending).toEqual([{ provider: "anthropic", id: "claude" }])
     expect(spawned).toBe(1)
+  })
+
+  test("lists login providers on a short-lived rpc process", async () => {
+    const fake = fakeChild()
+    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
+    const host = createOmpHost({ spawn: () => fake.child, store })
+    const pending = host.listLoginProviders()
+    fake.emit(JSON.stringify({ type: "ready" }))
+    await Promise.resolve()
+    const req = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string }
+    expect(req.type).toBe("get_login_providers")
+    fake.emit(JSON.stringify({ id: req.id, type: "response", command: "get_login_providers", success: true, data: { providers: [{ id: "anthropic", name: "Anthropic", available: true, authenticated: false }] } }))
+
+    expect(await pending).toEqual([{ id: "anthropic", name: "Anthropic", available: true, authenticated: false }])
+  })
+
+  test("runs a login and hands each frame to the caller with a reply sink", async () => {
+    const fake = fakeChild()
+    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
+    const host = createOmpHost({ spawn: () => fake.child, store })
+    const frames: Array<Record<string, unknown>> = []
+    const pending = host.login("anthropic", { onFrame: (frame) => frames.push(frame) })
+    fake.emit(JSON.stringify({ type: "ready" }))
+    await Promise.resolve()
+    const req = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string; providerId: string }
+    expect(req.type).toBe("login")
+    expect(req.providerId).toBe("anthropic")
+
+    // OMP emits the browser URL and expects no answer for it.
+    fake.emit(JSON.stringify({ type: "extension_ui_request", id: "ui_1", method: "open_url", url: "https://auth.example/start", launchUrl: "http://127.0.0.1:1234/launch" }))
+    expect(frames).toEqual([{ type: "extension_ui_request", id: "ui_1", method: "open_url", url: "https://auth.example/start", launchUrl: "http://127.0.0.1:1234/launch" }])
+    // `open_url` is not a question: the request is still the only frame written.
+    expect(fake.written).toHaveLength(1)
+
+    fake.emit(JSON.stringify({ id: req.id, type: "response", command: "login", success: true, data: { providerId: "anthropic" } }))
+    expect(await pending).toEqual({ providerId: "anthropic" })
+  })
+
+  test("writes a reply frame the caller sends back for a prompt", async () => {
+    const fake = fakeChild()
+    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
+    const host = createOmpHost({ spawn: () => fake.child, store })
+    const pending = host.login("anthropic", {
+      onFrame: (frame, reply) => {
+        if (frame.method !== "input") return
+        reply({ type: "extension_ui_response", id: frame.id, value: "the-code" })
+      },
+    })
+    fake.emit(JSON.stringify({ type: "ready" }))
+    await Promise.resolve()
+    const req = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string }
+    fake.emit(JSON.stringify({ type: "extension_ui_request", id: "ui_9", method: "input", title: "Paste the authorization code" }))
+
+    expect(JSON.parse(fake.written.at(-1) ?? "{}")).toEqual({ type: "extension_ui_response", id: "ui_9", value: "the-code" })
+
+    fake.emit(JSON.stringify({ id: req.id, type: "response", command: "login", success: true, data: { providerId: "anthropic" } }))
+    await pending
+  })
+
+  test("rejects a login OMP refuses", async () => {
+    const fake = fakeChild()
+    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
+    const host = createOmpHost({ spawn: () => fake.child, store })
+    const pending = host.login("nope")
+    fake.emit(JSON.stringify({ type: "ready" }))
+    await Promise.resolve()
+    const req = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string }
+    fake.emit(JSON.stringify({ id: req.id, type: "response", command: "login", success: false, error: "Unknown OAuth provider: nope" }))
+
+    await expect(pending).rejects.toThrow("Unknown OAuth provider: nope")
   })
 })
 

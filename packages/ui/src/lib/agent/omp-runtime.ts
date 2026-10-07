@@ -32,6 +32,7 @@ import type {
   AgentSession,
   CreateSessionParams,
   FetchPermissionResult,
+  FileInputLite,
   MessagePage,
   MoveSessionOptions,
   PendingRequestListOptions,
@@ -56,7 +57,111 @@ const CAPABILITIES: AgentCapabilities = {
   rename: true,
   delete: true,
   move: true,
-  attachments: false,
+  attachments: true,
+  // OMP takes images inline and every other file only as an `@path` mention
+  // resolved against the session directory. A picked file has no path, so the
+  // composer offers images alone; anything else is sent by mentioning it.
+  attachmentKinds: "images",
+}
+
+/** One image OMP accepts on a prompt: base64 payload plus its MIME type. */
+export type OmpPromptImage = { type: "image"; data: string; mimeType: string }
+
+/** What OMP's `prompt` command takes (`modes/rpc/rpc-types.ts`). */
+export type OmpPromptBody = { text: string; messageId?: string; images?: OmpPromptImage[] }
+
+const BASE64_DATA_URL = /^data:([^;,]+);base64,([\s\S]*)$/
+const FILE_URL_PREFIX = "file://"
+const MENTION_REGEX = /@(?:"([^"]+)"|'([^']+)'|([^\s@]+))/g
+const MENTION_BOUNDARY = /[\s([{<"'`]/
+const MENTION_TRIM = /[)\]}>.,;:!?"'`]+$/
+
+/**
+ * The filesystem path a `file://` attachment URL addresses. Composer
+ * attachments are stored as `file://` URLs (`toServerFileUrl`), which is the
+ * only representation that carries a path a runtime can read.
+ */
+const filePathFromUrl = (url: string): string | null => {
+  if (!url.startsWith(FILE_URL_PREFIX)) return null
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(url.slice(FILE_URL_PREFIX.length))
+  } catch {
+    return null
+  }
+  // `C:/x` is encoded as `file:///C:/x`; the added root slash is not part of it.
+  return /^\/[A-Za-z]:[\\/]/.test(decoded) ? decoded.slice(1) : decoded
+}
+
+/**
+ * Whether the prompt text already carries this path as a mention, in OMP's own
+ * syntax. A mention the user typed is project-relative while an attachment
+ * carries the absolute path, so either form counts as a match: re-appending it
+ * would make OMP read the same file twice.
+ */
+const isAlreadyMentioned = (text: string, path: string): boolean => {
+  const normalize = (value: string): string =>
+    value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/").replace(/\/+$/, "")
+  const target = normalize(path)
+  for (const match of text.matchAll(MENTION_REGEX)) {
+    const index = match.index ?? 0
+    if (index > 0 && !MENTION_BOUNDARY.test(text[index - 1])) continue
+    const quoted = match[1] !== undefined || match[2] !== undefined
+    const raw = match[1] ?? match[2] ?? match[3]
+    const mention = normalize(quoted ? raw.trim() : raw.replace(MENTION_TRIM, ""))
+    if (mention && (mention === target || target.endsWith(`/${mention}`))) return true
+  }
+  return false
+}
+
+/**
+ * The one text and image list OMP's `prompt` command takes.
+ *
+ * OMP has no synthetic message, so the context items ride in front of the
+ * message as one authored text, separated by a blank line (the shape the
+ * message-queue and scheduled-task ports already use). Every file must become
+ * an image or an `@path` mention; one that can become neither fails the send
+ * rather than being dropped from it.
+ */
+export const mapOmpPrompt = (
+  text: string,
+  context: ReadonlyArray<{ text: string; description?: string }> | undefined,
+  files: ReadonlyArray<FileInputLite> | undefined,
+): { text: string; images: OmpPromptImage[] } => {
+  const blocks: string[] = []
+  for (const [index, item] of (context ?? []).entries()) {
+    if (typeof item.text !== "string" || item.text.trim().length === 0) {
+      throw new Error(`OMP cannot send context item ${index + 1}: it carries no text`)
+    }
+    if (item.description?.trim()) blocks.push(item.description)
+    blocks.push(item.text)
+  }
+  if (text.length > 0) blocks.push(text)
+  let prompt = blocks.join("\n\n")
+
+  const images: OmpPromptImage[] = []
+  for (const file of files ?? []) {
+    const dataUrl = BASE64_DATA_URL.exec(file.url)
+    const mimeType = dataUrl?.[1].toLowerCase() ?? ""
+    if (dataUrl && mimeType.startsWith("image/") && dataUrl[2].length > 0) {
+      images.push({ type: "image", data: dataUrl[2], mimeType })
+      continue
+    }
+    const path = dataUrl ? null : filePathFromUrl(file.url)
+    if (!path) {
+      throw new Error(
+        `OMP cannot attach ${file.filename ? `"${file.filename}"` : "this file"}: an OMP prompt `
+        + "carries images inline and every other file as an @path mention, and this attachment "
+        + "has neither an image type nor a path",
+      )
+    }
+    if (!isAlreadyMentioned(prompt, path)) {
+      const mention = /\s/.test(path) ? `@"${path}"` : `@${path}`
+      prompt = prompt.length > 0 ? `${prompt} ${mention}` : mention
+    }
+  }
+
+  return { text: prompt, images }
 }
 
 const ZERO_TOKENS = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
@@ -94,6 +199,30 @@ const mcpServersSchema = z.object({
     }),
   ),
 })
+
+const loginProviderSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  available: z.boolean(),
+  authenticated: z.boolean(),
+})
+const loginProvidersSchema = z.object({ providers: z.array(loginProviderSchema) })
+const loginResultSchema = z.object({
+  providerId: z.string().min(1),
+  /**
+   * Addresses the still-running flow's pending questions. OMP keeps the login
+   * alive after answering with the browser URL, so a later manual-code prompt
+   * is answered through the login id as if it were a session.
+   */
+  loginId: z.string().optional(),
+  /** The browser URL OMP wants opened; absent when the flow completed inline. */
+  url: z.string().optional(),
+  launchUrl: z.string().optional(),
+  instructions: z.string().optional(),
+})
+
+export type OmpLoginProvider = z.infer<typeof loginProviderSchema>
+export type OmpLoginResult = z.infer<typeof loginResultSchema>
 
 type OmpSessionRecord = z.infer<typeof sessionRecordSchema>
 
@@ -169,7 +298,10 @@ export class OmpRuntimeClient implements AgentRuntime {
   }
 
   async sendPrompt(params: SendPromptParams): Promise<string> {
-    const body = params.messageId ? { text: params.text, messageId: params.messageId } : { text: params.text }
+    const mapped = mapOmpPrompt(params.text, params.context, params.files)
+    const body: OmpPromptBody = { text: mapped.text }
+    if (params.messageId) body.messageId = params.messageId
+    if (mapped.images.length > 0) body.images = mapped.images
     const response = await this.fetchImpl(`${this.basePath}/sessions/${encodeURIComponent(params.id)}/prompt`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -239,6 +371,30 @@ export class OmpRuntimeClient implements AgentRuntime {
         path: "",
         content: "",
       }))
+  }
+
+  // --- Provider login. Not part of the `AgentRuntime` contract (it is not a
+  // session operation), so the providers page reaches it on this class directly.
+
+  /** The OAuth providers OMP can log in to, with their current auth status. */
+  async listLoginProviders(): Promise<OmpLoginProvider[]> {
+    const response = await this.fetchImpl(`${this.basePath}/login/providers`)
+    return (await readJson(response, loginProvidersSchema)).providers
+  }
+
+  /**
+   * Starts a login. Resolves as soon as OMP has something for the user: the
+   * `url` to open, or a completed flow carrying only `providerId`. The flow
+   * keeps running server-side; `loginId` addresses a later manual-code prompt,
+   * and `listLoginProviders()` reports when the provider is authenticated.
+   */
+  async login(providerId: string): Promise<OmpLoginResult> {
+    const response = await this.fetchImpl(`${this.basePath}/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providerId }),
+    })
+    return readJson(response, loginResultSchema)
   }
 
   async getActiveStatus(directory?: string | null): Promise<Record<string, SessionStatus> | null> {

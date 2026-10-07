@@ -59,10 +59,10 @@ export const readSessionStatus = async (sessionId) => {
 };
 
 /** Sends a prompt and answers whether the agent took it; `null` when unavailable. */
-export const promptSession = async (sessionId, text, messageId) => {
+export const promptSession = async (sessionId, text, messageId, images) => {
   const host = await getOmpRuntimeHost();
   if (!host) return null;
-  return host.prompt(sessionId, text, messageId);
+  return host.prompt(sessionId, text, messageId, images);
 };
 
 /** Switches a session's model; `null` when the runtime is unavailable. */

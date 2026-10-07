@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 import {
   ACCEPTED_ATTACHMENT_EXTENSIONS,
   ATTACHMENT_ACCEPT,
+  IMAGE_ATTACHMENT_ACCEPT,
   getAttachmentInputModality,
   getUnsupportedAttachmentInputs,
   isDocumentAttachmentFilename,
@@ -46,6 +47,14 @@ describe("attachment file preparation", () => {
       expect(ACCEPTED_ATTACHMENT_EXTENSIONS.includes(extension)).toBe(true)
       expect(ATTACHMENT_ACCEPT.includes(`.${extension}`)).toBe(true)
     }
+  })
+
+  test("restricts the image-only picker to the image types a runtime takes inline", () => {
+    const entries = IMAGE_ATTACHMENT_ACCEPT.split(",")
+    expect(entries.length).toBeGreaterThan(0)
+    expect(entries).toContain("image/png")
+    expect(ATTACHMENT_ACCEPT.split(",").filter((entry) => entry.startsWith("image/")))
+      .toEqual(entries)
   })
 
   test("identifies Office and OpenDocument filenames for shared mention preparation", () => {

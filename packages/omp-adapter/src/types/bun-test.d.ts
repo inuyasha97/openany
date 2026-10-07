@@ -11,6 +11,8 @@ declare module "bun:test" {
     toBeNull(): void
     toBeInstanceOf(expected: unknown): void
     toHaveLength(expected: number): void
+    toHaveProperty(key: string): void
+    not: ExpectResult
     rejects: {
       toThrow(expected?: string | RegExp | (new (...args: never[]) => unknown)): Promise<void>
       toBeInstanceOf(expected: unknown): Promise<void>

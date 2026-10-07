@@ -1010,6 +1010,12 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['api key', 'oauth', 'credentials', 'accounts', 'switch account', 'disconnect'],
   },
   {
+    id: 'providers.login',
+    page: 'providers',
+    titleKey: 'settings.providers.login.title',
+    keywords: ['sign in', 'login', 'oauth', 'authenticate', 'credentials', 'browser'],
+  },
+  {
     id: 'providers.models',
     page: 'providers',
     titleKey: 'settings.providers.page.models.title',

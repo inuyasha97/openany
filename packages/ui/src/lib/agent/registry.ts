@@ -5,13 +5,22 @@ const DEFAULT_RUNTIME_ID = "omp"
 
 const registeredRuntimes = new Map<string, AgentRuntime>()
 const sessionRuntimes = new Map<string, string>()
-let cachedOmp: AgentRuntime | null = null
+let cachedOmp: OmpRuntimeClient | null = null
+
+/**
+ * The concrete OMP client. The `AgentRuntime` contract carries session
+ * operations only, so a page that needs an OMP-only call (provider login)
+ * takes the client from here instead of casting the contract.
+ */
+export const getOmpRuntimeClient = (): OmpRuntimeClient => {
+  cachedOmp ??= new OmpRuntimeClient()
+  return cachedOmp
+}
 
 export const getAgentRuntime = (runtimeId: string = DEFAULT_RUNTIME_ID): AgentRuntime => {
   const registered = registeredRuntimes.get(runtimeId)
   if (registered) return registered
-  cachedOmp ??= new OmpRuntimeClient()
-  return cachedOmp
+  return getOmpRuntimeClient()
 }
 
 export const registerSessionRuntime = (sessionId: string, runtimeId: string): void => {

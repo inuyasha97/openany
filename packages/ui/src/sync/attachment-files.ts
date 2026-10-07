@@ -109,6 +109,15 @@ const ACCEPTED_ATTACHMENT_TYPES = [
 
 export const ATTACHMENT_ACCEPT = ACCEPTED_ATTACHMENT_TYPES.join(",")
 
+/**
+ * The picker list for a runtime that takes images inline and every other file
+ * only as a path mention. Nothing a picker can offer carries a path, so a
+ * non-image pick there could not be sent at all.
+ */
+export const IMAGE_ATTACHMENT_ACCEPT = ACCEPTED_ATTACHMENT_TYPES
+  .filter((type) => type.startsWith("image/"))
+  .join(",")
+
 const PICKER_MIME_EXTENSIONS = new Map<string, string>([
   ["image/png", "png"],
   ["image/jpeg", "jpg"],

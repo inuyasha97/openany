@@ -15,10 +15,10 @@
 import { spawn as nodeSpawn } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
-import { OmpRpcClient, type OmpRpcChild, type OmpRpcSpawn } from "./rpc-client"
+import { OmpRpcClient, OmpRpcError, type OmpRpcChild, type OmpRpcSpawn } from "./rpc-client"
 import { createSessionStore, type OmpSessionStore } from "./session-store"
 import type { OmpMessage } from "./model"
-import type { OmpEvent, OmpHost, OmpSessionHandle } from "./runtime"
+import type { OmpEvent, OmpHost, OmpLoginProvider, OmpLoginResult, OmpSessionHandle } from "./runtime"
 
 export type OmpHostOptions = {
   command?: string
@@ -27,6 +27,12 @@ export type OmpHostOptions = {
   spawn?: OmpRpcSpawn
   store?: OmpSessionStore
 }
+
+/**
+ * OMP's own client gives `login` a 600s budget; the same cap here keeps a
+ * provider that never answers the browser callback from leaking a process.
+ */
+const LOGIN_TIMEOUT_MS = 600_000
 
 const defaultSpawn: OmpRpcSpawn = (command, args, options) => {
   const child = nodeSpawn(command, args, { cwd: options.cwd, env: { ...process.env, ...options.env }, stdio: ["pipe", "pipe", "pipe"] })
@@ -120,8 +126,14 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
       })
       const handle: OmpSessionHandle = {
         id: state.sessionId,
-        prompt: async (text) => {
-          const result = await client.command<{ agentInvoked?: boolean } | undefined>("prompt", { message: text })
+        prompt: async (text, options) => {
+          const images = options?.images ?? []
+          const result = await client.command<{ agentInvoked?: boolean } | undefined>("prompt", {
+            message: text,
+            // OMP reads an absent `images` and an empty one the same way; the
+            // field is only written when there is something to carry.
+            ...(images.length > 0 ? { images } : {}),
+          })
           return result?.agentInvoked !== false
         },
         abort: async () => {
@@ -203,6 +215,32 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
 
     listCommands: () =>
       withProcessClient(async (client) => (await client.command<{ commands: unknown[] }>("get_available_commands")).commands),
+
+    listLoginProviders: () =>
+      withProcessClient(async (client) => (await client.command<{ providers: OmpLoginProvider[] }>("get_login_providers")).providers),
+
+    // Login is a long-lived flow: OMP keeps the process while it waits for the
+    // browser callback, so this client outlives the call that needs it. Every
+    // unsolicited frame is handed to the caller with a reply sink, because the
+    // manual-code `input` prompt has to be answered on this same stdin.
+    login: async (providerId, options) => {
+      const client = spawnClient()
+      const onFrame = options?.onFrame
+      try {
+        await client.start()
+        if (onFrame) client.onEvent((frame) => onFrame(frame, (outbound) => client.send(outbound)))
+        const { promise: timeout, reject: rejectTimeout } = Promise.withResolvers<never>()
+        const timer = setTimeout(() => rejectTimeout(new OmpRpcError("login", `omp login timed out after ${LOGIN_TIMEOUT_MS}ms`)), LOGIN_TIMEOUT_MS)
+        timer.unref?.()
+        try {
+          return await Promise.race([client.command<OmpLoginResult>("login", { providerId }), timeout])
+        } finally {
+          clearTimeout(timer)
+        }
+      } finally {
+        await client.dispose()
+      }
+    },
 
     getSessionStatus: async (id) => {
       const client = clients.get(id)

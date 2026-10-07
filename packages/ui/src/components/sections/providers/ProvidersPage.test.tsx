@@ -17,7 +17,16 @@ Object.assign(globalThis, {
   requestAnimationFrame: browser.requestAnimationFrame.bind(browser),
   cancelAnimationFrame: browser.cancelAnimationFrame.bind(browser), IS_REACT_ACT_ENVIRONMENT: true,
 });
-const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ home: '/test' }));
+const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+  const url = String(input);
+  if (url.includes('/api/agents/omp/login/providers')) {
+    return Response.json({ providers: [{ id: 'anthropic', name: 'Anthropic', available: true, authenticated: false }] });
+  }
+  if (url.includes('/api/agents/omp/login')) {
+    return Response.json({ providerId: 'anthropic', loginId: 'omp-login-1', url: 'https://auth.example/start', instructions: 'Finish in the browser' });
+  }
+  return Response.json({ home: '/test' });
+});
 
 // ProviderLogo reads `import.meta.glob`, which only Vite transforms; resolve the
 // same hook against the real logo files instead.
@@ -94,6 +103,31 @@ test('renders the OMP catalog, refreshes it, and shows the empty state', async (
     [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('Refresh'))?.click();
   });
   expect(calls).toEqual([{ directory: null, source: 'settings:providers' }]);
+
+  // The OAuth providers come from the login route, not the model catalog.
+  await act(async () => { await Promise.resolve(); });
+  const loginRow = container.querySelector('[data-login-provider-id="anthropic"]');
+  expect(loginRow?.textContent).toContain('Anthropic');
+  expect(loginRow?.textContent).toContain('Not signed in');
+
+  const openCalls: unknown[][] = [];
+  const originalOpen = browser.open;
+  browser.open = ((...args: unknown[]) => {
+    openCalls.push(args);
+    return null;
+  }) as typeof browser.open;
+  await act(async () => {
+    [...(loginRow?.querySelectorAll('button') ?? [])]
+      .find((button) => button.textContent?.includes('Sign in'))
+      ?.click();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(openCalls).toEqual([['https://auth.example/start', '_blank', 'noopener,noreferrer']]);
+  const loginPrompt = container.querySelector('[data-login-url]');
+  expect(loginPrompt?.textContent).toContain('Finish in the browser');
+  expect(loginPrompt?.textContent).toContain('https://auth.example/start');
+  browser.open = originalOpen;
 
   await act(async () => { useConfigStore.setState({ providers: [] }); });
   expect(container.querySelectorAll('[data-provider-id]')).toHaveLength(0);

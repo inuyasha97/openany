@@ -24,6 +24,7 @@ describe("OmpRuntimeClient", () => {
     expect(client.id).toBe("omp")
     expect(client.capabilities).toMatchObject({
       rename: true, delete: true, move: true, commands: true, skills: true, permissions: true, mcp: true, modelSelection: true,
+      attachments: true, attachmentKinds: "images",
       forms: false, revert: false, turnDiff: false, agentSelection: false,
     })
     expect(client.translateEvent()).toEqual([])
@@ -184,5 +185,143 @@ describe("OmpRuntimeClient", () => {
     expect(calls).toEqual([
       { url: "/api/agents/omp/sessions/ses_a/model", method: "POST", body: { provider: "anthropic", modelId: "claude" } },
     ])
+  })
+
+  test("sends an image attachment as the prompt's images payload", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendPrompt({
+      id: "ses_a",
+      providerID: "anthropic",
+      text: "what is this",
+      files: [{ type: "file", mime: "image/png", filename: "shot.png", url: "data:image/png;base64,QUJD" }],
+    })
+    expect(calls[0].body).toEqual({
+      text: "what is this",
+      images: [{ type: "image", data: "QUJD", mimeType: "image/png" }],
+    })
+  })
+
+  test("carries a path-backed attachment as an @path mention", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendPrompt({
+      id: "ses_a",
+      providerID: "anthropic",
+      text: "review this",
+      files: [{ type: "file", mime: "text/plain", filename: "a.ts", url: "file:///repo/src/a.ts" }],
+    })
+    expect(calls[0].body).toEqual({ text: "review this @/repo/src/a.ts" })
+  })
+
+  test("does not repeat a path the prompt already mentions", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendPrompt({
+      id: "ses_a",
+      providerID: "anthropic",
+      text: "look at @src/a.ts please",
+      files: [{ type: "file", mime: "text/plain", filename: "a.ts", url: "file:///repo/src/a.ts" }],
+    })
+    expect(calls[0].body).toEqual({ text: "look at @src/a.ts please" })
+  })
+
+  test("quotes a mentioned path that contains whitespace", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendPrompt({
+      id: "ses_a",
+      providerID: "anthropic",
+      text: "read it",
+      files: [{ type: "file", mime: "text/plain", filename: "a b.ts", url: "file:///repo/my%20dir/a%20b.ts" }],
+    })
+    expect(calls[0].body).toEqual({ text: 'read it @"/repo/my dir/a b.ts"' })
+  })
+
+  test("fails loudly for a file that is neither an image nor path-backed", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    const send = client.sendPrompt({
+      id: "ses_a",
+      providerID: "anthropic",
+      text: "look",
+      files: [{ type: "file", mime: "application/pdf", filename: "report.pdf", url: "data:application/pdf;base64,QUJD" }],
+    })
+    await expect(send).rejects.toThrow('OMP cannot attach "report.pdf"')
+    expect(calls).toEqual([])
+  })
+
+  test("folds context ahead of the message, description first", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendPrompt({
+      id: "ses_a",
+      providerID: "anthropic",
+      text: "fix it",
+      context: [
+        { text: "Issue #12: crash on start" },
+        { text: "the diff", description: "Pull request #34" },
+      ],
+    })
+    expect(calls[0].body).toEqual({
+      text: "Issue #12: crash on start\n\nPull request #34\n\nthe diff\n\nfix it",
+    })
+  })
+
+  test("fails loudly for a context item that carries no text", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    const send = client.sendPrompt({
+      id: "ses_a",
+      providerID: "anthropic",
+      text: "go",
+      context: [{ text: "   " }],
+    })
+    await expect(send).rejects.toThrow("OMP cannot send context item 1")
+    expect(calls).toEqual([])
+  })
+
+  test("lists login providers and starts a login", async () => {
+    const providers = [{ id: "anthropic", name: "Anthropic", available: true, authenticated: false }]
+    const { client, calls } = makeClient({
+      "GET /api/agents/omp/login/providers": { body: { providers } },
+      "POST /api/agents/omp/login": { body: {
+        providerId: "anthropic",
+        loginId: "omp-login-1",
+        url: "https://auth.example/start",
+        launchUrl: "http://127.0.0.1:1/launch",
+        instructions: "Finish in the browser",
+      } },
+    })
+
+    expect(await client.listLoginProviders()).toEqual(providers)
+    expect(await client.login("anthropic")).toEqual({
+      providerId: "anthropic",
+      loginId: "omp-login-1",
+      url: "https://auth.example/start",
+      launchUrl: "http://127.0.0.1:1/launch",
+      instructions: "Finish in the browser",
+    })
+    expect(calls).toEqual([
+      { url: "/api/agents/omp/login/providers", method: "GET", body: undefined },
+      { url: "/api/agents/omp/login", method: "POST", body: { providerId: "anthropic" } },
+    ])
+  })
+
+  test("accepts a login that finished without a browser step", async () => {
+    const { client } = makeClient({ "POST /api/agents/omp/login": { body: { providerId: "anthropic" } } })
+    expect(await client.login("anthropic")).toEqual({ providerId: "anthropic" })
+  })
+
+  test("surfaces a refused login instead of an empty result", async () => {
+    const { client } = makeClient({ "POST /api/agents/omp/login": { status: 500, body: { error: "Unknown OAuth provider: nope" } } })
+    await expect(client.login("nope")).rejects.toThrow("OMP request failed: 500")
   })
 })

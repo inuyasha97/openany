@@ -7,6 +7,7 @@ const createFakeAdapter = ({ projectImpl } = {}) => {
   let subscriber = null;
   const runtime = {
     prompted: [],
+    promptOptions: [],
     aborted: [],
     disposed: false,
     messages: [],
@@ -25,12 +26,32 @@ const createFakeAdapter = ({ projectImpl } = {}) => {
     async getMessages() {
       return runtime.messages;
     },
-    async prompt(id, text) {
+    async prompt(id, text, options) {
       runtime.prompted.push([id, text]);
+      runtime.promptOptions.push(options);
       return true;
     },
     async getSession(id) {
       return { id };
+    },
+    loginCalls: [],
+    loginReplies: [],
+    onLoginFrame: null,
+    settleLogin: null,
+    rejectLogin: null,
+    async listLoginProviders() {
+      return [{ id: 'anthropic', name: 'Anthropic', available: true, authenticated: false }];
+    },
+    login(providerId, options) {
+      runtime.loginCalls.push(providerId);
+      runtime.onLoginFrame = (frame) => options.onFrame(frame, (reply) => runtime.loginReplies.push(reply));
+      return new Promise((resolve, reject) => {
+        runtime.settleLogin = resolve;
+        runtime.rejectLogin = reject;
+      });
+    },
+    emitLoginFrame(frame) {
+      runtime.onLoginFrame?.(frame);
     },
     async sendToSession(id, frame) {
       runtime.sent.push([id, frame]);
@@ -177,6 +198,18 @@ describe('createOmpRuntimeHost', () => {
     expect(runtime.prompted).toEqual([['ses_a', 'hi']]);
   });
 
+  it('passes a prompt\'s images through to the adapter', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+    const images = [{ type: 'image', data: 'QUJD', mimeType: 'image/png' }];
+
+    await host.prompt('ses_a', 'look', undefined, images);
+    expect(runtime.promptOptions).toEqual([{ images }]);
+
+    await host.prompt('ses_a', 'plain');
+    expect(runtime.promptOptions[1]).toBeUndefined();
+  });
+
   it('reuses one projector per session and drops empty projections', async () => {
     const frames = [];
     const { adapter, runtime } = createFakeAdapter();
@@ -269,5 +302,81 @@ describe('createOmpRuntimeHost', () => {
     expect(await host.replyPermission('ses_new', 'ui_1', 'once')).toBe(true);
     expect(runtime.sent).toEqual([['ses_new', { type: 'extension_ui_response', id: 'ui_1', confirmed: true }]]);
     expect(host.listPermissions('ses_new')).toHaveLength(0);
+  });
+
+  it('lists the login providers on the runtime', async () => {
+    const { adapter } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+
+    expect(await host.listLoginProviders()).toEqual([{ id: 'anthropic', name: 'Anthropic', available: true, authenticated: false }]);
+  });
+
+  it('starts a login and returns the browser URL without answering it', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+
+    const pending = host.login('anthropic');
+    runtime.emitLoginFrame({
+      type: 'extension_ui_request',
+      id: 'ui_1',
+      method: 'open_url',
+      url: 'https://auth.example/start',
+      launchUrl: 'http://127.0.0.1:1234/launch',
+      instructions: 'Finish in the browser',
+    });
+
+    expect(await pending).toEqual({
+      providerId: 'anthropic',
+      loginId: 'omp-login-1',
+      url: 'https://auth.example/start',
+      launchUrl: 'http://127.0.0.1:1234/launch',
+      instructions: 'Finish in the browser',
+    });
+    // `open_url` is not a question: nothing is written back to OMP.
+    expect(runtime.loginReplies).toEqual([]);
+    runtime.settleLogin({ providerId: 'anthropic' });
+  });
+
+  it('returns a completed login without a URL', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+
+    const pending = host.login('anthropic');
+    runtime.settleLogin({ providerId: 'anthropic' });
+
+    expect(await pending).toEqual({ providerId: 'anthropic' });
+  });
+
+  it('surfaces a refused login', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+
+    const pending = host.login('nope');
+    runtime.rejectLogin(new Error('Unknown OAuth provider: nope'));
+
+    await expect(pending).rejects.toThrow('Unknown OAuth provider: nope');
+  });
+
+  it('maps a login input prompt to a permission and answers it on the login process', async () => {
+    const frames = [];
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: (frame) => frames.push(frame) });
+
+    const pending = host.login('anthropic');
+    runtime.emitLoginFrame({ type: 'extension_ui_request', id: 'ui_1', method: 'open_url', url: 'https://auth.example/start' });
+    const started = await pending;
+    expect(started.loginId).toBe('omp-login-1');
+
+    runtime.emitLoginFrame({ type: 'extension_ui_request', id: 'ui_2', method: 'input', title: 'Paste the authorization code' });
+    const asked = frames.find((frame) => frame.properties.events[0]?.type === 'permission.asked');
+    expect(asked.properties.sessionID).toBe('omp-login-1');
+    expect(asked.properties.events[0].properties).toMatchObject({ id: 'ui_2', sessionID: 'omp-login-1', action: 'input' });
+
+    expect(await host.replyPermission('omp-login-1', 'ui_2', 'once', 'the-code')).toBe(true);
+    expect(runtime.loginReplies).toEqual([{ type: 'extension_ui_response', id: 'ui_2', value: 'the-code' }]);
+    // The ask is settled, not tied to a session process.
+    expect(runtime.sent).toEqual([]);
+
+    runtime.settleLogin({ providerId: 'anthropic' });
   });
 });

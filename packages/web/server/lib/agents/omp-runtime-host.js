@@ -37,6 +37,11 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
   const projectors = new Map();
   const directories = new Map();
   const announced = new Set();
+  // A login runs on its own short-lived process and outlives the request that
+  // started it, so its reply sink is kept under a synthetic id the permission
+  // route can address.
+  const logins = new Map();
+  let loginSeq = 0;
 
   const rememberDirectory = (sessionId, directory) => {
     if (directory) {
@@ -139,11 +144,11 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
       return adapter.projectOmpHistory(id, await runtime.getMessages(id));
     },
 
-    prompt(id, text, messageID) {
+    prompt(id, text, messageID, images) {
       if (messageID) {
         projectorFor(id).expectUserMessage(id, messageID);
       }
-      return runtime.prompt(id, text);
+      return runtime.prompt(id, text, images ? { images } : undefined);
     },
 
     abort: (id) => runtime.abort(id),
@@ -161,6 +166,12 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     async replyPermission(id, requestId, reply, value) {
       const envelope = approvals.resolve(id, requestId, reply, value);
       if (!envelope) return false;
+      // A login's `input` prompt is answered on its own process, not a session's.
+      const login = logins.get(id);
+      if (login) {
+        login.reply(envelope);
+        return true;
+      }
       await runtime.sendToSession(id, envelope);
       return true;
     },
@@ -178,6 +189,52 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     listModels: () => runtime.listModels(),
 
     listCommands: () => runtime.listCommands(),
+
+    listLoginProviders: () => runtime.listLoginProviders(),
+
+    /**
+     * Starts a provider login. OMP answers as soon as it has something for the
+     * user (the browser URL) or the flow ends; the login keeps running
+     * afterwards, so the `loginId` in the result addresses its later `input`
+     * prompt through the ordinary permission reply route.
+     */
+    async login(providerId) {
+      const loginId = `omp-login-${++loginSeq}`;
+      let reply = () => {};
+      let ask = null;
+      const { promise: asked, resolve: settleAsk } = Promise.withResolvers();
+      const running = runtime.login(providerId, {
+        onFrame: (frame, send) => {
+          reply = send;
+          // `open_url` is not a question: OMP reads no answer for it, so it is
+          // handed back to the caller and never recorded as a pending ask.
+          if (frame?.type === 'extension_ui_request' && frame.method === 'open_url') {
+            if (!ask) {
+              ask = { url: frame.url, launchUrl: frame.launchUrl, instructions: frame.instructions };
+              settleAsk();
+            }
+            return;
+          }
+          approvals.handleRequest(loginId, frame);
+        },
+      });
+      logins.set(loginId, { reply: (frame) => reply(frame) });
+      // The login outlives this call, so its rejection must not go unhandled
+      // and its process must stop being addressable once it settles.
+      running
+        .catch(() => {})
+        .finally(() => {
+          logins.delete(loginId);
+          approvals.forget(loginId);
+        });
+      const outcome = await Promise.race([
+        asked.then(() => ({ ask })),
+        running.then(() => ({ done: true }), (error) => ({ error })),
+      ]);
+      if (outcome.error) throw outcome.error;
+      if (outcome.done) return { providerId };
+      return { providerId, loginId, ...outcome.ask };
+    },
 
     listMcpServers: (directory) => config.listMcp(directory),
 
@@ -204,6 +261,7 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
       projectors.clear();
       directories.clear();
       announced.clear();
+      logins.clear();
       await runtime.dispose();
     },
   };
