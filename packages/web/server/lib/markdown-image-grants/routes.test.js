@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { configureOmpRuntimeHost } from '../agents/omp-host-access.js';
 import { registerMarkdownImageGrantRoutes } from './routes.js';
 
 const PNG = Buffer.from(
@@ -12,8 +13,11 @@ const PNG = Buffer.from(
   'base64',
 );
 const roots = [];
+const SESSION_ID = 'ses_1';
+const MESSAGE_ID = 'msg_1';
 
 afterEach(async () => {
+  configureOmpRuntimeHost(null);
   vi.unstubAllGlobals();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -31,12 +35,23 @@ const createFixture = async ({ sources, markdown } = {}) => {
   await fs.writeFile(defaultPath, PNG);
   const requestedSources = sources ?? [new URL(`file://${defaultPath}`).toString()];
   const text = markdown ?? requestedSources.map((source) => `![image](${source})`).join('\n');
-  const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-    id: 'msg_1',
-    type: 'assistant',
-    content: [{ type: 'text', text }],
-  }), { status: 200, headers: { 'content-type': 'application/json' } }));
-  vi.stubGlobal('fetch', fetchMock);
+
+  // The canonical `{ info, parts }` page the OMP host serves.
+  const items = [];
+  const host = {
+    listSessions: vi.fn(async () => [{ id: SESSION_ID, sessionPath: '/sessions/1.jsonl', cwd: directory, title: 'One' }]),
+    getSessionStatus: vi.fn(async () => ({ busy: false })),
+    getMessages: vi.fn(async () => ({ items, cursor: {} })),
+  };
+  configureOmpRuntimeHost(() => host);
+  const setMessageText = (messageText, role = 'assistant') => {
+    items.length = 0;
+    items.push({
+      info: { id: MESSAGE_ID, sessionID: SESSION_ID, role, time: { created: 1, completed: 2 } },
+      parts: [{ type: 'text', text: messageText }],
+    });
+  };
+  setMessageText(text);
 
   let fullReadCount = 0;
   const app = express();
@@ -55,14 +70,13 @@ const createFixture = async ({ sources, markdown } = {}) => {
     validateDirectoryPath: async (candidate) => candidate === directory
       ? { ok: true, directory }
       : { ok: false, error: 'Invalid directory' },
-    buildOpenCodeUrl: (route) => `http://opencode.test${route}`,
-    getOpenCodeAuthHeaders: () => ({ authorization: 'Basic test' }),
   });
   return {
     app,
     approvedTempRoot,
     directory,
-    fetchMock,
+    host,
+    setMessageText,
     fullReadCount: () => fullReadCount,
     root,
     sources: requestedSources,
@@ -70,40 +84,29 @@ const createFixture = async ({ sources, markdown } = {}) => {
 };
 
 const prepare = (app, directory, sources) => request(app)
-  .post('/api/openchamber/sessions/ses_1/markdown-image-grants')
-  .send({ directory, messageId: 'msg_1', sources })
+  .post(`/api/openchamber/sessions/${SESSION_ID}/markdown-image-grants`)
+  .send({ directory, messageId: MESSAGE_ID, sources })
   .expect(200);
 
 describe('session image assets', () => {
-  it('percent-encodes the directory header on the message fetch', async () => {
+  it('reads the message from the session page', async () => {
     const fixture = await createFixture();
     await prepare(fixture.app, fixture.directory, ['image.png']);
 
-    expect(fixture.fetchMock).toHaveBeenCalledWith(
-      expect.any(URL),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          'x-opencode-directory': encodeURIComponent(fixture.directory),
-        }),
-      }),
-    );
+    expect(fixture.host.getMessages).toHaveBeenCalledWith(SESSION_ID);
   });
 
-  it('prepares workspace and OpenCode temporary images with one message fetch', async () => {
+  it('prepares workspace and approved temporary images with one message read', async () => {
     const fixture = await createFixture({ sources: ['workspace.png'] });
     await fs.writeFile(path.join(fixture.directory, 'workspace.png'), PNG);
     const temporaryPath = path.join(fixture.approvedTempRoot, 'temporary.png');
     await fs.writeFile(temporaryPath, PNG);
     const temporarySource = new URL(`file://${temporaryPath}`).toString();
-    fixture.fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
-      id: 'msg_1',
-      type: 'assistant',
-      content: [{ type: 'text', text: `![workspace](workspace.png)\n![temporary](${temporarySource})` }],
-    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    fixture.setMessageText(`![workspace](workspace.png)\n![temporary](${temporarySource})`);
 
     const response = await prepare(fixture.app, fixture.directory, ['workspace.png', temporarySource]);
 
-    expect(fixture.fetchMock).toHaveBeenCalledTimes(1);
+    expect(fixture.host.getMessages).toHaveBeenCalledTimes(1);
     expect(fixture.fullReadCount()).toBe(0);
     expect(response.body.results).toHaveLength(2);
     const canonicalTemporaryPath = await fs.realpath(temporaryPath);
@@ -213,11 +216,7 @@ describe('session image assets', () => {
     const outsidePath = path.join(fixture.root, 'outside.png');
     await fs.writeFile(outsidePath, PNG);
     const source = new URL(`file://${outsidePath}`).toString();
-    fixture.fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
-      id: 'msg_1',
-      type: 'assistant',
-      content: [{ type: 'text', text: `![outside](${source})` }],
-    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    fixture.setMessageText(`![outside](${source})`);
 
     const response = await prepare(fixture.app, fixture.directory, [source]);
     expect(response.body.results).toEqual([{ source, status: 'error' }]);
@@ -234,5 +233,15 @@ describe('session image assets', () => {
       { source: 'invalid.png', status: 'error' },
       { source: 'linked.png', status: 'error' },
     ]);
+  });
+
+  it('answers 404 when the session page does not carry the message', async () => {
+    const fixture = await createFixture();
+    fixture.setMessageText('![image](image.png)', 'user');
+
+    await request(fixture.app)
+      .post(`/api/openchamber/sessions/${SESSION_ID}/markdown-image-grants`)
+      .send({ directory: fixture.directory, messageId: MESSAGE_ID, sources: ['image.png'] })
+      .expect(404);
   });
 });

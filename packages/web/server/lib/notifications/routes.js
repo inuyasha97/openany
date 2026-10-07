@@ -28,7 +28,6 @@ export const registerNotificationRoutes = (app, dependencies) => {
   const {
     uiAuthController,
     ensurePushInitialized,
-    ensureGlobalWatcherStarted,
     getOrCreateVapidKeys,
     getUiSessionTokenFromRequest,
     readSettingsFromDiskMigrated,
@@ -42,29 +41,22 @@ export const registerNotificationRoutes = (app, dependencies) => {
     isUiVisible,
     getUiNotificationClients,
     writeSseEvent,
-    getSessionActivitySnapshot,
-    getSessionStateSnapshot,
-    getPendingBlockingRequestsSnapshot,
-    getSessionAttentionSnapshot,
-    getSessionState,
-    getSessionAttentionState,
-    markSessionViewed,
-    markSessionUnviewed,
-    markUserMessageSent,
+    // Session status/attention used to be tracked from the OpenCode event
+    // stream. That stream is gone; the runtime host is read on demand by the
+    // server-side consumers, and these routes answer empty until a replacement
+    // live tracker is wired. Absent accessors must not crash the endpoints.
+    getSessionActivitySnapshot = () => ({}),
+    getSessionStateSnapshot = () => ({}),
+    getPendingBlockingRequestsSnapshot = () => ({}),
+    getSessionAttentionSnapshot = () => ({}),
+    getSessionState = () => null,
+    getSessionAttentionState = () => null,
+    markSessionViewed = () => {},
+    markSessionUnviewed = () => {},
+    markUserMessageSent = () => {},
     setPushInitialized,
     setAutoAcceptSession,
   } = dependencies;
-
-  const ensureSessionWatcher = async () => {
-    if (typeof ensureGlobalWatcherStarted !== 'function') {
-      return;
-    }
-    try {
-      await ensureGlobalWatcherStarted();
-    } catch (error) {
-      console.warn('[OpenCodeWatcher] lazy start failed:', error?.message ?? error);
-    }
-  };
 
   app.get('/api/push/vapid-public-key', async (_req, res) => {
     try {
@@ -79,7 +71,6 @@ export const registerNotificationRoutes = (app, dependencies) => {
 
   app.post('/api/push/subscribe', async (req, res) => {
     await ensurePushInitialized();
-    await ensureSessionWatcher();
 
     const uiToken = uiAuthController?.ensureSessionToken
       ? await uiAuthController.ensureSessionToken(req, res)
@@ -148,7 +139,6 @@ export const registerNotificationRoutes = (app, dependencies) => {
   // is a hex APNs device token from @capacitor/push-notifications, scoped to the UI
   // session like web-push subscriptions.
   app.post('/api/push/apns-token', async (req, res) => {
-    await ensureSessionWatcher();
 
     const uiToken = uiAuthController?.ensureSessionToken
       ? await uiAuthController.ensureSessionToken(req, res)
@@ -218,7 +208,6 @@ export const registerNotificationRoutes = (app, dependencies) => {
   });
 
   app.get('/api/notifications/stream', async (req, res) => {
-    await ensureSessionWatcher();
 
     const uiToken = uiAuthController?.ensureSessionToken
       ? await uiAuthController.ensureSessionToken(req, res)
@@ -283,12 +272,10 @@ export const registerNotificationRoutes = (app, dependencies) => {
   });
 
   app.get('/api/session-activity', (_req, res) => {
-    void ensureSessionWatcher();
     res.json(getSessionActivitySnapshot());
   });
 
   app.get('/api/sessions/snapshot', async (_req, res) => {
-    await ensureSessionWatcher();
     res.json({
       statusSessions: getSessionStateSnapshot(),
       attentionSessions: getSessionAttentionSnapshot(),
@@ -300,7 +287,6 @@ export const registerNotificationRoutes = (app, dependencies) => {
   // live status per session plus the permission requests and forms still
   // waiting for an answer. Both come from the server's single upstream stream.
   app.get('/api/sessions/status', async (_req, res) => {
-    await ensureSessionWatcher();
     const snapshot = getSessionStateSnapshot();
     res.json({
       sessions: snapshot,
@@ -310,7 +296,6 @@ export const registerNotificationRoutes = (app, dependencies) => {
   });
 
   app.get('/api/sessions/:id/status', async (req, res) => {
-    await ensureSessionWatcher();
     const sessionId = req.params.id;
     const state = getSessionState(sessionId);
 
@@ -328,7 +313,6 @@ export const registerNotificationRoutes = (app, dependencies) => {
   });
 
   app.get('/api/sessions/attention', async (_req, res) => {
-    await ensureSessionWatcher();
     const snapshot = getSessionAttentionSnapshot();
     res.json({
       sessions: snapshot,
@@ -337,7 +321,6 @@ export const registerNotificationRoutes = (app, dependencies) => {
   });
 
   app.get('/api/sessions/:id/attention', async (req, res) => {
-    await ensureSessionWatcher();
     const sessionId = req.params.id;
     const state = getSessionAttentionState(sessionId);
 

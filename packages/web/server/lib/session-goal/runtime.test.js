@@ -1,25 +1,26 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { configureOmpRuntimeHost } from '../agents/omp-host-access.js';
 import { createSessionGoalRuntime } from './runtime.js';
 
 /**
  * The goal record — status, turns, token accounting — lives in
- * OpenChamber's own session metadata store, because OpenCode 2.x accepts
- * session metadata only when a session is created. `readSessionMetadata` and
- * `persistSessionGoal` are the seams.
+ * OpenChamber's own session metadata store (the runtime reads it through the
+ * injected `readSessionMetadata`/`persistSessionGoal` seams).
  *
- * What is pinned here is the wiring: the runtime stays inert and costs nothing
- * when no store is given, it reads the goal from the store rather than from the
- * OpenCode record, and a goal that starts or resumes arms the loop through
- * `notifyGoalChanged` instead of through an OpenCode `session.updated` event
- * (which no longer carries our metadata).
+ * What is pinned here is the wiring and the loop's reads of the OMP runtime:
+ * the runtime stays inert and costs nothing when no store is given, it reads
+ * the goal from the store rather than from the session record, and a goal that
+ * starts or resumes arms the loop through `notifyGoalChanged` rather than
+ * through a `session.updated` event (which no longer carries our metadata).
  *
- * The previous suite drove the whole audit loop against a fake v1 OpenCode; it
- * is gone rather than rewritten because every route and shape it asserted on
- * belongs to v1. Subagents come from `GET /api/session?parentID=` now.
+ * The history the loop reads is the canonical `{ info, parts }` page the OMP
+ * host serves, oldest first. OMP lists no subagent sessions, so the parent's
+ * idle really is the end of the turn.
  */
 
 const SESSION_ID = 'ses_parent';
+const SESSION_RECORD = { id: SESSION_ID, sessionPath: '/sessions/parent.jsonl', cwd: '/repo', title: 'Parent' };
 const runtimes = [];
 
 const activeGoal = (extra = {}) => ({
@@ -33,14 +34,11 @@ const activeGoal = (extra = {}) => ({
 });
 
 const makeRuntime = (overrides = {}) => {
-  const buildOpenCodeUrl = vi.fn((fetchPath) => `http://opencode.test${fetchPath}`);
   const getSmallModelService = vi.fn(async () => {
     throw new Error('the small model must not be consulted in this test');
   });
   const emitGoalNotification = vi.fn();
   const runtime = createSessionGoalRuntime({
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders: () => ({}),
     getSmallModelService,
     emitGoalNotification,
     isEnabled: () => true,
@@ -52,7 +50,7 @@ const makeRuntime = (overrides = {}) => {
     ...overrides,
   });
   runtimes.push(runtime);
-  return { runtime, buildOpenCodeUrl, getSmallModelService, emitGoalNotification };
+  return { runtime, getSmallModelService, emitGoalNotification };
 };
 
 const wired = (metadata = {}) => ({
@@ -67,53 +65,59 @@ const idle = (sessionID = SESSION_ID) => ({
 
 afterEach(() => {
   while (runtimes.length > 0) runtimes.pop().stop?.();
+  configureOmpRuntimeHost(null);
   vi.restoreAllMocks();
 });
 
 /**
- * A fake v2 OpenCode over the global fetch: flat message records (`type`,
- * `content[]`, `model`, `finish`, `tokens`), `{ location, data }` envelopes,
- * `/api/session/active` for busy state, and the three continuation calls.
+ * A fake OMP runtime: one session record, a busy flag per session, and the
+ * canonical `{ info, parts }` history the host serves for every session.
  */
-const v2OpenCode = ({ messages, active = {}, childPages = [[]], childrenStatus = 200 }) => {
-  const calls = [];
-  const json = (data, status = 200) => new Response(JSON.stringify({ location: { directory: '/repo' }, data }), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
-  const fetchMock = vi.fn(async (input, init = {}) => {
-    const url = new URL(String(input));
-    calls.push({ path: url.pathname, query: Object.fromEntries(url.searchParams), method: init.method ?? 'GET', body: init.body ? JSON.parse(init.body) : null });
-    // Real shape: `{ data }` without a `location`, unlike directory-scoped routes.
-    if (url.pathname === '/api/session/active') return Response.json({ data: active });
-    if (url.pathname === '/api/session') {
-      // Children of the parent, cursor paged: the first page is selected by
-      // `parentID`, later ones by the cursor alone.
-      const index = url.searchParams.has('cursor') ? Number(url.searchParams.get('cursor').replace('page-', '')) : 0;
-      if (index === 0 && url.searchParams.get('parentID') !== SESSION_ID) return json({ data: [], cursor: {} });
-      const data = childPages[index] ?? [];
-      const next = index + 1 < childPages.length ? { next: `page-${index + 1}` } : {};
-      return json({ data, cursor: next }, childrenStatus);
-    }
-    if (url.pathname.endsWith('/message')) return json({ data: [...messages].reverse(), cursor: null });
-    if (url.pathname === `/api/session/${SESSION_ID}`) return json({ id: SESSION_ID, location: { directory: '/repo' } });
-    return json({});
-  });
-  vi.stubGlobal('fetch', fetchMock);
-  return { calls };
+const stubOmp = ({ sessions = [SESSION_RECORD], items = [], busy = {} } = {}) => {
+  const host = {
+    listSessions: vi.fn(async () => sessions),
+    getSessionStatus: vi.fn(async (id) => ({ busy: busy[id] === true })),
+    getMessages: vi.fn(async () => ({ items, cursor: {} })),
+    prompt: vi.fn(async () => true),
+  };
+  configureOmpRuntimeHost(() => host);
+  return host;
 };
 
-const assistantRecord = (overrides = {}) => ({
-  id: 'msg_a1',
-  sessionID: SESSION_ID,
-  type: 'assistant',
-  agent: 'build',
-  model: { providerID: 'anthropic', id: 'claude-sonnet-5' },
-  content: [{ type: 'text', text: 'Done with step one.' }],
-  finish: 'stop',
-  tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 20, write: 0 } },
-  time: { created: 10, completed: 20 },
-  ...overrides,
+/** Canonical `{ info, parts }` records, oldest first. */
+const canonicalUser = (id, text, created = 1) => ({
+  info: { id, sessionID: SESSION_ID, role: 'user', time: { created } },
+  parts: text ? [{ type: 'text', text }] : [],
+});
+
+const canonicalAssistant = ({ text = 'Done with step one.', parts, ...info } = {}) => ({
+  info: {
+    id: 'msg_a1',
+    sessionID: SESSION_ID,
+    role: 'assistant',
+    agent: 'build',
+    providerID: 'anthropic',
+    modelID: 'claude-sonnet-5',
+    time: { created: 10, completed: 20 },
+    finish: 'stop',
+    tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 20, write: 0 } },
+    ...info,
+  },
+  parts: parts ?? (text ? [{ type: 'text', text }] : []),
+});
+
+/** A finished compaction: the summary turn that closes a token segment. */
+const canonicalCompaction = (created = 30) => ({
+  info: {
+    id: 'msg_c1',
+    sessionID: SESSION_ID,
+    role: 'compaction',
+    status: 'completed',
+    reason: 'auto',
+    summary: 'Summary so far',
+    time: { created },
+  },
+  parts: [{ type: 'text', text: 'Summary so far' }],
 });
 
 const smallModelSays = (answers) => JSON.stringify({ all_done: false, remaining: false, needs_user: false, ...answers });
@@ -134,15 +138,10 @@ const runTick = async (runtime) => {
   for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
 };
 
-describe('session goal tick on v2 messages', () => {
-  it('reads the flat v2 assistant record, audits it, and continues on the same model and agent', async () => {
+describe('session goal tick on OMP messages', () => {
+  it('reads the canonical assistant record, audits it, and continues on the same model and agent', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { calls } = v2OpenCode({
-      messages: [
-        { id: 'msg_u1', sessionID: SESSION_ID, type: 'user', text: 'Finish the task', time: { created: 1 } },
-        assistantRecord(),
-      ],
-    });
+    const host = stubOmp({ items: [canonicalUser('msg_u1', 'Finish the task', 1), canonicalAssistant()] });
     const seam = wired({ openchamber: { goal: activeGoal() } });
     const generate = vi.fn(async () => ({ text: smallModelSays({ remaining: true }), providerID: 'anthropic', modelID: 'claude-haiku-5' }));
     const { runtime } = makeRuntime({
@@ -156,21 +155,20 @@ describe('session goal tick on v2 messages', () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(generate.mock.calls[0][0]).toMatchObject({ preferredProviderID: 'anthropic', preferredModelID: 'claude-sonnet-5', restrictToPreferredProvider: true });
     expect(generate.mock.calls[0][0].prompt).toContain('Done with step one.');
-    // Tokens were accounted from the v2 record: input + cache.read + output.
+    // Tokens were accounted from the canonical record: input + cache.read + output.
     const written = seam.persistSessionGoal.mock.calls.at(-1)[2];
     expect(written).toMatchObject({ turnsUsed: 1, tokensUsed: 170, evaluationProviderID: 'anthropic', evaluationModelID: 'claude-haiku-5' });
     // The continuation is one plain prompt: the session keeps its own model
     // and agent, nothing is re-selected.
-    const continuation = calls.filter((call) => call.method === 'POST').map((call) => [call.path, call.body]);
-    expect(continuation).toEqual([
-      [`/api/session/${SESSION_ID}/prompt`, { text: expect.stringContaining('Finish the task') }],
-    ]);
+    expect(host.prompt).toHaveBeenCalledTimes(1);
+    expect(host.prompt.mock.calls[0][0]).toBe(SESSION_ID);
+    expect(host.prompt.mock.calls[0][1]).toContain('Finish the task');
     runtime.stop();
   });
 
   it('settles the goal as complete when the report says all is done, without a continuation', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { calls } = v2OpenCode({ messages: [assistantRecord()] });
+    const host = stubOmp({ items: [canonicalAssistant()] });
     const seam = wired({ openchamber: { goal: activeGoal() } });
     const { runtime, emitGoalNotification } = makeRuntime({
       ...seam,
@@ -182,19 +180,14 @@ describe('session goal tick on v2 messages', () => {
     await runTick(runtime);
 
     expect(seam.persistSessionGoal.mock.calls.at(-1)[2]).toMatchObject({ status: 'complete' });
-    expect(calls.some((call) => call.method === 'POST')).toBe(false);
+    expect(host.prompt).not.toHaveBeenCalled();
     expect(emitGoalNotification).toHaveBeenCalledTimes(1);
     runtime.stop();
   });
 
   it('treats a finished compaction as a summary turn: no audit, continuation sent', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { calls } = v2OpenCode({
-      messages: [
-        assistantRecord(),
-        { id: 'msg_c1', sessionID: SESSION_ID, type: 'compaction', status: 'completed', summary: 'Summary so far', time: { created: 30 } },
-      ],
-    });
+    const host = stubOmp({ items: [canonicalAssistant(), canonicalCompaction()] });
     const seam = wired({ openchamber: { goal: activeGoal() } });
     const generate = vi.fn();
     const { runtime } = makeRuntime({ ...seam, getSmallModelService: async () => ({ generateSmallModelText: generate }) });
@@ -202,18 +195,18 @@ describe('session goal tick on v2 messages', () => {
     await runTick(runtime);
 
     expect(generate).not.toHaveBeenCalled();
-    expect(calls.some((call) => call.path.endsWith('/prompt') && call.method === 'POST')).toBe(true);
+    expect(host.prompt).toHaveBeenCalledTimes(1);
     runtime.stop();
   });
 
   it('a compaction closes the token segment, so the goal keeps counting what came before it', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    v2OpenCode({
-      messages: [
-        assistantRecord(),
-        { id: 'msg_c1', sessionID: SESSION_ID, type: 'compaction', status: 'completed', summary: 'Summary so far', time: { created: 30 } },
-        assistantRecord({ id: 'msg_d1', tokens: { input: 30, output: 20, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 40, completed: 50 } }),
+    stubOmp({
+      items: [
+        canonicalAssistant(),
+        canonicalCompaction(),
+        canonicalAssistant({ id: 'msg_d1', tokens: { input: 30, output: 20, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 40, completed: 50 } }),
       ],
     });
     const seam = wired({ openchamber: { goal: activeGoal() } });
@@ -229,73 +222,58 @@ describe('session goal tick on v2 messages', () => {
   it('waits when the session is still running or the user just sent a message', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const generate = vi.fn();
-    const busy = v2OpenCode({ messages: [assistantRecord()], active: { [SESSION_ID]: { status: 'running' } } });
+    const busy = stubOmp({ items: [canonicalAssistant()], busy: { [SESSION_ID]: true } });
     const seam = wired({ openchamber: { goal: activeGoal() } });
     const { runtime } = makeRuntime({ ...seam, getSmallModelService: async () => ({ generateSmallModelText: generate }) });
     await runTick(runtime);
-    expect(busy.calls.some((call) => call.method === 'POST')).toBe(false);
+    expect(busy.prompt).not.toHaveBeenCalled();
     runtime.stop();
 
-    const trailing = v2OpenCode({
-      messages: [assistantRecord(), { id: 'msg_u2', sessionID: SESSION_ID, type: 'user', text: 'wait', time: { created: 50 } }],
-    });
+    const trailing = stubOmp({ items: [canonicalAssistant(), canonicalUser('msg_u2', 'wait', 50)] });
     const { runtime: second } = makeRuntime({ ...wired({ openchamber: { goal: activeGoal() } }), getSmallModelService: async () => ({ generateSmallModelText: generate }) });
     await runTick(second);
-    expect(trailing.calls.some((call) => call.method === 'POST')).toBe(false);
+    expect(trailing.prompt).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
     second.stop();
   });
 });
 
-describe('session goal tick and subagents', () => {
-  const child = (id) => ({ id, parentID: SESSION_ID, time: { updated: 1 } });
-
-  it('waits while a subagent listed on a later page is still working', async () => {
+describe('session goal tick and subagent sessions', () => {
+  it('audits without waiting: the OMP runtime lists no subagent sessions', async () => {
     quiet();
-    const generate = vi.fn();
-    const server = v2OpenCode({
-      messages: [assistantRecord()],
-      active: { ses_child_2: { status: 'running' } },
-      childPages: [[child('ses_child_1')], [child('ses_child_2')]],
-    });
-    const { runtime } = makeRuntime({ ...wired({ openchamber: { goal: activeGoal() } }), getSmallModelService: async () => ({ generateSmallModelText: generate }) });
-    await runTick(runtime);
-    const listCalls = server.calls.filter((call) => call.path === '/api/session');
-    expect(listCalls.map((call) => call.query.parentID ?? call.query.cursor)).toEqual([SESSION_ID, 'page-1']);
-    expect(server.calls.some((call) => call.method === 'POST')).toBe(false);
-    expect(generate).not.toHaveBeenCalled();
-  });
-
-  it('audits once every subagent is idle', async () => {
-    quiet();
-    const server = v2OpenCode({
-      messages: [assistantRecord()],
-      childPages: [[child('ses_child_1')]],
-    });
+    const host = stubOmp({ items: [canonicalAssistant()] });
     const seam = wired({ openchamber: { goal: activeGoal() } });
     const { runtime } = makeRuntime({
       ...seam,
       getSmallModelService: async () => ({
-        describeSmallModel: async () => ({ inputCharBudget: 20_000 }),
         generateSmallModelText: async () => ({ text: smallModelSays({ all_done: true }) }),
       }),
     });
+
     await runTick(runtime);
-    expect(server.calls.some((call) => call.path === '/api/session' && call.query.parentID === SESSION_ID)).toBe(true);
+
+    expect(host.listSessions).toHaveBeenCalled();
+    expect(host.getMessages).toHaveBeenCalled();
     expect(seam.persistSessionGoal).toHaveBeenCalled();
   });
 
-  it('does not treat an unreadable children list as "no subagents"', async () => {
+  it('does not treat an unreadable session list as "no subagents"', async () => {
     quiet();
-    const generate = vi.fn();
-    const server = v2OpenCode({ messages: [assistantRecord()], childrenStatus: 500 });
+    const host = {
+      listSessions: vi.fn(async () => { throw new Error('session store unavailable'); }),
+      getSessionStatus: vi.fn(async () => ({ busy: false })),
+      getMessages: vi.fn(async () => ({ items: [canonicalAssistant()], cursor: {} })),
+      prompt: vi.fn(async () => true),
+    };
+    configureOmpRuntimeHost(() => host);
     const seam = wired({ openchamber: { goal: activeGoal() } });
-    const { runtime } = makeRuntime({ ...seam, getSmallModelService: async () => ({ generateSmallModelText: generate }) });
+    const { runtime } = makeRuntime(seam);
+
     await runTick(runtime);
-    expect(server.calls.some((call) => call.path === '/api/session')).toBe(true);
-    expect(server.calls.some((call) => call.path.endsWith('/message'))).toBe(false);
-    expect(server.calls.some((call) => call.method === 'POST')).toBe(false);
-    expect(generate).not.toHaveBeenCalled();
+
+    expect(host.listSessions).toHaveBeenCalled();
+    expect(host.getMessages).not.toHaveBeenCalled();
+    expect(host.prompt).not.toHaveBeenCalled();
     expect(seam.persistSessionGoal).not.toHaveBeenCalled();
   });
 });
@@ -303,7 +281,7 @@ describe('session goal tick and subagents', () => {
 describe('session goal progress check', () => {
   it('asks Jev when it is the checker and a provider answers, and settles on its word', async () => {
     quiet();
-    const { calls } = v2OpenCode({ messages: [assistantRecord()] });
+    const host = stubOmp({ items: [canonicalAssistant()] });
     const seam = wired({ openchamber: { goal: activeGoal({ evaluationProviderID: 'anthropic', evaluationModelID: 'claude-haiku-5' }) } });
     const jev = { ask: vi.fn(async () => jevSays({ all_done: 0.9 })) };
     const { runtime, getSmallModelService } = makeRuntime({ ...seam, jev, classifierEndpoint: async () => JEV_ENDPOINT });
@@ -317,12 +295,12 @@ describe('session goal progress check', () => {
     expect(getSmallModelService).not.toHaveBeenCalled();
     // Jev has no provider: a leftover small-model provider must not be paired with Jev's model.
     expect(seam.persistSessionGoal.mock.calls.at(-1)[2]).toMatchObject({ status: 'complete', evaluationProviderID: '', evaluationModelID: 'jev-1.13-free' });
-    expect(calls.some((call) => call.method === 'POST')).toBe(false);
+    expect(host.prompt).not.toHaveBeenCalled();
   });
 
   it('keeps going while the report names work the agent still has to do', async () => {
     quiet();
-    const { calls } = v2OpenCode({ messages: [assistantRecord()] });
+    const host = stubOmp({ items: [canonicalAssistant()] });
     const seam = wired({ openchamber: { goal: activeGoal() } });
     const jev = { ask: vi.fn(async () => jevSays({ all_done: 0.9, remaining: 0.8 })) };
     const { runtime } = makeRuntime({ ...seam, jev, classifierEndpoint: async () => JEV_ENDPOINT });
@@ -330,12 +308,12 @@ describe('session goal progress check', () => {
     await runTick(runtime);
 
     expect(seam.persistSessionGoal.mock.calls.at(-1)[2]).toMatchObject({ status: 'active', turnsUsed: 1 });
-    expect(calls.some((call) => call.path.endsWith('/prompt') && call.method === 'POST')).toBe(true);
+    expect(host.prompt).toHaveBeenCalledTimes(1);
   });
 
   it('settles as blocked on the first turn that waits for the user, without a continuation', async () => {
     quiet();
-    const { calls } = v2OpenCode({ messages: [assistantRecord()] });
+    const host = stubOmp({ items: [canonicalAssistant()] });
     const seam = wired({ openchamber: { goal: activeGoal() } });
     const jev = { ask: vi.fn(async () => jevSays({ all_done: 0.9, needs_user: 0.9 })) };
     const { runtime, emitGoalNotification } = makeRuntime({ ...seam, jev, classifierEndpoint: async () => JEV_ENDPOINT });
@@ -343,13 +321,13 @@ describe('session goal progress check', () => {
     await runTick(runtime);
 
     expect(seam.persistSessionGoal.mock.calls.at(-1)[2]).toMatchObject({ status: 'blocked', statusReason: 'waiting for user input' });
-    expect(calls.some((call) => call.method === 'POST')).toBe(false);
+    expect(host.prompt).not.toHaveBeenCalled();
     expect(emitGoalNotification).toHaveBeenCalledTimes(1);
   });
 
   it('checks with the small model when Jev fails this time', async () => {
     quiet();
-    v2OpenCode({ messages: [assistantRecord()] });
+    stubOmp({ items: [canonicalAssistant()] });
     const seam = wired({ openchamber: { goal: activeGoal() } });
     const jev = { ask: vi.fn(async () => { throw new Error('Jev responded 503'); }) };
     const generate = vi.fn(async () => ({ text: smallModelSays({ all_done: true }), providerID: 'anthropic', modelID: 'claude-haiku-5' }));
@@ -369,7 +347,7 @@ describe('session goal progress check', () => {
 
   it('never asks Jev when the user picked the small model', async () => {
     quiet();
-    v2OpenCode({ messages: [assistantRecord()] });
+    stubOmp({ items: [canonicalAssistant()] });
     const seam = wired({ openchamber: { goal: activeGoal() } });
     const jev = { ask: vi.fn() };
     const generate = vi.fn(async () => ({ text: smallModelSays({ remaining: true }), providerID: 'anthropic', modelID: 'claude-haiku-5' }));
@@ -389,7 +367,7 @@ describe('session goal progress check', () => {
 
   it('counts a small-model reply that is not the asked-for JSON as no check', async () => {
     quiet();
-    const { calls } = v2OpenCode({ messages: [assistantRecord()] });
+    const host = stubOmp({ items: [canonicalAssistant()] });
     const seam = wired({ openchamber: { goal: activeGoal() } });
     const generate = vi.fn(async () => ({ text: '{"verdict":"complete"}' }));
     const { runtime } = makeRuntime({ ...seam, getSmallModelService: async () => ({ generateSmallModelText: generate }) });
@@ -398,60 +376,56 @@ describe('session goal progress check', () => {
 
     // One unchecked continuation is tolerated; the goal is not settled on a guess.
     expect(seam.persistSessionGoal.mock.calls.at(-1)[2]).toMatchObject({ status: 'active', auditFailStreak: 1 });
-    expect(calls.some((call) => call.path.endsWith('/prompt') && call.method === 'POST')).toBe(true);
+    expect(host.prompt).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('session goal runtime', () => {
-  it('arms the loop when a goal starts, without waiting for an OpenCode event', async () => {
+  it('arms the loop when a goal starts, without reading the runtime for it', async () => {
+    const host = stubOmp();
     const seam = wired();
-    const { runtime, buildOpenCodeUrl } = makeRuntime(seam);
+    const { runtime } = makeRuntime(seam);
 
     await runtime.notifyGoalChanged('ses_1', '/repo', { openchamber: { goal: activeGoal() } });
     // The kickoff timer is armed; the directory came with the notification, so
     // nothing had to be looked up.
-    expect(buildOpenCodeUrl).not.toHaveBeenCalled();
+    expect(host.listSessions).not.toHaveBeenCalled();
     runtime.stop();
   });
 
   it('looks the directory up when a UI patch does not name one', async () => {
+    const host = stubOmp({ sessions: [{ id: 'ses_1', sessionPath: '/sessions/1.jsonl', cwd: '/resolved', title: '' }] });
     const seam = wired();
-    const fetchMock = vi.fn(async () => new Response(
-      JSON.stringify({ location: { directory: '/resolved' } }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    ));
-    vi.stubGlobal('fetch', fetchMock);
     const { runtime } = makeRuntime(seam);
 
     await runtime.notifyGoalChanged('ses_1', '', { openchamber: { goal: activeGoal() } });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/session/ses_1');
+    expect(host.listSessions).toHaveBeenCalledTimes(1);
     runtime.stop();
   });
 
   it('does not arm for a goal that is not active or already under way', async () => {
+    const host = stubOmp();
     const seam = wired();
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
     const { runtime } = makeRuntime(seam);
 
     await runtime.notifyGoalChanged('ses_1', '', { openchamber: { goal: activeGoal({ status: 'paused' }) } });
     await runtime.notifyGoalChanged('ses_1', '', { openchamber: { goal: activeGoal({ turnsUsed: 3 }) } });
     await runtime.notifyGoalChanged('ses_1', '', {});
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(host.listSessions).not.toHaveBeenCalled();
     runtime.stop();
   });
 
   it('does no work and reaches no service while no goal store is injected', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { runtime, buildOpenCodeUrl, getSmallModelService, emitGoalNotification } = makeRuntime();
+    const host = stubOmp();
+    const { runtime, getSmallModelService, emitGoalNotification } = makeRuntime();
 
     runtime.processPayload(idle());
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(buildOpenCodeUrl).not.toHaveBeenCalled();
+    expect(host.listSessions).not.toHaveBeenCalled();
     expect(getSmallModelService).not.toHaveBeenCalled();
     expect(emitGoalNotification).not.toHaveBeenCalled();
   });
@@ -478,12 +452,11 @@ describe('session goal runtime', () => {
     expect(log).not.toHaveBeenCalled();
   });
 
-  it('reads a user abort off the aborted idle event v2 produces', () => {
+  it('reads a user abort off the aborted idle event', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
+    stubOmp();
     const { runtime } = makeRuntime(wired());
 
-    // The old signal was an assistant message carrying MessageAbortedError;
-    // accepting the new one must not throw or be mistaken for a normal idle.
     expect(() => runtime.processPayload({
       type: 'session.idle',
       properties: { sessionID: SESSION_ID, aborted: true, reason: 'user' },

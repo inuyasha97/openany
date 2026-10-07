@@ -5,7 +5,7 @@
  * This bypasses mobile Safari's audio context restrictions.
  */
 
-import { readAuthFile } from '../opencode/auth.js';
+import { readAuthFile } from '../openchamber/credentials.js';
 import { loadOpenAI } from './openai-sdk.js';
 import { normalizeCustomOpenAIBaseURL } from './base-url.js';
 

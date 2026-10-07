@@ -1,4 +1,4 @@
-import { readAuthFile } from '../../opencode/auth.js';
+import { readAuthFile } from '../../openchamber/credentials.js';
 import { buildResult, toUsageWindow } from '../utils/index.js';
 
 export const providerId = 'xai';
@@ -104,9 +104,9 @@ const refreshXaiOauth = async (entry) => {
         expires
       };
 
-      // The refreshed token is kept in memory for this process only: OpenCode
-      // 2.x owns `auth.json` (it imports it once and never reads it again), so
-      // writing it back would drift from the credential OpenCode actually uses.
+      // The refreshed token is kept in memory for this process only: OMP owns
+      // the credential store (`<agent dir>/agent.db`), so writing the rotated
+      // access token back would drift from the credential OMP actually uses.
       return refreshed;
     })().finally(() => {
       refreshPromise = null;

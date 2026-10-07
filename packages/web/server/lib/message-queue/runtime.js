@@ -7,14 +7,21 @@
 //
 // Event-driven like session-goal: the shared upstream hub delivers
 // `session.status`, and an idle transition arms a short per-session timer. The
-// tick re-verifies idleness against OpenCode (status map + message tail) before
-// it sends, because a queued prompt sent into a running turn would be steered
-// into it instead of starting the next one.
+// tick re-verifies idleness against the OMP runtime (busy flag + message tail)
+// before it sends, because a queued prompt sent into a running turn would be
+// steered into it instead of starting the next one.
 
 import fs from 'fs';
 import path from 'path';
-import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
-import { createSessionActivityProbe } from '../opencode/session-activity.js';
+import {
+  getOmpRuntimeHost,
+  promptSession,
+  readSessionMessages,
+  readSessionStatus,
+  setSessionModel,
+} from '../agents/omp-host-access.js';
+import { createSessionActivityProbe } from '../openchamber/session-activity.js';
+import { unsupportedOnOmp } from '../openchamber/omp-unsupported.js';
 
 const QUEUE_FILE_NAME = 'message-queue.json';
 const QUEUE_FILE_VERSION = 1;
@@ -38,8 +45,6 @@ const RETRY_MAX_DELAY_MS = 60_000;
 // UI; it expires unless the UI keeps re-asserting it.
 const HOLD_DEFAULT_TTL_MS = 5 * 60 * 1000;
 const HOLD_MAX_TTL_MS = 10 * 60 * 1000;
-const FETCH_TIMEOUT_MS = 15_000;
-const MESSAGE_TAIL_LIMIT = 2;
 
 const ATTACHMENT_SOURCES = new Set(['local', 'server', 'vscode']);
 // Context captured with a queued message (see QueuedContextPart in the UI
@@ -222,8 +227,6 @@ const extractDeletedSessionId = (payload) => {
 
 export function createMessageQueueRuntime({
   globalEventHub,
-  buildOpenCodeUrl,
-  getOpenCodeAuthHeaders,
   sessionKnowledgeRuntime = null,
   broadcastGlobalUiEvent,
   onPromptSent,
@@ -231,7 +234,6 @@ export function createMessageQueueRuntime({
   // before the send; absent means the queue never sees the sentinel.
   resolveAutoSelection = null,
   dataDir,
-  fetchImpl = fetch,
   now = Date.now,
   dispatchQuietMs = DISPATCH_QUIET_MS,
   abortHoldMs = ABORT_HOLD_MS,
@@ -380,32 +382,16 @@ export function createMessageQueueRuntime({
     queues.set(sessionId, { directory, items });
   };
 
-  // --- OpenCode access -----------------------------------------------------
-
-  const openCodeFetch = async (fetchPath, { directory, method = 'GET', body, query } = {}) => {
-    const base = buildOpenCodeUrl(fetchPath, '');
-    const params = new URLSearchParams(query || {});
-    if (directory) params.set('directory', directory);
-    const search = params.toString();
-    const headers = { Accept: 'application/json', ...getOpenCodeAuthHeaders() };
-    const init = { method, headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) };
-    if (body) {
-      headers['Content-Type'] = 'application/json';
-      init.body = JSON.stringify(body);
-    }
-    const response = await fetchImpl(search ? `${base}?${search}` : base, init);
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw httpError(`OpenCode ${method} ${fetchPath} failed with ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`, response.status);
-    }
-    return unwrapOpenCodeResponse(await response.json().catch(() => null));
-  };
+  // --- OMP access ----------------------------------------------------------
 
   /**
    * Live idleness, or null when it could not be established. Unknown is never
-   * idle: a fetch failure re-arms instead of sending into a running turn.
+   * idle: a failed read re-arms instead of sending into a running turn.
+   * `fetchActiveSessionStatuses` and `hasWorkingChildren` live in the shared
+   * probe; OMP lists no subagent sessions, so a parent's idle really is the
+   * end of its turn.
    */
-  const activityProbe = createSessionActivityProbe({ buildOpenCodeUrl, getOpenCodeAuthHeaders, timeoutMs: FETCH_TIMEOUT_MS, fetchImpl });
+  const activityProbe = createSessionActivityProbe();
 
   /** True while a subagent of the session runs; null when it could not be checked. */
   const hasWorkingSubagents = async (sessionId) => {
@@ -414,28 +400,21 @@ export function createMessageQueueRuntime({
     return activityProbe.hasWorkingChildren(sessionId, statuses);
   };
 
-  const isSessionIdle = async (sessionId, directory) => {
-    // `/api/session/active` is global and lists only the sessions that are
-    // running right now, so an absent entry means idle.
-    // The route answers `{ data: { [id]: { type: 'running' } } }`; the shared
-    // unwrap hands over the map, and an envelope is still accepted.
-    const body = asRecord(await openCodeFetch('/api/session/active').catch(() => null));
-    const statuses = asRecord(body && 'data' in body ? body.data : body);
-    if (!statuses) return null;
-    if (asRecord(statuses[sessionId])) return false;
-    // A missed event leaves no entry while a turn still streams. The trailing
-    // unfinished assistant message is the live evidence of that turn (mirrors
-    // the UI gate). v2 lists messages newest first.
-    const page = await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/message`, {
-      directory,
-      query: { limit: String(MESSAGE_TAIL_LIMIT) },
-    }).catch(() => null);
-    const messages = asList(asRecord(page)?.data);
-    if (!messages) return null;
-    const last = asRecord(messages[0]);
-    const lastTime = asRecord(last?.time);
-    if (last?.type === 'assistant' && asCount(lastTime?.completed) === null) {
-      const created = asCount(lastTime?.created);
+  const isSessionIdle = async (sessionId) => {
+    // The runtime answers one session's busy flag; an unavailable runtime is
+    // unknown, never idle.
+    const status = await readSessionStatus(sessionId).catch(() => null);
+    if (!status) return null;
+    if (status.busy === true) return false;
+    // A missed event leaves the flag false while a turn still streams. The
+    // trailing unfinished assistant message is the live evidence of that turn
+    // (mirrors the UI gate). The page is oldest first, so the tail is last.
+    const page = await readSessionMessages(sessionId).catch(() => null);
+    const items = Array.isArray(page?.items) ? page.items : null;
+    if (!items) return null;
+    const last = items.at(-1)?.info;
+    if (last?.role === 'assistant' && asCount(last.time?.completed) === null) {
+      const created = asCount(last.time?.created);
       if (created === null || created >= runtimeStartedAt) return false;
       // Unfinished tail from before this runtime started: its run died with
       // the previous server, so it must not block delivery. (A missing
@@ -445,12 +424,21 @@ export function createMessageQueueRuntime({
     return true;
   };
 
-  const resolveSlashCommand = async (text, directory) => {
+  /**
+   * The slash command a queued text names, or null when it names none. OMP
+   * publishes each command's name, so a text that matches one is identified
+   * here; the dispatch itself fails loudly, because OMP has no command route.
+   */
+  const resolveSlashCommand = async (text) => {
     if (!text.startsWith('/')) return null;
     const [head, ...tail] = text.split(' ');
     const name = head.slice(1);
     if (!name) return null;
-    const commands = asList(await openCodeFetch('/api/command', { directory })) ?? [];
+    // A failed lookup fails the whole send, so a retry does not admit anything
+    // twice.
+    const host = await getOmpRuntimeHost();
+    if (!host) throw Object.assign(new Error('the OMP runtime is not available'), { status: 503 });
+    const commands = asList(await host.listCommands()) ?? [];
     const match = commands.map(asRecord).find((command) => command?.name === name);
     if (!match) return null;
     return {
@@ -459,33 +447,20 @@ export function createMessageQueueRuntime({
     };
   };
 
-  // v2 takes prompt attachments as URIs; a data URL is one.
-  const toPromptFile = (attachment) => ({
-    uri: attachment.dataUrl,
-    ...(attachment.filename ? { name: attachment.filename } : {}),
-  });
-
   /**
-   * Captured context travels as synthetic messages in v2 — the composer's
-   * inline `synthetic: true` text parts are gone. One message per entry, an
-   * attached item's metadata riding along, and its reading instructions (a
-   * linked PR) going first.
+   * Captured context entries in the order the model should read them: an
+   * attached item's reading instructions (a linked PR) go first.
    */
-  const toContextMessages = (part) => {
-    const body = { text: part.text, resume: false };
-    if (part.kind !== 'context') return [body];
-    const withMetadata = part.metadata ? { ...body, metadata: part.metadata } : body;
-    return part.instructions
-      ? [{ text: part.instructions, resume: false }, withMetadata]
-      : [withMetadata];
+  const toContextTexts = (part) => {
+    if (part.kind !== 'context') return [part.text];
+    return part.instructions ? [part.instructions, part.text] : [part.text];
   };
 
   const sendItem = async (sessionId, directory, item) => {
     const { providerID, modelID, variant } = item.sendConfig;
+    const attachments = item.attachments ?? [];
     let agent = item.sendConfig.agent;
     let model = { id: modelID, providerID, ...(variant ? { variant } : {}) };
-    const promptFiles = item.attachments.map(toPromptFile);
-    const contextMessages = item.context.flatMap(toContextMessages);
 
     // Jev routing, when the queued send named the Auto sentinel. A failure
     // inside resolves to the fallback model; only a missing fallback throws.
@@ -501,24 +476,28 @@ export function createMessageQueueRuntime({
       agent = routed.agent ?? agent;
     }
 
-    // v2 selects model and agent on the session, not per prompt: the choice is
-    // switched once and then persists.
-    await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/model`, {
-      directory,
-      method: 'POST',
-      body: { model },
-    });
-    if (agent) {
-      await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/agent`, {
-        directory,
-        method: 'POST',
-        body: { agent },
-      });
+    // OMP prompts carry one authored text, the session owns its agent, and a
+    // model switch takes a provider and an id. A selection OpenCode applied per
+    // send has no destination here: fail the send rather than silently drop the
+    // user's choice.
+    if (attachments.length > 0) throw unsupportedOnOmp('message attachments');
+    if (agent) throw unsupportedOnOmp(`the "${agent}" agent`);
+    if (variant) throw unsupportedOnOmp(`the "${variant}" model variant`);
+    if (item.agentMention) throw unsupportedOnOmp(`the "${item.agentMention}" agent mention`);
+
+    // The choice is switched once on the session and then persists.
+    const switched = await setSessionModel(sessionId, model.providerID, model.id);
+    if (switched !== true) {
+      throw new Error(switched === null
+        ? 'the OMP runtime is not available, so the queued message was not set up'
+        : 'the OMP runtime did not take the queued message model');
     }
 
-    // Resolved before anything is admitted: a failed command lookup fails the
-    // whole send, so a retry does not admit the context twice.
-    const command = await resolveSlashCommand(item.text, directory);
+    // Resolved before anything is sent: a failed command lookup fails the whole
+    // send, and the command itself cannot be dispatched (OMP has no command
+    // route), so it fails loudly instead of going out as raw slash text.
+    const command = await resolveSlashCommand(item.text);
+    if (command) throw unsupportedOnOmp(`the "/${command.name}" command`);
 
     // Standing project context rides the send exactly as a UI send would
     // attach it; a failed lookup sends without it rather than not at all.
@@ -527,42 +506,21 @@ export function createMessageQueueRuntime({
         .catch(() => ({ text: '', signature: '' }))
       : { text: '', signature: '' };
 
-    // Same order as a UI send: everything attached to the message is admitted
-    // before the message itself, so the model reads it as background. This
-    // holds for a command too: its route takes file attachments only, and
-    // sending "/name args" as a prompt instead would skip the template
-    // OpenCode 2.x expands only on the command route.
-    const preamble = [...contextMessages];
-    if (knowledge.text) preamble.push({ text: knowledge.text, resume: false });
-    for (const synthetic of preamble) {
-      await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/synthetic`, {
-        directory,
-        method: 'POST',
-        body: synthetic,
-      });
-    }
+    // OMP has no synthetic message, so the captured context and the standing
+    // project context ride in front of the message text as one authored prompt
+    // (instructions first, then the quoted content, then project knowledge):
+    // the model still reads the message against them, and no extra turn starts.
+    const blocks = [
+      ...item.context.flatMap(toContextTexts),
+      knowledge.text,
+      item.text,
+    ].filter((text) => typeof text === 'string' && text.trim().length > 0);
 
-    if (command) {
-      await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/command`, {
-        directory,
-        method: 'POST',
-        body: {
-          // OpenCode 2.0.8 renamed the command body field `command` to `name`.
-          name: command.name,
-          text: command.arguments,
-          ...(promptFiles.length > 0 ? { files: promptFiles } : {}),
-        },
-      });
-    } else {
-      await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/prompt`, {
-        directory,
-        method: 'POST',
-        body: {
-          text: item.text,
-          ...(promptFiles.length > 0 ? { files: promptFiles } : {}),
-          ...(item.agentMention ? { agents: [{ name: item.agentMention }] } : {}),
-        },
-      });
+    const accepted = await promptSession(sessionId, blocks.join('\n\n'));
+    if (accepted !== true) {
+      throw new Error(accepted === null
+        ? 'the OMP runtime is not available, so the queued message was not sent'
+        : 'the OMP runtime did not take the queued message');
     }
     if (knowledge.text && sessionKnowledgeRuntime) {
       // After the send is accepted, so a rejected dispatch carries it again.
@@ -620,7 +578,7 @@ export function createMessageQueueRuntime({
       return;
     }
 
-    const idle = await isSessionIdle(sessionId, queue.directory);
+    const idle = await isSessionIdle(sessionId);
     if (idle === null) {
       armDispatch(sessionId, retryDelayMs(1));
       return;
@@ -842,9 +800,6 @@ export function createMessageQueueRuntime({
 
   const start = () => {
     const unsubscribeEvent = globalEventHub.subscribeEvent(processEvent);
-    const unsubscribeStatus = globalEventHub.subscribeStatus((status) => {
-      if (status?.type === 'connect') reconcileAll();
-    });
     void load()
       .then(() => {
         if (queues.size > 0) console.log(`[message-queue] restored queues for ${queues.size} session(s)`);
@@ -855,7 +810,6 @@ export function createMessageQueueRuntime({
       });
     return () => {
       unsubscribeEvent();
-      unsubscribeStatus();
     };
   };
 

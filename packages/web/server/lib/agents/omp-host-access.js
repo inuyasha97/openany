@@ -72,3 +72,20 @@ export const setSessionModel = async (sessionId, provider, modelId) => {
   await host.setModel(sessionId, provider, modelId);
   return true;
 };
+
+/** The session's pending tool approvals (`PermissionRequest[]`), or `null` when unavailable. */
+export const listPermissions = async (sessionId) => {
+  const host = await getOmpRuntimeHost();
+  if (!host) return null;
+  return host.listPermissions(sessionId);
+};
+
+/**
+ * Answers one tool approval and answers whether it was known; `null` when the
+ * runtime is unavailable.
+ */
+export const replyPermission = async (sessionId, requestId, reply, value) => {
+  const host = await getOmpRuntimeHost();
+  if (!host) return null;
+  return host.replyPermission(sessionId, requestId, reply, value);
+};

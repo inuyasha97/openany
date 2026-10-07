@@ -10,11 +10,6 @@ import {
 } from './protocol.js';
 import { createGlobalMessageStreamHub } from './global-hub.js';
 import { createGlobalMessageStreamWsBridge } from './global-ws-bridge.js';
-import { acceptDirectoryMessageStreamWsConnection } from './directory-ws-bridge.js';
-import {
-  DEFAULT_UPSTREAM_RECONNECT_DELAY_MS,
-  DEFAULT_UPSTREAM_STALL_TIMEOUT_MS,
-} from './upstream-reader.js';
 
 export function createGlobalUiEventBroadcaster({
   sseClients,
@@ -53,84 +48,39 @@ export function createGlobalUiEventBroadcaster({
   };
 }
 
+/**
+ * The WS surface of the shared event hub: `/api/global/event/ws` and
+ * `/api/event/ws` both join the same bridge and receive the same frames.
+ * There is no per-directory upstream reader any more; the runtime host is the
+ * only producer and its frames carry their own directory.
+ */
 export function createMessageStreamWsRuntime({
   server,
   uiAuthController,
   isRequestOriginAllowed,
   rejectWebSocketUpgrade,
-  buildOpenCodeUrl,
-  getOpenCodeAuthHeaders,
   processForwardedEventPayload,
   wsClients,
-  triggerHealthCheck,
   heartbeatIntervalMs = MESSAGE_STREAM_WS_HEARTBEAT_INTERVAL_MS,
-  upstreamStallTimeoutMs = DEFAULT_UPSTREAM_STALL_TIMEOUT_MS,
-  upstreamReconnectDelayMs = DEFAULT_UPSTREAM_RECONNECT_DELAY_MS,
-  fetchImpl = fetch,
   globalEventHub = null,
 }) {
   const wsServer = new WebSocketServer({
     noServer: true,
   });
 
-  // Directory-scoped streams create one upstream reader per client
-  // connection. Track those sockets so a managed OpenCode restart can close
-  // them: each reader is pinned to the port it connected at and would
-  // otherwise keep streaming from an orphaned process on the old port (#2638).
-  const directorySockets = new Set();
-
-  const ownsGlobalHub = !globalEventHub;
-  const globalHub = globalEventHub ?? createGlobalMessageStreamHub({
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders,
-    fetchImpl,
-    upstreamStallTimeoutMs,
-    upstreamReconnectDelayMs,
-  });
-
+  const globalHub = globalEventHub ?? createGlobalMessageStreamHub();
   const globalBridge = createGlobalMessageStreamWsBridge({
     globalHub,
-    ownsGlobalHub,
     wsClients,
     processForwardedEventPayload,
-    triggerHealthCheck,
     heartbeatIntervalMs,
   });
 
   wsServer.on('connection', (socket, req) => {
     const rawUrl = typeof req?.url === 'string' ? req.url : MESSAGE_STREAM_GLOBAL_WS_PATH;
-    const pathname = parseRequestPathname(rawUrl);
     const requestUrl = new URL(rawUrl, 'http://127.0.0.1');
-    const isGlobalStream = pathname === MESSAGE_STREAM_GLOBAL_WS_PATH;
     const requestedLastEventId = requestUrl.searchParams.get('lastEventId')?.trim() || '';
-    const requestedDirectory = requestUrl.searchParams.get('directory')?.trim() || '';
-
-    if (isGlobalStream) {
-      globalBridge.accept(socket, {
-        requestedLastEventId,
-      });
-      return;
-    }
-
-    directorySockets.add(socket);
-    socket.on('close', () => {
-      directorySockets.delete(socket);
-    });
-
-    acceptDirectoryMessageStreamWsConnection({
-      socket,
-      requestedLastEventId,
-      requestedDirectory,
-      buildOpenCodeUrl,
-      getOpenCodeAuthHeaders,
-      processForwardedEventPayload,
-      wsClients,
-      triggerHealthCheck,
-      heartbeatIntervalMs,
-      upstreamStallTimeoutMs,
-      upstreamReconnectDelayMs,
-      fetchImpl,
-    });
+    globalBridge.accept(socket, { requestedLastEventId });
   });
 
   const upgradeHandler = (req, socket, head) => {
@@ -170,27 +120,6 @@ export function createMessageStreamWsRuntime({
 
   return {
     wsServer,
-    /**
-     * Rebind all upstream readers to the current OpenCode port. Called after
-     * a managed process restart: the restart can land on a NEW port while
-     * the old process (or an orphaned survivor of it) still holds the
-     * previous one, and a healthy-but-pinned SSE connection never notices —
-     * so the UI would stop receiving events until the app restarts (#2638).
-     * Restarting the shared hub re-dials `buildOpenCodeUrl` (which reads the
-     * current port) on its next attempt; directory-scoped readers are
-     * rebuilt by closing their client sockets, which reconnect with
-     * `Last-Event-ID` and re-establish the stream against the new port.
-     */
-    rebindUpstream() {
-      globalHub.stop();
-      globalHub.start();
-      for (const socket of Array.from(directorySockets)) {
-        try {
-          socket.close(1012, 'OpenCode upstream restarted');
-        } catch {
-        }
-      }
-    },
     async close() {
       server.off('upgrade', upgradeHandler);
       globalBridge.close();

@@ -2,7 +2,7 @@
  * OpenCode v2 wire events -> the vocabulary the server's own consumers speak.
  *
  * The browser gets raw wire payloads (the UI translates them itself in
- * `packages/ui/src/lib/opencode/events.ts`). Everything that reacts on the
+ * `packages/ui/src/lib/agent/events.ts`). Everything that reacts on the
  * server — notifications, the message queue, session activity, goal mode,
  * permission auto-accept, Linear status — was written against OpenCode v1
  * event names, so this module is the single place that maps v2 onto them.

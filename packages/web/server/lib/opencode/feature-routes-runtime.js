@@ -19,44 +19,12 @@ import { registerSessionKnowledgeRoutes } from '../session-knowledge/routes.js';
 import { registerPermissionAutoAcceptRoutes } from '../permission-auto-accept/runtime.js';
 import { registerMessageQueueRoutes } from '../message-queue/runtime.js';
 import { registerRoutingPromptRewrite, registerRoutingRoutes } from '../routing/routes.js';
-import { registerConfigEntityRoutes } from './config-entity-routes.js';
 import { registerSettingsUtilityRoutes } from '../openchamber/core-routes.js';
 import { registerProjectIconRoutes } from '../openchamber/project-icon-routes.js';
 import { registerScheduledTaskRoutes } from '../scheduled-tasks/routes.js';
 import { registerOpenChamberSessionRoutes } from '../openchamber-sessions/routes.js';
 import { registerOpenChamberControlRoutes } from '../openchamber-control/routes.js';
 import { registerMarkdownImageGrantRoutes } from '../markdown-image-grants/routes.js';
-import { registerSkillRoutes } from './skill-routes.js';
-import { registerPluginRoutes } from './plugin-routes.js';
-import { getNpmInfo, clearCache as clearNpmCache } from '../openchamber/npm-registry.js';
-import { parseNpmSpec, parsePathSpec, isExactSemver } from './plugin-spec.js';
-import { registerOpenCodeRoutes } from './routes.js';
-import { getProviderSources, removeProviderConfig, upsertProviderConfig } from './providers.js';
-import { getAgentSources, getAgentConfig, getAgentPermissions, createAgent, updateAgent, deleteAgent } from './agents.js';
-import { getCommandSources, getCommandConfig, createCommand, updateCommand, deleteCommand } from './commands.js';
-import { listMcpConfigs, getMcpConfig, createMcpConfig, updateMcpConfig, deleteMcpConfig } from './mcp.js';
-import { listSnippets, getSnippet, createSnippet, updateSnippet, deleteSnippet, expandSnippets } from './snippets.js';
-import {
-  listPluginEntries,
-  getPluginEntry,
-  createPluginEntry,
-  updatePluginEntry,
-  deletePluginEntry,
-  listPluginDirFiles,
-  readPluginDirFile,
-  writePluginDirFile,
-  deletePluginDirFile,
-  encodePluginId,
-  decodePluginId,
-} from './plugins.js';
-import { SKILL_DIR, SKILL_SCOPE, readSkillSupportingFile, writeSkillSupportingFile, deleteSkillSupportingFile } from './shared.js';
-import { getSkillSources, discoverSkills, mergeDiscoveredSkills, createSkill, updateSkill, deleteSkill, renameSkill, isManagedSkillPath } from './skills.js';
-import { getCuratedSkillsSources } from '../skills-catalog/curated-sources.js';
-import { getCacheKey, scanWithCache } from '../skills-catalog/cache.js';
-import { parseSkillRepoSource } from '../skills-catalog/source.js';
-import { scanSkillsRepository } from '../skills-catalog/scan.js';
-import { installSkillsFromRepository } from '../skills-catalog/install.js';
-import { fetchGitHubRepoMetas } from '../skills-catalog/github-meta.js';
 
 /**
  * The worktree-removal hook: releases every session process the agent runtime
@@ -72,6 +40,12 @@ const createWorktreeInstanceDisposer = (getOmpRuntime) => {
   };
 };
 
+/**
+ * Registers every OpenChamber-owned feature route. The OpenCode config-entity
+ * routes (agents, commands, MCP, snippets, providers, plugins, skills) that
+ * used to be registered here are gone with the OpenCode server: those config
+ * files and their routes no longer exist.
+ */
 export const createFeatureRoutesRuntime = (dependencies) => {
   const {
     clientReloadDelayMs,
@@ -127,22 +101,9 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       readCustomThemesFromDisk,
       saveImportedTheme,
       deleteImportedTheme,
-      refreshOpenCodeAfterConfigChange,
-      getOpenCodeResolutionSnapshot,
-      getOpenCodeUpgradeCapability,
-      upgradeOpenCodeCli,
-      getOpenCodeCompatibility,
-      installOpenCodeV2,
-      formatSettingsResponse,
-      readSettingsFromDisk,
       readSettingsFromDiskMigrated,
       persistSettings,
       sanitizeProjects,
-      sanitizeSkillCatalogs,
-      isUnsafeSkillRelativePath,
-      buildOpenCodeUrl,
-      getOpenCodeAuthHeaders,
-      getOpenCodePort,
       getOwnPorts,
       devServerScanner,
       buildAugmentedPath,
@@ -155,10 +116,9 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       scheduledTaskService,
       openChamberSessionService,
       openChamberControlService,
-      waitForOpenCodeReady,
+      emitSessionCreatedEvent,
       getOpenChamberEventClients,
       writeSseEvent,
-      emitSessionCreatedEvent,
       permissionAutoAcceptRuntime,
       messageQueueRuntime,
       routingRuntime,
@@ -169,39 +129,15 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       readCustomThemesFromDisk,
       saveImportedTheme,
       deleteImportedTheme,
-      refreshOpenCodeAfterConfigChange,
       clientReloadDelayMs,
     });
 
     registerPermissionAutoAcceptRoutes(app, permissionAutoAcceptRuntime);
     registerMessageQueueRoutes(app, messageQueueRuntime);
     registerRoutingRoutes(app, routingRuntime);
-    // Before the generic OpenCode proxy: swallows the `openchamber/auto` model
+    // Before the generic runtime proxy: swallows the `openchamber/auto` model
     // switch and routes the sends that follow it.
     registerRoutingPromptRewrite(app, routingRuntime);
-
-    registerOpenCodeRoutes(app, {
-      crypto,
-      clientReloadDelayMs,
-      getOpenCodeResolutionSnapshot,
-      getOpenCodeUpgradeCapability,
-      upgradeOpenCodeCli,
-      getOpenCodeCompatibility,
-      installOpenCodeV2,
-      formatSettingsResponse,
-      readSettingsFromDisk,
-      readSettingsFromDiskMigrated,
-      persistSettings,
-      sanitizeProjects,
-      validateDirectoryPath,
-      resolveProjectDirectory,
-      getProviderSources,
-      removeProviderConfig,
-      upsertProviderConfig,
-      refreshOpenCodeAfterConfigChange,
-      buildOpenCodeUrl,
-      getOpenCodeAuthHeaders,
-    });
 
     registerProjectIconRoutes(app, {
       fsPromises,
@@ -230,9 +166,6 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       readSettingsFromDiskMigrated,
       sanitizeProjects,
       validateDirectoryPath,
-      buildOpenCodeUrl,
-      getOpenCodeAuthHeaders,
-      waitForOpenCodeReady,
       emitSessionCreatedEvent,
       sessionService: openChamberSessionService,
     });
@@ -245,98 +178,6 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       os,
       crypto,
       validateDirectoryPath,
-      buildOpenCodeUrl,
-      getOpenCodeAuthHeaders,
-    });
-
-    registerConfigEntityRoutes(app, {
-      resolveProjectDirectory,
-      resolveOptionalProjectDirectory,
-      refreshOpenCodeAfterConfigChange,
-      clientReloadDelayMs,
-      getAgentSources,
-      getAgentConfig,
-      getAgentPermissions,
-      createAgent,
-      updateAgent,
-      deleteAgent,
-      getCommandSources,
-      getCommandConfig,
-      createCommand,
-      updateCommand,
-      deleteCommand,
-      listMcpConfigs,
-      getMcpConfig,
-      createMcpConfig,
-      updateMcpConfig,
-      deleteMcpConfig,
-      listSnippets,
-      getSnippet,
-      createSnippet,
-      updateSnippet,
-      deleteSnippet,
-      expandSnippets,
-    });
-
-    registerPluginRoutes(app, {
-      resolveOptionalProjectDirectory,
-      refreshOpenCodeAfterConfigChange,
-      clientReloadDelayMs,
-      listPluginEntries,
-      getPluginEntry,
-      createPluginEntry,
-      updatePluginEntry,
-      deletePluginEntry,
-      listPluginDirFiles,
-      readPluginDirFile,
-      writePluginDirFile,
-      deletePluginDirFile,
-      encodePluginId,
-      decodePluginId,
-      getNpmInfo,
-      parseNpmSpec,
-      parsePathSpec,
-      isExactSemver,
-    });
-
-    const { getProfiles, getProfile } = await import('../git/index.js');
-
-    registerSkillRoutes(app, {
-      fs,
-      path,
-      os,
-      resolveProjectDirectory,
-      resolveOptionalProjectDirectory,
-      readSettingsFromDisk,
-      sanitizeSkillCatalogs,
-      isUnsafeSkillRelativePath,
-      refreshOpenCodeAfterConfigChange,
-      clientReloadDelayMs,
-      buildOpenCodeUrl,
-      getOpenCodeAuthHeaders,
-      getOpenCodePort,
-      getSkillSources,
-      discoverSkills,
-      mergeDiscoveredSkills,
-      createSkill,
-      updateSkill,
-      deleteSkill,
-      renameSkill,
-      isManagedSkillPath,
-      readSkillSupportingFile,
-      writeSkillSupportingFile,
-      deleteSkillSupportingFile,
-      SKILL_SCOPE,
-      SKILL_DIR,
-      getCuratedSkillsSources,
-      getCacheKey,
-      scanWithCache,
-      parseSkillRepoSource,
-      scanSkillsRepository,
-      installSkillsFromRepository,
-      fetchGitHubRepoMetas,
-      getProfiles,
-      getProfile,
     });
 
     registerQuotaRoutes(app, { getQuotaProviders });

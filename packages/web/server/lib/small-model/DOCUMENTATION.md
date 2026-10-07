@@ -23,8 +23,7 @@ No credential is ever handled here.
   maxTokens, input, requestModelId, name }`) into the domain model shape and
   caches it for 30 seconds; an unmounted runtime answers `null`, a failing one
   keeps the previous answer rather than retracting it.
-  `configureOpenCodeRuntimeProviders` is a compatibility no-op (the host is
-  global); `resetOpenCodeRuntimeProviders` drops the cache on a runtime restart.
+  `resetOpenCodeRuntimeProviders` drops the cache on a runtime restart.
 - `index.js` — `generateSmallModelText()`, `describeSmallModel()`,
   `listAuthenticatedProviders()`.
 - `routes.js` — `GET /api/small-model` (resolution preview) and

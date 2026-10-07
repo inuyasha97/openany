@@ -16,8 +16,8 @@
  *
  * `data.level` is the plan tier (for example "lite") and becomes `planLabel`.
  */
-import { readAuthFile } from '../../opencode/auth.js';
-import { readConfigLayers } from '../../opencode/shared.js';
+import { readAuthFile } from '../../openchamber/credentials.js';
+import { readConfigLayers } from '../../openchamber/agent-config-files.js';
 import {
   getAuthEntry,
   normalizeAuthEntry,

@@ -1,4 +1,4 @@
-import { readAuthFile } from '../../opencode/auth.js';
+import { readAuthFile } from '../../openchamber/credentials.js';
 import { deleteLegacyOpenCodeGoCredential } from '../credentials/store.js';
 import { buildResult, getAuthEntry, normalizeAuthEntry, toUsageWindow } from '../utils/index.js';
 

@@ -196,6 +196,62 @@ Hard rules, verified against v2.0.8 (the completion stamp against v2.0.16)
   cursor, so a deleted session sorting below a fresh one comes back with it;
   avoiding that needs an upstream import route that takes explicit ids.
 
+## Public exports (credentials.js)
+
+`credentials.js` is the OMP-side replacement for `auth.js`: the quota providers,
+the voice keys and the routing classifier read the credentials OMP itself uses,
+and `lib/opencode/auth.js` now serves only the OpenCode feature routes that have
+not been ported yet. It is read-only, and it reads three stores in order:
+
+- `<agent dir>/agent.db`, table `auth_credentials` — the credentials `/login`
+  and the API-key form write (`credential_type` is `api_key` or `oauth`, `data`
+  is their JSON). The read mirrors OMP's own active-credential query
+  (`disabled_cause IS NULL`), so a deleted credential stays a tombstone and its
+  key never comes back. The most recently updated row of a provider wins, because
+  the map has one slot per provider while OMP may hold several accounts.
+- `<agent dir>/models.yml`, `providers.<id>.apiKey`, through the same reader the
+  rest of the OMP file layer uses. A `!command` value is skipped: running it
+  needs OMP's shell semantics, and the command string must never reach a
+  provider as its key.
+- the environment, per provider, using the variable OMP's own catalog declares
+  (`PROVIDER_ENV_VARS`, e.g. `OPENCODE_API_KEY`, `ANTHROPIC_API_KEY`). Consulted
+  only for a provider with no stored credential, so a tombstoned credential
+  stays deleted.
+
+The agent directory is OMP's: `PI_CODING_AGENT_DIR`, then a named profile
+(`OMP_PROFILE`/`PI_PROFILE`), then `~/.omp/agent`. `resolveCredentialDbPath`
+additionally follows `omp config init-xdg` to `$XDG_DATA_HOME/omp/agent.db` for
+the default agent directory, the way `getAgentDbPath()` does. OMP keeps no
+credential in `config.yml` (its settings have no `apiKey` field), `secrets.yml`
+is a redaction list rather than a store, and under `OMP_AUTH_BROKER_URL` the
+credentials live on the broker while the local store is empty. OMP also loads
+`.env` files (`<cwd>/.env`, `<agent dir>/.env`, `~/.omp/.env`, `~/.env`) that
+this reader does not parse, so only the process environment is visible.
+
+Entries are the legacy `auth.json` shape (`{ type: 'api', key }` /
+`{ type: 'oauth', access, refresh, expires, accountId?, … }`), with `expires` in
+OMP's epoch milliseconds — every consumer normalizes a seconds/ms value itself.
+OMP renamed several providers, so `LEGACY_PROVIDER_KEYS` republishes a renamed
+credential under the key the consumers' alias lists search for (`opencode-zen` →
+`opencode`, `openai-codex` → `openai`, `kimi-code` → `kimi-for-coding`,
+`wafer-serverless` → `wafer`, `zhipu-coding-plan` → `zhipuai-coding-plan`,
+`charm-hyper` → `hyper`, `xai-oauth` → `xai`, `minimax-code`/`minimax-code-cn` →
+`minimax-coding-plan`/`minimax-cn-coding-plan`, `google-gemini-cli` →
+`google.oauth`, `vercel-ai-gateway` → `vercel`); a provider that really exists
+under the old key keeps its own entry, and every pairing was verified against
+OMP's catalog in `pi-catalog/src/compat/rules`.
+
+- `readAuthFile(options?)`: The credentials OMP uses, keyed by provider id. A
+  database that cannot be read (no sqlite runtime, no file, unknown schema) still
+  leaves models.yml and the environment; a models.yml that does not parse throws
+  only when the database could not answer either, and never blocks a healthy one.
+- `getProviderAuth(providerId)`: Returns auth for a specific provider or null.
+- `listProviderAuths()`: Returns list of provider IDs with configured auth.
+- `resolveCredentialDbPath(...)`, `projectCredential(...)`,
+  `readCredentialsFromDb(...)`, `readApiKeysFromModelsConfig(...)`,
+  `PROVIDER_ENV_VARS`, `LEGACY_PROVIDER_KEYS`: the pieces above, exported for
+  focused tests.
+
 ## Public exports (providers.js)
 - `getProviderSources(providerId, workingDirectory)`: Resolves which OpenCode config layers define a provider.
 - `listProviderConfigs(workingDirectory)`: Every provider a config layer defines, projected into the canonical v2 `ProviderEntity` shape, with `legacy` marking entries still stored under the v1 `provider` key.
@@ -285,11 +341,11 @@ followed by a settings/restart failure keeps v2 on disk; Check again can retry
 the restart. A host crash may also leave the lock for manual recovery.
 Installer output is discarded, not forwarded to clients or logs.
 
-## Public exports (response-envelope.js)
-- `unwrapOpenCodeResponse(body)`: strips OpenCode 2.x's response envelope. A single record (`GET /api/session/:id`, one message) arrives as `{ data }`, some routes as `{ location, data }`, pages as `{ data, cursor }`. Records and plain lists are unwrapped; pages keep the envelope for their cursor. Every server-side OpenCode read goes through it: unwrapping only on `location` left record envelopes in place, so `parentID` and message ids read as missing.
+## Public exports (omp-unsupported.js)
+- `unsupportedOnOmp(what)`: the error a feature throws for a surface OpenCode had and OMP has no counterpart of (a synthetic message, a command dispatch, a session agent, a model variant, prompt attachments). `name: OmpUnsupportedError`, `code: OMP_UNSUPPORTED`, `status: 501`. Thrown rather than dropped or substituted, so the caller fails visibly instead of silently losing the input.
 
 ## Public exports (session-activity.js)
-- `createSessionActivityProbe({ buildOpenCodeUrl, getOpenCodeAuthHeaders, timeoutMs })`: whether a session's turn really ended. A parent goes idle while a background subagent works and runs again when OpenCode hands the result back. `fetchActiveSessionStatuses()` reads `/api/session/active`, `fetchChildSessionIds(id)` pages `GET /api/session?parentID=`, `hasWorkingChildren(id, statuses)` combines them. Every read answers `null` when OpenCode could not be asked. Used by the goal loop (waits) and the notification runtime (stays silent on the pause).
+- `createSessionActivityProbe()`: whether a session's turn really ended. OpenCode answered `/api/session/active` and `GET /api/session?parentID=`; OMP answers one session's busy flag (`getSessionStatus`) and lists no child sessions, so a subagent runs inside its parent's turn. `fetchActiveSessionStatuses()` builds the busy map from `listSessions()` + `getSessionStatus(id)`, `fetchChildSessionIds(id)` answers `[]` once the runtime has answered, `hasWorkingChildren(id, statuses)` answers `false`. Every read answers `null` when the runtime could not be asked. Used by the goal loop, the queued-message dispatch and the notification runtime.
 
 ## Public exports (session-runtime.js)
 - `createSessionRuntime({ writeSseEvent, getNotificationClients, broadcastEvent? })`: creates runtime-owned state machine and APIs for session status.
@@ -909,6 +965,7 @@ The VS Code extension owns its separate Git and proxy implementation.
 
 ## Storage and configuration
 - Provider auth: `~/.local/share/opencode/opencode.db` table `credential` (read-only), with `auth.json` as the legacy fallback; OpenCode 2.x owns credentials.
+- Provider credentials for the ported consumers (quota, TTS, routing): OMP's `<agent dir>/agent.db` table `auth_credentials` (read-only), then `providers.<id>.apiKey` in `<agent dir>/models.yml`, then the provider's catalog environment variable — see "Public exports (credentials.js)".
 - Session archive state: `sessions-archive.json` under the OpenChamber data dir.
 - Session metadata (goal progress, the assist recap, the obligatory-context cursor, pinned notes) lives on the OpenCode session record, written with `PATCH /api/session/{id}` (OpenCode 2.0.15+, the minimum `compatibility.js` enforces). OpenCode replaces the whole object, so `sessionMetadataStore.setSessionMetadata` reads the record, applies the JSON Merge Patch and writes the result, one write per session at a time; a record that cannot be read stops the write. Every reader and writer (routes, goal loop, session assist, session knowledge, obligatory context, notifications) goes through `sessionMetadataStore.get` / `setSessionMetadata`. Older OpenChamber versions kept this state in `sessions-metadata.json` under the data dir. Its entries are the newest metadata their sessions have: the proxy lays them over OpenCode's records, a session's next write pushes its entry, and a sweep after OpenCode starts pushes the rest (a session OpenCode no longer knows is dropped, any other failure waits for the next write or start). The emptied file is renamed to `sessions-metadata.json.migrated`. Archive mutations still run one transaction at a time in the archive store.
 - User config: `<config dir>/opencode.json(c)` where the config dir is `OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`. The v1 `config.json` is not read.

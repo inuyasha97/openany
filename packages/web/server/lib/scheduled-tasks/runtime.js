@@ -1,7 +1,7 @@
 import { DateTime } from 'luxon';
 import { CronExpressionParser } from 'cron-parser';
 import { getOmpRuntimeHost, promptSession } from '../agents/omp-host-access.js';
-import { expandSnippets } from '../opencode/snippets.js';
+import { expandSnippets } from '../openchamber/snippets.js';
 import { buildGoalIntroText, createSessionGoal } from '../session-goal/create.js';
 import { discoverLoops } from './loops.js';
 

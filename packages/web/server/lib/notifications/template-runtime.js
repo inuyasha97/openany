@@ -1,11 +1,9 @@
 import { summarizeText as summarizeSharedText } from '../text/summarization.js';
-import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
+import { readSessionMessages, readSessions } from '../agents/omp-host-access.js';
 
 export const createNotificationTemplateRuntime = (deps) => {
   const {
     readSettingsFromDisk,
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders,
     resolveGitBinaryForSpawn,
   } = deps;
 
@@ -137,35 +135,29 @@ export const createNotificationTemplateRuntime = (deps) => {
     if (!sessionId) return '';
 
     try {
-      const url = buildOpenCodeUrl(`/api/session/${encodeURIComponent(sessionId)}/message`, '');
-      const response = await fetch(`${url}?limit=5`, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          ...getOpenCodeAuthHeaders(),
-        },
-        signal: AbortSignal.timeout(3000),
-      });
+      // The canonical `{ info, parts }` page, oldest first.
+      const page = await readSessionMessages(sessionId);
+      const items = Array.isArray(page?.items) ? page.items : null;
+      if (!items) return '';
 
-      if (!response.ok) return '';
-
-      // v2 pages messages as `{ data, cursor }`, newest first, and a message is
-      // a flat record: an assistant one carries `content[]`, not `parts`.
-      const page = await response.json().catch(() => null);
-      const messages = Array.isArray(page?.data) ? page.data : null;
-      if (!messages) return '';
-
+      const isAssistant = (item) => item?.info?.role === 'assistant';
       let target = null;
       if (messageId) {
-        target = messages.find((message) => message?.id === messageId && message?.type === 'assistant');
+        target = items.find((item) => isAssistant(item) && item.info.id === messageId) ?? null;
       }
       if (!target) {
-        target = messages.find((message) => message?.type === 'assistant' && message?.finish === 'stop') ?? null;
+        // Newest first: the last assistant step that finished.
+        for (let i = items.length - 1; i >= 0; i -= 1) {
+          if (isAssistant(items[i]) && items[i].info.finish === 'stop') {
+            target = items[i];
+            break;
+          }
+        }
       }
 
-      if (!target || !Array.isArray(target.content)) return '';
+      if (!target) return '';
 
-      return extractTextFromParts(target.content, maxLength);
+      return extractTextFromParts(Array.isArray(target.parts) ? target.parts : [], maxLength);
     } catch {
       return '';
     }
@@ -199,22 +191,16 @@ export const createNotificationTemplateRuntime = (deps) => {
     }
 
     try {
-      const url = buildOpenCodeUrl(`/api/session/${encodeURIComponent(sessionId)}`, '');
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(2000),
-      });
-      if (!response.ok) {
-        console.warn(`[Notification] fetchSessionInfo: ${response.status} for session ${sessionId}`);
+      // OMP exposes `{ id, sessionPath, cwd, title }` per session; the title is
+      // the only field a notification template reads.
+      const sessions = await readSessions();
+      const data = Array.isArray(sessions) ? sessions.find((entry) => entry?.id === sessionId) : null;
+      if (!data) {
+        console.warn(`[Notification] fetchSessionInfo: no runtime record for session ${sessionId}`);
         return null;
       }
-      const data = unwrapOpenCodeResponse(await response.json().catch(() => null));
-      if (data && typeof data === 'object') {
-        sessionInfoCache.set(sessionId, { data, at: Date.now() });
-        return data;
-      }
-      return null;
+      sessionInfoCache.set(sessionId, { data, at: Date.now() });
+      return data;
     } catch (error) {
       console.warn(`[Notification] fetchSessionInfo failed for ${sessionId}:`, error?.message || error);
       return null;

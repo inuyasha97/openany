@@ -1,71 +1,21 @@
-import { registerOpenCodeProxy } from './proxy.js';
 import { pathLooksUserConfigured, mergePathValues } from '../openchamber/path-utils.js';
 
+/**
+ * Shared PATH and SSE plumbing for the server's child processes.
+ *
+ * The OpenCode port/readiness/proxy wiring that used to live here is gone with
+ * the OpenCode server; what remains is OpenChamber-owned: the augmented PATH a
+ * spawned terminal, git or guest process needs, the Windows toolchain
+ * directories, and the SSE data-block parser the event consumers share.
+ */
 export const createServerUtilsRuntime = (dependencies) => {
   const {
     fs,
     os,
     path,
     process,
-    openCodeReadyGraceMs,
-    longRequestTimeoutMs,
-    getRuntime,
-    getOpenCodeAuthHeaders,
-    buildOpenCodeUrl,
-    ensureOpenCodeApiPrefix,
-    getUpstreamStallTimeoutMs,
-    getUiNotificationClients,
-    getOpenCodePort,
-    setOpenCodePortState,
-    syncToHmrState,
-    markOpenCodeNotReady,
-    setOpenCodeNotReadySince,
-    clearLastOpenCodeError,
     getLoginShellPath,
-    getArchivedSessions = null,
-    getMergeSpaceSessionList = null,
-    getSpaceEventHub = null,
-    getStoredSessionMetadata = null,
   } = dependencies;
-
-  const setOpenCodePort = (port) => {
-    if (!Number.isFinite(port) || port <= 0) {
-      return;
-    }
-
-    const numericPort = Math.trunc(port);
-    const currentPort = getOpenCodePort();
-    const portChanged = currentPort !== numericPort;
-
-    if (portChanged || currentPort === null) {
-      setOpenCodePortState(numericPort);
-      syncToHmrState();
-      console.log(`Detected OpenCode port: ${numericPort}`);
-
-      if (portChanged) {
-        markOpenCodeNotReady();
-      }
-      setOpenCodeNotReadySince(Date.now());
-    }
-
-    clearLastOpenCodeError();
-  };
-
-  const waitForOpenCodePort = async (timeoutMs = 15000) => {
-    if (getOpenCodePort() !== null) {
-      return getOpenCodePort();
-    }
-
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      if (getOpenCodePort() !== null) {
-        return getOpenCodePort();
-      }
-    }
-
-    throw new Error('Timed out waiting for OpenCode port');
-  };
 
   const getEnvValue = (name) => {
     const env = process.env || {};
@@ -181,63 +131,9 @@ export const createServerUtilsRuntime = (dependencies) => {
     }
   };
 
-  const fetchArraySnapshot = async (route, invalidMessage) => {
-    if (!getOpenCodePort()) {
-      throw new Error('OpenCode port is not available');
-    }
-
-    const response = await fetch(buildOpenCodeUrl(route), {
-      method: 'GET',
-      headers: { Accept: 'application/json', ...getOpenCodeAuthHeaders() },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch ${invalidMessage} (status ${response.status})`);
-    }
-
-    // OpenCode 2.x answers `/api/*` with `{ location, data }`.
-    const body = await response.json().catch(() => null);
-    const payload = Array.isArray(body) ? body : body?.data;
-    if (!Array.isArray(payload)) {
-      throw new Error(`Invalid ${invalidMessage} payload from OpenCode`);
-    }
-    return payload;
-  };
-
-  const fetchAgentsSnapshot = () => fetchArraySnapshot('/api/agent', 'agents snapshot');
-  const fetchProvidersSnapshot = () => fetchArraySnapshot('/api/provider', 'providers snapshot');
-  const fetchModelsSnapshot = () => fetchArraySnapshot('/api/model', 'models snapshot');
-
-  const setupProxy = (app) => {
-    registerOpenCodeProxy(app, {
-      fs,
-      os,
-      path,
-      OPEN_CODE_READY_GRACE_MS: openCodeReadyGraceMs,
-      LONG_REQUEST_TIMEOUT_MS: longRequestTimeoutMs,
-      getRuntime,
-      getOpenCodeAuthHeaders,
-      buildOpenCodeUrl,
-      ensureOpenCodeApiPrefix,
-      getSseUpstreamStallTimeoutMs: getUpstreamStallTimeoutMs,
-      getUiNotificationClients,
-      getArchivedSessions,
-      getStoredSessionMetadata,
-      // Read when the proxy is set up, after `main` decided whether the spaces host exists.
-      mergeSpaceSessionList: typeof getMergeSpaceSessionList === 'function' ? getMergeSpaceSessionList() : null,
-      spaceEventHub: typeof getSpaceEventHub === 'function' ? getSpaceEventHub() : null,
-    });
-  };
-
   return {
-    setOpenCodePort,
-    waitForOpenCodePort,
     buildAugmentedPath,
     buildManagedOpenCodePath,
     parseSseDataPayload,
-    fetchAgentsSnapshot,
-    fetchProvidersSnapshot,
-    fetchModelsSnapshot,
-    setupProxy,
   };
 };

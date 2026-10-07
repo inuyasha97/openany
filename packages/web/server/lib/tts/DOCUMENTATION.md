@@ -44,7 +44,7 @@ This module provides server-side Text-to-Speech services using OpenAI's TTS API.
 ## TTSService methods
 
 ### `isAvailable()`
-Returns boolean indicating whether OpenAI API key is configured (checks environment variable `OPENAI_API_KEY` or OpenCode auth file).
+Returns boolean indicating whether OpenAI API key is configured (checks environment variable `OPENAI_API_KEY` or the `openai` entry of the OMP credentials, `../openchamber/credentials.js`).
 
 ### `generateSpeechStream(options)`
 Generates speech and returns as a web stream for direct streaming to clients.
@@ -87,7 +87,7 @@ With enterprise mode on (`../enterprise-mode.js`), speech and transcription stay
 ## API key resolution
 OpenAI API keys are resolved in order:
 1. Environment variable `OPENAI_API_KEY`.
-2. OpenCode auth file (`auth.openai`, `auth.codex`, or `auth.chatgpt`).
+2. The `openai`, `codex`, or `chatgpt` entry of OMP's credentials (`../openchamber/credentials.js`; OMP's ChatGPT login is stored as `openai-codex` and republished as `openai`).
 3. Supports both string format (just token) and object format (with `access` or `token` fields).
 
 ## Usage in web server
@@ -136,7 +136,7 @@ The server-side TTS approach bypasses mobile Safari's audio context restrictions
 ## Verification notes
 
 ### Manual verification
-1. Configure OpenAI API key via environment variable or OpenCode settings.
+1. Configure OpenAI API key via environment variable or an OMP login/api key.
 2. Test `ttsService.isAvailable()` returns true.
 3. Call `ttsService.generateSpeechStream({ text: 'Hello world' })` and verify stream is returned.
 4. Call `ttsService.generateSpeechBuffer({ text: 'Hello world' })` and verify Buffer is returned.

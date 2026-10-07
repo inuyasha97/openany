@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerPwaManifestRoute } from './pwa-manifest-routes.js';
+import { readSessions } from '../agents/omp-host-access.js';
+
+vi.mock('../agents/omp-host-access.js', () => ({
+  readSessions: vi.fn(async () => []),
+}));
+
+beforeEach(() => {
+  readSessions.mockReset().mockResolvedValue([]);
+});
 
 const createResponse = () => ({
   headers: new Map(),
@@ -19,116 +28,65 @@ const createResponse = () => ({
   },
 });
 
-describe('PWA manifest route', () => {
-  it('does not fall back to unrelated global session shortcuts for scoped manifests', async () => {
-    const routes = new Map();
-    const app = {
+const createApp = () => {
+  const routes = new Map();
+  return {
+    routes,
+    app: {
       get(route, handler) {
         routes.set(route, handler);
       },
-    };
-    const originalFetch = globalThis.fetch;
-    const fetchCalls = [];
-    globalThis.fetch = async (url) => {
-      fetchCalls.push(String(url));
-      const sessions = String(url).includes('?directory=')
-        ? []
-        : [
-            {
-              id: 'other-session',
-              title: 'Other project',
-              directory: '/workspace/other',
-              time: { updated: 2 },
-            },
-          ];
-      // v2 pages the session list as `{ data, cursor }`.
-      return {
-        ok: true,
-        json: async () => ({ data: sessions, cursor: {} }),
-      };
-    };
+    },
+  };
+};
 
-    try {
-      registerPwaManifestRoute(app, {
-        process: { platform: 'darwin' },
-        resolveProjectDirectory: async () => ({ directory: '/workspace/app' }),
-        buildOpenCodeUrl: (route) => route,
-        getOpenCodeAuthHeaders: () => ({}),
-        readSettingsFromDiskMigrated: async () => ({}),
-        normalizePwaAppName: (value, fallback) => typeof value === 'string' && value.trim() ? value.trim() : fallback,
-        normalizePwaOrientation: (value, fallback) => typeof value === 'string' && value.trim() ? value.trim() : fallback,
-      });
+const register = (app, directory) => registerPwaManifestRoute(app, {
+  resolveProjectDirectory: async () => ({ directory }),
+  readSettingsFromDiskMigrated: async () => ({}),
+  normalizePwaAppName: (value, fallback) => typeof value === 'string' && value.trim() ? value.trim() : fallback,
+  normalizePwaOrientation: (value, fallback) => typeof value === 'string' && value.trim() ? value.trim() : fallback,
+});
 
-      const handler = routes.get('/manifest.webmanifest');
-      const res = createResponse();
-      await handler({ query: {} }, res);
+describe('PWA manifest route', () => {
+  it('does not fall back to unrelated global session shortcuts for scoped manifests', async () => {
+    readSessions.mockResolvedValue([
+      { id: 'other-session', title: 'Other project', cwd: '/workspace/other' },
+    ]);
+    const { routes, app } = createApp();
+    register(app, '/workspace/app');
 
-      const manifest = JSON.parse(res.body);
-      expect(fetchCalls).toHaveLength(2);
-      expect(manifest.shortcuts).toEqual([
-        {
-          name: 'Appearance Settings',
-          short_name: 'Settings',
-          description: 'Open appearance settings',
-          url: '/?settings=appearance',
-          icons: [{ src: '/pwa-192.png', sizes: '192x192', type: 'image/png' }],
-        },
-      ]);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    const res = createResponse();
+    await routes.get('/manifest.webmanifest')({ query: {} }, res);
+
+    const manifest = JSON.parse(res.body);
+    expect(manifest.shortcuts).toEqual([
+      {
+        name: 'Appearance Settings',
+        short_name: 'Settings',
+        description: 'Open appearance settings',
+        url: '/?settings=appearance',
+        icons: [{ src: '/pwa-192.png', sizes: '192x192', type: 'image/png' }],
+      },
+    ]);
   });
 
   it('includes child session shortcuts for root-scoped manifests', async () => {
-    const routes = new Map();
-    const app = {
-      get(route, handler) {
-        routes.set(route, handler);
-      },
-    };
-    const originalFetch = globalThis.fetch;
-    const fetchCalls = [];
-    globalThis.fetch = async (url) => {
-      fetchCalls.push(String(url));
-      return {
-        ok: true,
-        json: async () => [
-          {
-            id: 'root-child',
-            title: 'Root child',
-            directory: '/workspace/app',
-            time: { updated: 2 },
-          },
-        ],
-      };
-    };
+    readSessions.mockResolvedValue([
+      { id: 'root-child', title: 'Root child', cwd: '/workspace/app' },
+    ]);
+    const { routes, app } = createApp();
+    register(app, '/');
 
-    try {
-      registerPwaManifestRoute(app, {
-        process: { platform: 'darwin' },
-        resolveProjectDirectory: async () => ({ directory: '/' }),
-        buildOpenCodeUrl: (route) => route,
-        getOpenCodeAuthHeaders: () => ({}),
-        readSettingsFromDiskMigrated: async () => ({}),
-        normalizePwaAppName: (value, fallback) => typeof value === 'string' && value.trim() ? value.trim() : fallback,
-        normalizePwaOrientation: (value, fallback) => typeof value === 'string' && value.trim() ? value.trim() : fallback,
-      });
+    const res = createResponse();
+    await routes.get('/manifest.webmanifest')({ query: {} }, res);
 
-      const handler = routes.get('/manifest.webmanifest');
-      const res = createResponse();
-      await handler({ query: {} }, res);
-
-      const manifest = JSON.parse(res.body);
-      expect(fetchCalls).toEqual(['/api/session?directory=%2F']);
-      expect(manifest.shortcuts).toContainEqual({
-        name: 'Root child',
-        short_name: 'Root child',
-        description: 'Open recent session',
-        url: '/?session=root-child',
-        icons: [{ src: '/pwa-192.png', sizes: '192x192', type: 'image/png' }],
-      });
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    const manifest = JSON.parse(res.body);
+    expect(manifest.shortcuts).toContainEqual({
+      name: 'Root child',
+      short_name: 'Root child',
+      description: 'Open recent session',
+      url: '/?session=root-child',
+      icons: [{ src: '/pwa-192.png', sizes: '192x192', type: 'image/png' }],
+    });
   });
 });

@@ -1,7 +1,7 @@
 import express from 'express';
 import { constants as fsConstants } from 'node:fs';
 import { mintOutsideFileGrant } from '../fs/routes.js';
-import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
+import { readSessionMessages } from '../agents/omp-host-access.js';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_SOURCES = 12;
@@ -130,15 +130,11 @@ const parseDefinitionDestination = (value) => {
 };
 
 /**
- * v2 messages are flat records: an assistant one carries `content[]` and a user
- * one a single `text`. Both are read here, because an image link can come from
- * either side of the conversation.
+ * Canonical messages carry their text in parts; a text part is
+ * `{ type: 'text', text }`. Both sides of the conversation are read here,
+ * because an image link can come from either.
  */
-const messageTextParts = (message) => {
-  if (Array.isArray(message?.content)) return message.content;
-  if (typeof message?.text === 'string') return [{ type: 'text', text: message.text }];
-  return [];
-};
+const messageTextParts = (message) => (Array.isArray(message?.parts) ? message.parts : []);
 
 const collectMarkdownLinesOutsideCode = (message) => {
   const lines = [];
@@ -203,26 +199,15 @@ const markdownImageSources = (message) => {
   return sources;
 };
 
-const fetchMessage = async ({ sessionId, messageId, directory, buildOpenCodeUrl, getOpenCodeAuthHeaders }) => {
-  const url = new URL(buildOpenCodeUrl(
-    `/api/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(messageId)}`,
-    '',
-  ));
-  url.searchParams.set('directory', directory);
-  const response = await fetch(url, {
-    headers: {
-      accept: 'application/json',
-      // Percent-encoded to match the SDK wire format; raw non-ASCII values
-      // are rejected by OpenCode.
-      'x-opencode-directory': encodeURIComponent(directory),
-      ...getOpenCodeAuthHeaders(),
-    },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`OpenCode returned ${response.status}`);
-  const message = unwrapOpenCodeResponse(await response.json().catch(() => null));
-  return message && typeof message === 'object' && typeof message.id === 'string' ? message : null;
+/**
+ * One message from the session's canonical page. A message the runtime does
+ * not carry is `null`; an unavailable runtime is a failure, never "not found".
+ */
+const fetchMessage = async ({ sessionId, messageId }) => {
+  const page = await readSessionMessages(sessionId);
+  if (!page) throw new Error('the OMP runtime is not available');
+  const items = Array.isArray(page.items) ? page.items : [];
+  return items.find((item) => item?.info?.id === messageId) ?? null;
 };
 
 const inspectImage = async ({ source, directory, approvedTempRoot, fsPromises, path }) => {
@@ -271,8 +256,6 @@ export const registerMarkdownImageGrantRoutes = (app, dependencies) => {
     os,
     crypto,
     validateDirectoryPath,
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders,
     approvedTempRoot = path.join(os.tmpdir(), 'opencode'),
   } = dependencies;
 
@@ -294,15 +277,9 @@ export const registerMarkdownImageGrantRoutes = (app, dependencies) => {
       }
 
       try {
-        const message = await fetchMessage({
-          sessionId,
-          messageId,
-          directory: validatedDirectory.directory,
-          buildOpenCodeUrl,
-          getOpenCodeAuthHeaders,
-        });
-        // v2 messages are flat records with a `type` discriminator.
-        if (!message || message.id !== messageId || message.type !== 'assistant') {
+        const message = await fetchMessage({ sessionId, messageId });
+        // Canonical records carry `role` on `info`.
+        if (!message || message.info?.id !== messageId || message.info?.role !== 'assistant') {
           return res.status(404).json({ error: 'Assistant message not found' });
         }
         // Assistant text is authoritative: a remote client cannot mint grants for unreferenced paths.

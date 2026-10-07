@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 
-import { sanitizeSessionListItem } from '../opencode/proxy.js';
+import { sanitizeSessionListItem } from '../openchamber/proxy-helpers.js';
 import { isDirectoryOfSpace } from './dispatcher.js';
 
 // How many host session ids are remembered for the collision rule. Older ones are forgotten

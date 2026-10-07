@@ -23,19 +23,12 @@ export const createStartupPipelineRuntime = (dependencies) => {
       isExecutable,
       isRequestOriginAllowed,
       rejectWebSocketUpgrade,
-      buildOpenCodeUrl,
-      getOpenCodeAuthHeaders,
       globalEventHub,
       processForwardedEventPayload,
       messageStreamWsClients,
-      triggerHealthCheck,
-      upstreamStallTimeoutMs,
       terminalHeartbeatIntervalMs,
       terminalRebindWindowMs,
       terminalMaxRebindsPerWindow,
-      setupProxy,
-      scheduleOpenCodeApiDetection,
-      bootstrapOpenCodeAtStartup,
       staticRoutesRuntime,
       process,
       crypto,
@@ -92,16 +85,10 @@ export const createStartupPipelineRuntime = (dependencies) => {
       uiAuthController,
       isRequestOriginAllowed,
       rejectWebSocketUpgrade,
-      buildOpenCodeUrl,
-      getOpenCodeAuthHeaders,
       globalEventHub,
       processForwardedEventPayload,
       wsClients: messageStreamWsClients,
-      triggerHealthCheck,
-      upstreamStallTimeoutMs,
     });
-
-    setupProxy(app);
 
     if (apiOnly) {
       staticRoutesRuntime.registerApiOnlyFallbackRoutes(app);
@@ -137,8 +124,6 @@ export const createStartupPipelineRuntime = (dependencies) => {
       durationMs: performance.now() - pipelineStartedAt,
     });
     tunnelRuntimeContext.setActivePort(startupResult.activePort);
-    scheduleOpenCodeApiDetection();
-    void bootstrapOpenCodeAtStartup();
 
     serverStartupRuntime.attachProcessHandlers({ attachSignals });
 

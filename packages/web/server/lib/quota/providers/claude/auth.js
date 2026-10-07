@@ -2,9 +2,9 @@
  * Claude credential discovery.
  *
  * Claude Code is the primary source: on macOS it keeps its OAuth tokens in the
- * login Keychain, elsewhere in a credentials file. OpenCode's own `auth.json`
- * entry is the fallback for users who signed into Anthropic through OpenCode
- * instead of Claude Code.
+ * login Keychain, elsewhere in a credentials file. The `anthropic` entry of
+ * OMP's credentials (`openchamber/credentials.js`) is the fallback for users
+ * who signed into Anthropic through OMP instead of Claude Code.
  *
  * Every source is read-only. Claude rotates a Keychain/credentials entry from
  * under us whenever Claude Code refreshes, so credentials are read fresh per
@@ -18,7 +18,7 @@ import { execFileSync } from 'child_process';
 import os from 'os';
 import path from 'path';
 
-import { readAuthFile } from '../../../opencode/auth.js';
+import { readAuthFile } from '../../../openchamber/credentials.js';
 import { asObject, asNonEmptyString, normalizeTimestamp, getAuthEntry, normalizeAuthEntry, readJsonFile } from '../../utils/index.js';
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';

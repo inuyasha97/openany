@@ -7,7 +7,7 @@ const previousDataDirectory = process.env.OPENCHAMBER_DATA_DIR;
 const temporaryDataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-opencode-go-'));
 process.env.OPENCHAMBER_DATA_DIR = temporaryDataDirectory;
 
-vi.mock('../../opencode/auth.js', () => ({
+vi.mock('../../openchamber/credentials.js', () => ({
   readAuthFile: () => ({ 'opencode-go': { key: 'test-key' } }),
 }));
 

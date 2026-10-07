@@ -1,8 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { OPENCODE_CONFIG_DIR } from '../../opencode/shared.js';
+import { OPENCODE_CONFIG_DIR } from '../../openchamber/agent-config-files.js';
 
+/**
+ * OMP keeps no antigravity accounts file of its own (its Google Antigravity
+ * credential is a `google-antigravity` OAuth row in `agent.db`), so this stays
+ * the legacy pair OpenChamber has always read: OMP's agent/config directory
+ * beside the rest of its state, then OpenCode's data directory for a leftover
+ * file.
+ */
 const OPENCODE_DATA_DIR = path.join(os.homedir(), '.local', 'share', 'opencode');
 
 export const ANTIGRAVITY_ACCOUNTS_PATHS = [

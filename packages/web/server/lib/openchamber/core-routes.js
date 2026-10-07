@@ -1,4 +1,3 @@
-import { buildExternalManualRestartResponse } from '../opencode/config-mutation-response.js';
 import { ThemeImportStorageError } from './theme-runtime.js';
 import { registerThemeCatalogRoutes } from './theme-catalog.js';
 
@@ -1008,7 +1007,6 @@ export const registerSettingsUtilityRoutes = (app, dependencies) => {
     readCustomThemesFromDisk,
     saveImportedTheme,
     deleteImportedTheme,
-    refreshOpenCodeAfterConfigChange,
     clientReloadDelayMs,
   } = dependencies;
 
@@ -1049,15 +1047,8 @@ export const registerSettingsUtilityRoutes = (app, dependencies) => {
   app.post('/api/config/reload', async (_req, res) => {
     try {
       console.log('[Server] Manual configuration reload requested');
-
-      const refreshResult = await refreshOpenCodeAfterConfigChange('manual configuration reload');
-
-      if (refreshResult?.external) {
-        return res.json(buildExternalManualRestartResponse(
-          'Configuration is saved on disk. Restart your connected OpenCode server to apply the changes.',
-        ));
-      }
-
+      // The runtime reads its config files per request, so a reload is a client
+      // refresh: nothing in this server holds a copy that has to be rebuilt.
       res.json({
         success: true,
         requiresReload: true,

@@ -13,8 +13,6 @@ const createRuntime = (server, overrides = {}) => {
     getIsShuttingDown: () => false,
     setIsShuttingDown: vi.fn(),
     syncToHmrState: vi.fn(),
-    openCodeWatcherRuntime: { stop: vi.fn() },
-    sessionRuntime: { dispose: vi.fn() },
     scheduledTasksRuntime: { stop: vi.fn() },
     getHealthCheckInterval: () => null,
     clearHealthCheckInterval: vi.fn(),
@@ -22,12 +20,6 @@ const createRuntime = (server, overrides = {}) => {
     setTerminalRuntime: vi.fn(),
     getMessageStreamRuntime: () => null,
     setMessageStreamRuntime: vi.fn(),
-    shouldSkipOpenCodeStop: () => true,
-    getOpenCodePort: () => null,
-    getOpenCodeProcess: () => null,
-    setOpenCodeProcess: vi.fn(),
-    killProcessOnPort: vi.fn(),
-    waitForPortRelease: vi.fn(async () => true),
     getServer: () => server,
     getUiAuthController: () => null,
     setUiAuthController: vi.fn(),
@@ -140,10 +132,6 @@ describe('graceful shutdown runtime', () => {
     const terminalShutdown = vi.fn(async () => {
       expect([...sockets].every((socket) => !socket.destroyed)).toBe(true);
     });
-    const processClose = vi.fn(async () => {
-      expect(terminalShutdown).toHaveBeenCalledOnce();
-      expect([...sockets].every((socket) => !socket.destroyed)).toBe(true);
-    });
     const runtime = createRuntime(server, {
       stopAllGuestServices: async () => {
         cleanupStarted.resolve();
@@ -151,8 +139,6 @@ describe('graceful shutdown runtime', () => {
         throw new Error('fixture cleanup failure');
       },
       getTerminalRuntime: () => ({ shutdown: terminalShutdown }),
-      shouldSkipOpenCodeStop: () => false,
-      getOpenCodeProcess: () => ({ close: processClose }),
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const shutdown = runtime.gracefulShutdown({ exitProcess: false });
@@ -171,10 +157,10 @@ describe('graceful shutdown runtime', () => {
         await upgraded;
       }
       expect(sockets.size).toBe(8);
-      expect(processClose).not.toHaveBeenCalled();
+      expect(terminalShutdown).not.toHaveBeenCalled();
       finishCleanup.resolve();
       await shutdown;
-      expect(processClose).toHaveBeenCalledOnce();
+      expect(terminalShutdown).toHaveBeenCalledOnce();
       expect(warning).not.toHaveBeenCalledWith('Server close timeout reached, forcing shutdown');
       await Promise.all(closed);
       expect(server.listening).toBe(false);

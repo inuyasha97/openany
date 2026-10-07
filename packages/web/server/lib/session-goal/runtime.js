@@ -27,8 +27,8 @@ import {
   readSmallModelAnswers,
 } from './audit.js';
 import { readMergedSettingsSync } from '../openchamber/settings-files.js';
-import { createSessionActivityProbe } from '../opencode/session-activity.js';
-import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
+import { promptSession, readSessionMessages, readSessions } from '../agents/omp-host-access.js';
+import { createSessionActivityProbe } from '../openchamber/session-activity.js';
 
 const OPENCHAMBER_SETTINGS_FILE = path.join(
   process.env.OPENCHAMBER_DATA_DIR
@@ -57,8 +57,6 @@ const KICKOFF_QUIET_MS = 3_000;
 // already bails if the session turns out to be busy. The tiny delay only
 // coalesces duplicate session.updated events.
 const RESUME_KICKOFF_MS = 250;
-const FETCH_TIMEOUT_MS = 10_000;
-const MESSAGE_FETCH_LIMIT = 40;
 const REASON_CHAR_LIMIT = 200;
 // Hard safety cap on auto-continuations per goal id. The audit and markers are
 // the intended stop conditions; this only prevents a runaway loop.
@@ -188,69 +186,69 @@ const parseGoalMetadata = (session) => {
 };
 
 /**
- * The loop reads the v1 view of a message — `{ info, parts }` with
- * `info.role`, `info.summary`, `info.time`, `info.tokens`, `info.error`,
- * `info.finish`, `info.providerID` / `modelID` / `agent` / `variant` — and v2
- * records are flat: `type` instead of `role`, `content[]` instead of `parts`,
- * `model.{providerID,id}`, and a compaction turn is its own `compaction` type
- * rather than an assistant message flagged `summary`. This is the only place
- * that knows both shapes. Roles the loop does not reason about (system,
- * skill, shell, switches, idle) are dropped; a `synthetic` message folds into
- * the user role so a trailing context item still reads as "user just sent".
+ * The loop reads a message as `{ info, parts }` with `info.role`,
+ * `info.summary`, `info.time`, `info.tokens`, `info.error`, `info.finish`,
+ * `info.providerID` / `modelID` / `agent` / `variant` — the canonical shape the
+ * OMP runtime serves. Roles the loop does not reason about (system, skill,
+ * shell, switches, idle) are dropped; a `synthetic` message folds into the
+ * user role so a trailing context item still reads as "user just sent". A
+ * finished compaction plays the part of the summary turn; the loop reads
+ * "finished" from `time.completed`, so a completed compaction gets one or it
+ * would count as still running.
  */
-const toLoopMessage = (message) => {
-  const id = String(message?.id ?? '');
+const toLoopMessage = (item) => {
+  const info = item?.info;
+  const id = String(info?.id ?? '');
   if (!id) return null;
-  const time = message.time && !Array.isArray(message.time) ? { ...message.time } : {};
-  const base = { id, sessionID: message.sessionID, time };
-  switch (message.type) {
+  const time = info.time && !Array.isArray(info.time) ? { ...info.time } : {};
+  const parts = (Array.isArray(item.parts) ? item.parts : [])
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string' && part.text)
+    .map((part) => ({ type: 'text', text: String(part.text) }));
+  const base = { id, sessionID: info.sessionID, time };
+  switch (info.role) {
     case 'user':
     case 'synthetic':
       return {
         info: { ...base, role: 'user' },
-        parts: message.text ? [{ type: 'text', text: String(message.text) }] : [],
+        parts: parts.length > 0 || typeof info.text !== 'string' || !info.text
+          ? parts
+          : [{ type: 'text', text: info.text }],
       };
     case 'assistant': {
-      const model = message.model ?? {};
-      // v1 errors carried `name`; v2's structured error calls it `type`.
-      const error = message.error ? { name: message.error.type, ...message.error } : undefined;
+      // A structured error's discriminator is `type`; the loop asks for `name`.
+      const error = info.error ? { name: info.error.type, ...info.error } : undefined;
       return {
         info: {
           ...base,
           role: 'assistant',
           summary: false,
-          agent: message.agent,
-          providerID: model.providerID,
-          modelID: model.id,
-          variant: model.variant,
-          finish: message.finish,
-          tokens: message.tokens,
+          agent: info.agent,
+          providerID: info.providerID,
+          modelID: info.modelID,
+          variant: info.variant,
+          finish: info.finish,
+          tokens: info.tokens,
           error,
         },
-        parts: (Array.isArray(message.content) ? message.content : [])
-          .filter((part) => part?.type === 'text' && part.text)
-          .map((part) => ({ type: 'text', text: String(part.text) })),
+        parts,
       };
     }
     case 'compaction': {
-      // A finished compaction plays the part of v1's `summary: true` assistant
-      // turn: it closes a token segment and is never audited or continued
-      // from. Its model must not be inherited either (v1: "the compaction
-      // summary carries the summarize model").
-      if (message.status !== 'completed') return null;
-      // v2 records only `time.created` on a compaction; `status` is what says
-      // it finished. The loop reads "finished" from `time.completed`, so a
-      // completed compaction gets one, or it would count as still running.
+      // Compaction must not be inherited as an execution source either: the
+      // summary turn carries the summarize model.
+      if (info.status !== 'completed') return null;
       return {
         info: {
           ...base,
           time: { ...time, completed: time.completed ?? time.created },
           role: 'assistant',
           summary: true,
-          tokens: message.tokens,
+          tokens: info.tokens,
           finish: 'stop',
         },
-        parts: message.summary ? [{ type: 'text', text: String(message.summary) }] : [],
+        parts: parts.length > 0 || typeof info.summary !== 'string' || !info.summary
+          ? parts
+          : [{ type: 'text', text: info.summary }],
       };
     }
     default:
@@ -332,8 +330,6 @@ const hasRepeatedLengthTail = (messages, latestAssistant, goalCreatedAt) => {
 };
 
 export const createSessionGoalRuntime = ({
-  buildOpenCodeUrl,
-  getOpenCodeAuthHeaders,
   getSmallModelService,
   /** Resolves to the Jev endpoint the classification provider answers on, or null. */
   classifierEndpoint = async () => null,
@@ -359,44 +355,30 @@ export const createSessionGoalRuntime = ({
     }
   };
 
-  const openCodeFetch = async (fetchPath, { directory, method = 'GET', body, query } = {}) => {
-    const base = buildOpenCodeUrl(fetchPath, '');
-    const params = new URLSearchParams(query || {});
-    if (directory) params.set('directory', directory);
-    const search = params.toString();
-    const url = search ? `${base}?${search}` : base;
-    const response = await fetch(url, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-        ...getOpenCodeAuthHeaders(),
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      throw new Error(`OpenCode ${method} ${fetchPath} failed with ${response.status}`);
+  // One session record from the runtime's own index; null when it cannot be
+  // read or is unknown. OMP lists only top-level sessions, so a subagent
+  // session never arrives here (the store treats a subagent transcript as
+  // not-a-session) and there is no parent to skip.
+  const readSessionRecord = async (sessionId) => {
+    try {
+      const sessions = await readSessions();
+      if (!Array.isArray(sessions)) return null;
+      return sessions.find((entry) => entry?.id === sessionId) ?? null;
+    } catch (error) {
+      console.warn(`[session-goal] session listing failed: ${error?.message || error}`);
+      return null;
     }
-    return unwrapOpenCodeResponse(await response.json().catch(() => null));
   };
 
-  const fetchRecentMessages = async (sessionId, directory) => {
-    // v2 pages messages as `{ data, cursor }`, newest first.
-    const page = await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/message`, {
-      directory,
-      query: { limit: String(MESSAGE_FETCH_LIMIT) },
-    }).catch(() => null);
-    const messages = page && typeof page === 'object' ? page.data : null;
-    if (!Array.isArray(messages)) return null;
-    return messages.map(toLoopMessage).filter(Boolean).reverse();
+  const fetchRecentMessages = async (sessionId) => {
+    // OMP serves the canonical `{ info, parts }` page, oldest first.
+    const page = await readSessionMessages(sessionId).catch(() => null);
+    const items = page && typeof page === 'object' ? page.items : null;
+    if (!Array.isArray(items)) return null;
+    return items.map(toLoopMessage).filter(Boolean);
   };
 
-  const activityProbe = createSessionActivityProbe({
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders,
-    timeoutMs: FETCH_TIMEOUT_MS,
-  });
+  const activityProbe = createSessionActivityProbe();
 
   // v2 reports only that a session is running.
   const isWorkingStatus = (status) => Boolean(status);
@@ -522,28 +504,27 @@ export const createSessionGoalRuntime = ({
     return { verdict, evaluationProviderID: checked.evaluationProviderID, evaluationModelID: checked.evaluationModelID };
   };
 
-  // v2 keeps the model and agent on the session itself, so a plain prompt
-  // runs on whatever the session was already using. v1 had to repeat the
-  // selection on every request; there is nothing to repeat here.
-  const sendContinuation = async ({ sessionId, directory, goal }) => {
-    await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/prompt`, {
-      directory,
-      method: 'POST',
-      body: { text: buildContinuationPrompt(goal) },
-    });
+  // OMP keeps the model and agent on the session itself, so a plain prompt
+  // runs on whatever the session was already using; there is nothing to
+  // repeat here.
+  const sendContinuation = async ({ sessionId, goal }) => {
+    const accepted = await promptSession(sessionId, buildContinuationPrompt(goal));
+    if (accepted !== true) {
+      // Nothing was dispatched: the caller must not record a continuation.
+      throw new Error(accepted === null
+        ? 'the OMP runtime is not available, so the goal continuation was not sent'
+        : 'the OMP runtime did not take the goal continuation');
+    }
   };
 
   const tick = async (sessionId, directory) => {
     if (!isEnabled()) return;
 
-    const session = await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}`, { directory })
-      .catch((error) => {
-        console.warn(`[session-goal] session fetch failed: ${error?.message || error}`);
-        return null;
-      });
-    if (!session || typeof session !== 'object') return;
-    // Sub-agent/task sessions never carry user goals — skip them.
-    if (typeof session.parentID === 'string' && session.parentID) return;
+    // OMP lists no subagent sessions, so this is only an existence and
+    // availability check — an unknown session or an unavailable runtime ends
+    // the tick.
+    const session = await readSessionRecord(sessionId);
+    if (!session) return;
 
     const goal = await readGoal(sessionId);
     if (!goal || goal.status !== 'active') return;
@@ -586,7 +567,7 @@ export const createSessionGoalRuntime = ({
     }
     if (childrenWorking) return;
 
-    const messages = await fetchRecentMessages(sessionId, directory);
+    const messages = await fetchRecentMessages(sessionId);
     if (!messages) return;
 
     let lastAssistant = null;
@@ -819,7 +800,7 @@ export const createSessionGoalRuntime = ({
 
     // The tail may have moved while auditing (user sent a message) — a
     // continuation now would collide with the user's own turn.
-    const latest = await fetchRecentMessages(sessionId, directory);
+    const latest = await fetchRecentMessages(sessionId);
     const latestLastInfo = latest && latest.length > 0 ? latest[latest.length - 1]?.info : null;
     if (!latestLastInfo || latestLastInfo.id !== lastMessageInfo?.id) {
       console.log('[session-goal] tail moved on, dropping continuation');
@@ -827,7 +808,7 @@ export const createSessionGoalRuntime = ({
     }
 
     console.log(`[session-goal] continuing ${sessionId} (turn ${written.turnsUsed}/${maxAutoTurns}, tokens ${written.tokensUsed}${written.tokenBudget ? `/${written.tokenBudget}` : ''})`);
-    await sendContinuation({ sessionId, directory, goal: { ...written, objective: effectiveObjective } });
+    await sendContinuation({ sessionId, goal: { ...written, objective: effectiveObjective } });
   };
 
   const armTimer = (sessionId, directory, quietMs) => {
@@ -880,11 +861,11 @@ export const createSessionGoalRuntime = ({
     if (timers.has(sessionId) || inflight.has(sessionId)) return;
 
     // A patch from the UI names no directory, and the loop needs one to scope
-    // its own OpenCode calls. The session record is authoritative for it.
+    // its own reads. The runtime's session record is authoritative for it.
     let resolved = directory;
     if (!resolved) {
-      const session = await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}`).catch(() => null);
-      resolved = typeof session?.location?.directory === 'string' ? session.location.directory : '';
+      const session = await readSessionRecord(sessionId);
+      resolved = typeof session?.cwd === 'string' ? session.cwd : '';
     }
     if (stopped || timers.has(sessionId) || inflight.has(sessionId)) return;
     armTimer(sessionId, resolved, goal.statusReason === 'resumed' ? RESUME_KICKOFF_MS : kickoffQuietMs);

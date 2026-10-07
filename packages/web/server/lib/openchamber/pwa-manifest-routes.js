@@ -1,3 +1,5 @@
+import { readSessions } from '../agents/omp-host-access.js';
+
 const DEFAULT_PWA_APP_NAME = 'OpenChamber';
 const mapPwaOrientationToManifest = (value) => {
   if (value === 'portrait') {
@@ -11,10 +13,7 @@ const mapPwaOrientationToManifest = (value) => {
 
 export const registerPwaManifestRoute = (app, dependencies) => {
   const {
-    process,
     resolveProjectDirectory,
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders,
     readSettingsFromDiskMigrated,
     normalizePwaAppName,
     normalizePwaOrientation,
@@ -90,53 +89,23 @@ export const registerPwaManifestRoute = (app, dependencies) => {
       });
     };
 
-    const listSessions = async (directory) => {
-      const query = (() => {
-        if (typeof directory !== 'string' || directory.length === 0) {
-          return '';
-        }
-        const preparedDirectory = process.platform === 'win32'
-          ? directory.replace(/\//g, '\\\\')
-          : directory;
-        return `?directory=${encodeURIComponent(preparedDirectory)}`;
-      })();
-
-      const response = await fetch(buildOpenCodeUrl(`/api/session${query}`, ''), {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          ...getOpenCodeAuthHeaders(),
-        },
-        signal: AbortSignal.timeout(2500),
-      });
-
-      if (!response.ok) {
+    // The runtime host lists every session it knows; the manifest only needs id,
+    // title and directory. OMP records carry no timestamp, so recency falls back
+    // to the store's own order.
+    const listSessions = async () => {
+      const sessions = await readSessions().catch(() => null);
+      if (!Array.isArray(sessions)) {
         return [];
       }
-
-      // v2 pages the session list as `{ data, cursor }`.
-      const body = await response.json().catch(() => null);
-      const payload = Array.isArray(body) ? body : body?.data;
-      return Array.isArray(payload) ? payload : [];
+      return sessions.map((session) => ({
+        id: session?.id,
+        title: session?.title,
+        directory: typeof session?.cwd === 'string' ? session.cwd : '',
+      }));
     };
 
     try {
-      let payload = [];
-
-      if (preferredDirectory) {
-        const scopedPayload = await listSessions(preferredDirectory);
-        const filteredScopedPayload = filterSessionsByDirectory(scopedPayload, preferredDirectory);
-
-        if (filteredScopedPayload.length > 0) {
-          payload = filteredScopedPayload;
-        } else {
-          const globalPayload = await listSessions(null);
-          const filteredGlobalPayload = filterSessionsByDirectory(globalPayload, preferredDirectory);
-          payload = filteredGlobalPayload;
-        }
-      } else {
-        payload = await listSessions(null);
-      }
+      const payload = filterSessionsByDirectory(await listSessions(), preferredDirectory);
 
       const seen = new Set();
       const rows = [];

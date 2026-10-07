@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../opencode/auth.js', () => ({
+vi.mock('../../openchamber/credentials.js', () => ({
   readAuthFile: () => ({ 'kimi-for-coding': { key: 'test-token' } }),
 }));
 
@@ -78,7 +78,7 @@ describe('Kimi for Coding quota provider', () => {
   });
 
   it('reports not configured when no credentials are stored', async () => {
-    vi.doMock('../../opencode/auth.js', () => ({ readAuthFile: () => ({}) }));
+    vi.doMock('../../openchamber/credentials.js', () => ({ readAuthFile: () => ({}) }));
     vi.resetModules();
     const { fetchQuota: fetchQuotaFresh } = await import('./kimi.js');
 
@@ -88,7 +88,7 @@ describe('Kimi for Coding quota provider', () => {
     expect(result.configured).toBe(false);
     expect(result.error).toBe('Not configured');
 
-    vi.doUnmock('../../opencode/auth.js');
+    vi.doUnmock('../../openchamber/credentials.js');
     vi.resetModules();
   });
 

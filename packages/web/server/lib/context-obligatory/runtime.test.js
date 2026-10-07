@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { configureOmpRuntimeHost } from '../agents/omp-host-access.js';
 import { createContextObligatoryRuntime } from './runtime.js';
 
 /**
@@ -7,56 +8,49 @@ import { createContextObligatoryRuntime } from './runtime.js';
  * metadata store. `readSessionMetadata` and `persistContextCursor` are the
  * seams; without both the runtime stays inert and says so once.
  *
- * `session.compacted` is the hub's translation of OpenCode 2's
- * `session.compaction.ended`. The v2 compaction message carries only
- * `time.created`, so the fake below has no `time.completed` on purpose.
+ * `session.compacted` is the hub's translation of the runtime's
+ * `session.compaction.ended`. The compaction is read from the canonical
+ * `{ info, parts }` page the OMP host serves.
  */
 
+const SESSION_ID = 'ses_1';
+const SESSION_RECORD = { id: SESSION_ID, sessionPath: '/sessions/1.jsonl', cwd: '/repo', title: 'One' };
 const runtimes = [];
 
 const makeRuntime = (overrides = {}) => {
-  const buildOpenCodeUrl = vi.fn((fetchPath) => `http://opencode.test${fetchPath}`);
-  const runtime = createContextObligatoryRuntime({
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders: () => ({}),
-    ...overrides,
-  });
+  const runtime = createContextObligatoryRuntime({ ...overrides });
   runtimes.push(runtime);
-  return { runtime, buildOpenCodeUrl };
+  return { runtime };
 };
 
-const compactionEvent = () => ({ type: 'session.compacted', properties: { sessionID: 'ses_1' } });
+const compactionEvent = () => ({ type: 'session.compacted', properties: { sessionID: SESSION_ID } });
 
-const json = (body) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-
-/** A v2 OpenCode holding one finished compaction and two pinned messages. */
-const fakeOpenCode = () => {
-  const synthetic = [];
-  const fetchMock = vi.fn(async (url, init) => {
-    const path = new URL(url).pathname;
-    if (path === '/api/session/ses_1') return json({ data: { id: 'ses_1' } });
-    if (path === '/api/session/ses_1/message') {
-      return json({
-        data: [
-          { id: 'msg_compact', type: 'compaction', status: 'completed', reason: 'auto', summary: 'S', recent: '', time: { created: 5 } },
-          { id: 'msg_a', type: 'assistant', content: [{ type: 'text', text: 'Old answer' }], time: { created: 2 } },
-        ],
-        cursor: {},
-      });
-    }
-    if (path === '/api/session/ses_1/message/msg_u') return json({ data: { id: 'msg_u', type: 'user', text: 'Keep this rule', time: { created: 1 } } });
-    if (path === '/api/session/ses_1/message/msg_a') {
-      return json({ data: { id: 'msg_a', type: 'assistant', content: [{ type: 'reasoning', text: 'x' }, { type: 'text', text: 'Old answer' }], time: { created: 2 } } });
-    }
-    if (path === '/api/session/ses_1/synthetic') {
-      synthetic.push(JSON.parse(init.body));
-      return json({ data: {} });
-    }
-    return new Response('not found', { status: 404 });
-  });
-  vi.stubGlobal('fetch', fetchMock);
-  return { synthetic, fetchMock };
+/**
+ * A fake OMP runtime holding one finished compaction and two pinned messages.
+ */
+const stubOmp = ({ items = defaultItems() } = {}) => {
+  const host = {
+    listSessions: vi.fn(async () => [SESSION_RECORD]),
+    getSessionStatus: vi.fn(async () => ({ busy: false })),
+    getMessages: vi.fn(async () => ({ items, cursor: {} })),
+    prompt: vi.fn(async () => true),
+  };
+  configureOmpRuntimeHost(() => host);
+  return host;
 };
+
+const textItem = (id, role, text, created, extra = {}) => ({
+  info: { id, sessionID: SESSION_ID, role, time: { created }, ...extra },
+  parts: [{ type: 'text', text }],
+});
+
+function defaultItems() {
+  return [
+    textItem('msg_u', 'user', 'Keep this rule', 1),
+    textItem('msg_a', 'assistant', 'Old answer', 2),
+    textItem('msg_compact', 'compaction', 'S', 5, { status: 'completed', reason: 'auto', summary: 'S' }),
+  ];
+}
 
 const pinnedMetadata = (extra = {}) => ({
   openchamber: {
@@ -70,31 +64,32 @@ const pinnedMetadata = (extra = {}) => ({
 
 afterEach(() => {
   while (runtimes.length > 0) runtimes.pop().stop();
+  configureOmpRuntimeHost(null);
   vi.restoreAllMocks();
-  vi.unstubAllGlobals();
 });
 
 describe('context obligatory runtime', () => {
-  it('re-sends pinned messages after a finished compaction and records the cursor', async () => {
-    const { synthetic } = fakeOpenCode();
+  it('fails visibly instead of dropping the restored context, and does not advance the cursor', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const host = stubOmp();
     const persistContextCursor = vi.fn(async () => undefined);
     const { runtime } = makeRuntime({ readSessionMetadata: async () => pinnedMetadata(), persistContextCursor });
 
     await runtime.processPayload(compactionEvent(), '/repo');
 
-    expect(synthetic).toHaveLength(1);
-    expect(synthetic[0].resume).toBe(false);
-    const text = synthetic[0].text;
-    expect(text.indexOf('Keep this rule')).toBeGreaterThan(-1);
-    expect(text.indexOf('Keep this rule')).toBeLessThan(text.indexOf('Old answer'));
-    expect(text).not.toContain('\nx\n');
-    expect(persistContextCursor).toHaveBeenCalledWith('ses_1', '/repo', {
-      openchamber: { context_obligatory_last_compaction_message_id: 'msg_compact' },
-    });
+    // The compaction and the pinned texts were read from the runtime's page.
+    expect(host.getMessages).toHaveBeenCalledWith(SESSION_ID);
+    const failure = warn.mock.calls.find(([line]) => String(line).includes('[context-obligatory] injection failed'));
+    expect(failure).toBeDefined();
+    expect(String(failure[1])).toContain('synthetic message');
+    expect(String(failure[1])).toContain('not supported on the OMP runtime');
+    // Unadvanced: an OMP equivalent must re-inject, not skip the compaction.
+    expect(persistContextCursor).not.toHaveBeenCalled();
   });
 
   it('does not re-send for a compaction it already handled', async () => {
-    const { synthetic } = fakeOpenCode();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const host = stubOmp();
     const { runtime } = makeRuntime({
       readSessionMetadata: async () => pinnedMetadata({ context_obligatory_last_compaction_message_id: 'msg_compact' }),
       persistContextCursor: vi.fn(async () => undefined),
@@ -102,16 +97,31 @@ describe('context obligatory runtime', () => {
 
     await runtime.processPayload(compactionEvent(), '/repo');
 
-    expect(synthetic).toHaveLength(0);
+    expect(host.getMessages).toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the page carries no finished compaction', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stubOmp({ items: [textItem('msg_u', 'user', 'Keep this rule', 1), textItem('msg_a', 'assistant', 'Old answer', 2)] });
+    const persistContextCursor = vi.fn(async () => undefined);
+    const { runtime } = makeRuntime({ readSessionMetadata: async () => pinnedMetadata(), persistContextCursor });
+
+    await runtime.processPayload(compactionEvent(), '/repo');
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(persistContextCursor).not.toHaveBeenCalled();
   });
 
   it('needs both seams: a read alone leaves it inert', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { runtime, buildOpenCodeUrl } = makeRuntime({ readSessionMetadata: async () => ({}) });
+    const host = stubOmp();
+    const { runtime } = makeRuntime({ readSessionMetadata: async () => ({}) });
 
     await runtime.processPayload(compactionEvent());
 
-    expect(buildOpenCodeUrl).not.toHaveBeenCalled();
+    expect(host.listSessions).not.toHaveBeenCalled();
+    expect(host.getMessages).not.toHaveBeenCalled();
   });
 
   it('explains itself once, not on every event', () => {

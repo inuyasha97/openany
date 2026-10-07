@@ -6,8 +6,6 @@ export const createGracefulShutdownRuntime = (dependencies) => {
     getIsShuttingDown,
     setIsShuttingDown,
     syncToHmrState,
-    openCodeWatcherRuntime,
-    sessionRuntime,
     sessionAssistRuntime,
     sessionWorkRuntime,
     sessionGoalRuntime,
@@ -20,12 +18,6 @@ export const createGracefulShutdownRuntime = (dependencies) => {
     setTerminalRuntime,
     getMessageStreamRuntime,
     setMessageStreamRuntime,
-    shouldSkipOpenCodeStop,
-    getOpenCodePort,
-    getOpenCodeProcess,
-    setOpenCodeProcess,
-    killProcessOnPort,
-    waitForPortRelease,
     getServer,
     getUiAuthController,
     setUiAuthController,
@@ -84,8 +76,6 @@ export const createGracefulShutdownRuntime = (dependencies) => {
       () => getSpacesHost()?.close(),
       () => getRelayService()?.stop(),
       () => getDictationRuntime()?.stop(),
-      () => openCodeWatcherRuntime.stop(),
-      () => sessionRuntime.dispose(),
       () => sessionAssistRuntime?.stop?.(),
       () => sessionWorkRuntime?.stop?.(),
       () => sessionGoalRuntime?.stop?.(),
@@ -129,28 +119,6 @@ export const createGracefulShutdownRuntime = (dependencies) => {
       }
     }
 
-    if (!shouldSkipOpenCodeStop()) {
-      const portToKill = getOpenCodePort();
-      const openCodeProcess = getOpenCodeProcess();
-
-      if (openCodeProcess) {
-        console.log('Stopping OpenCode process...');
-        try {
-          await openCodeProcess.close();
-        } catch (error) {
-          console.warn('Error closing OpenCode process:', error);
-        }
-        setOpenCodeProcess(null);
-      }
-
-      killProcessOnPort(portToKill);
-      if (!(await waitForPortRelease(portToKill, 5000))) {
-        console.warn(`Timed out waiting for OpenCode port ${portToKill} to be released during shutdown`);
-      }
-    } else {
-      console.log('Skipping OpenCode shutdown (external server)');
-    }
-
     const server = getServer();
     if (server) {
       closingHttpServer = true;
@@ -162,8 +130,8 @@ export const createGracefulShutdownRuntime = (dependencies) => {
               console.log('HTTP server closed');
               resolve();
             });
-            // The backend has stopped. Active SSE/HTTP clients must not keep
-            // Desktop waiting for the outer shutdown deadline.
+            // Active SSE/HTTP clients must not keep Desktop waiting for the
+            // outer shutdown deadline.
             server.closeAllConnections?.();
             // Includes upgraded sockets and reconnects accepted while the
             // services above were draining. No child-process grace is cut short.

@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { configureOmpRuntimeHost } from '../agents/omp-host-access.js';
 import { createMessageQueueRuntime, parseQueuedItemInput } from './runtime.js';
 
 const SESSION = 'ses_queue_test_1';
@@ -11,11 +12,12 @@ const item = (overrides = {}) => ({
   content: 'follow up',
   text: 'follow up',
   attachments: [],
-  sendConfig: { providerID: 'anthropic', modelID: 'claude', agent: 'build' },
+  sendConfig: { providerID: 'anthropic', modelID: 'claude' },
   ...overrides,
 });
 
 const tempDirs = [];
+const runtimes = [];
 const makeDataDir = () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-message-queue-'));
   tempDirs.push(dir);
@@ -24,58 +26,70 @@ const makeDataDir = () => {
 
 afterEach(() => {
   vi.useRealTimers();
+  // A live runtime keeps its dispatch timers armed; without stopping them a
+  // later test's send log would collect their retries.
+  while (runtimes.length > 0) runtimes.pop().stop();
+  configureOmpRuntimeHost(null);
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/** A canonical `{ info, parts }` record, the shape the OMP host serves. */
+const assistantItem = (time, { text = 'reply', ...info } = {}) => ({
+  info: { id: `msg_${time.created}`, sessionID: SESSION, role: 'assistant', time, ...info },
+  parts: text ? [{ type: 'text', text }] : [],
+});
+
 /**
- * A fake OpenCode: status map, message tail, command list, and a log of every
- * prompt/command it received.
+ * A fake OMP runtime: one busy flag per session, the canonical message page,
+ * the command list, and a log of the model switches and prompts it received.
+ * `fail` makes the next call to one operation reject, the way an unavailable
+ * runtime does.
  */
-const createOpenCode = () => {
+const createOmpHost = () => {
   const state = {
-    // `/api/session/active` lists only running sessions; an absent id is idle.
-    active: {},
-    // Subagent sessions per parent, as `GET /api/session?parentID=` lists them.
-    children: {},
-    tail: [],
+    busy: {},
+    items: [],
     commands: [],
     sent: [],
     switched: [],
-    failNext: null,
+    fail: null,
   };
-  // v2 wraps `/api/*` payloads in `{ location, data }`; a message page is
-  // `{ data, cursor }` and lists newest first.
-  const wrapped = (data) => Response.json({ location: { directory: DIRECTORY }, data });
-  const fetchImpl = vi.fn(async (url, init = {}) => {
-    const { pathname } = new URL(url);
-    const method = init.method ?? 'GET';
-    if (state.failNext && state.failNext.test(pathname)) {
-      state.failNext = null;
-      return new Response('boom', { status: 500 });
+  const failIf = (op) => {
+    if (state.fail?.op === op) {
+      const { error } = state.fail;
+      state.fail = null;
+      throw error;
     }
-    // Real shape: `{ data }` without a `location`, unlike directory-scoped routes.
-    if (pathname === '/api/session/active') return Response.json({ data: state.active });
-    if (pathname === '/api/session' && method === 'GET') {
-      const parentID = new URL(url).searchParams.get('parentID');
-      return Response.json({ data: (state.children[parentID] ?? []).map((id) => ({ id, parentID })), cursor: {} });
-    }
-    if (pathname.endsWith('/message')) return Response.json({ data: state.tail, cursor: {} });
-    if (pathname === '/api/command') return wrapped(state.commands);
-    if (method === 'POST' && (pathname.endsWith('/model') || pathname.endsWith('/agent'))) {
-      // Kept apart from `sent`: switching the session is not a message.
-      state.switched.push({ path: pathname, body: JSON.parse(init.body) });
-      return new Response(null, { status: 204 });
-    }
-    if (method === 'POST' && (pathname.endsWith('/prompt') || pathname.endsWith('/command') || pathname.endsWith('/synthetic'))) {
-      state.sent.push({ path: pathname, body: JSON.parse(init.body) });
-      return wrapped({ id: `msg_${state.sent.length}` });
-    }
-    return new Response('not found', { status: 404 });
-  });
-  return { state, fetchImpl };
+  };
+  const host = {
+    listSessions: vi.fn(async () => [{ id: SESSION, sessionPath: '/sessions/queue.jsonl', cwd: DIRECTORY, title: '' }]),
+    getSessionStatus: vi.fn(async (id) => {
+      failIf('status');
+      return { busy: state.busy[id] === true };
+    }),
+    getMessages: vi.fn(async () => {
+      failIf('messages');
+      return { items: state.items, cursor: {} };
+    }),
+    setModel: vi.fn(async (id, provider, modelId) => {
+      failIf('model');
+      state.switched.push({ sessionId: id, provider, modelId });
+    }),
+    prompt: vi.fn(async (id, text) => {
+      failIf('prompt');
+      state.sent.push({ sessionId: id, text });
+      return true;
+    }),
+    listCommands: vi.fn(async () => {
+      failIf('commands');
+      return state.commands;
+    }),
+  };
+  return { state, host };
 };
 
-const createRuntime = ({ dataDir = makeDataDir(), openCode = createOpenCode(), knowledge = null, retryDelayMs, resolveAutoSelection, now } = {}) => {
+const createRuntime = ({ dataDir = makeDataDir(), omp = createOmpHost(), knowledge = null, retryDelayMs, resolveAutoSelection, now } = {}) => {
+  configureOmpRuntimeHost(() => omp.host);
   let eventHandler = () => {};
   let statusHandler = () => {};
   const broadcasts = [];
@@ -85,13 +99,10 @@ const createRuntime = ({ dataDir = makeDataDir(), openCode = createOpenCode(), k
       subscribeEvent(handler) { eventHandler = handler; return () => {}; },
       subscribeStatus(handler) { statusHandler = handler; return () => {}; },
     },
-    buildOpenCodeUrl: (fetchPath) => `http://opencode.test${fetchPath}`,
-    getOpenCodeAuthHeaders: () => ({}),
     sessionKnowledgeRuntime: knowledge,
     broadcastGlobalUiEvent: (event) => broadcasts.push(event),
     onPromptSent: (sessionId) => promptSent.push(sessionId),
     dataDir,
-    fetchImpl: openCode.fetchImpl,
     dispatchQuietMs: 0,
     abortHoldMs: 50,
   };
@@ -99,9 +110,10 @@ const createRuntime = ({ dataDir = makeDataDir(), openCode = createOpenCode(), k
   if (resolveAutoSelection) options.resolveAutoSelection = resolveAutoSelection;
   if (now) options.now = now;
   const runtime = createMessageQueueRuntime(options);
+  runtimes.push(runtime);
   return {
     runtime,
-    openCode,
+    omp,
     dataDir,
     broadcasts,
     promptSent,
@@ -116,34 +128,46 @@ const settle = async (ms = 30) => {
 };
 
 describe('auto routing', () => {
-  it('switches a queued prompt and a queued command onto the routed model and agent', async () => {
+  it('routes a queued prompt onto the resolved model', async () => {
     const resolveAutoSelection = vi.fn(async ({ model }) => (model?.id === 'auto'
-      ? { model: { providerID: 'openai', id: 'gpt-6-astra' }, agent: 'plan', decision: {} }
+      ? { model: { providerID: 'openai', id: 'gpt-6-astra' }, agent: null, decision: {} }
       : null));
-    const { runtime, openCode, emit } = createRuntime({ resolveAutoSelection });
+    const { runtime, omp, emit } = createRuntime({ resolveAutoSelection });
     runtime.start();
-    openCode.state.statuses = { [SESSION]: { type: 'busy' } };
-    openCode.state.commands = [{ name: 'review', template: 'Review $ARGUMENTS' }];
-    const auto = { providerID: 'openchamber', modelID: 'auto', agent: 'build' };
+    const auto = { providerID: 'openchamber', modelID: 'auto' };
     await runtime.enqueue(SESSION, DIRECTORY, item({ content: 'plain', text: 'plain', sendConfig: auto }));
-    await runtime.enqueue(SESSION, DIRECTORY, item({ content: '/review src', text: '/review src', sendConfig: auto }));
+    await runtime.enqueue(SESSION, DIRECTORY, item({ content: 'second', text: 'second', sendConfig: auto }));
 
-    openCode.state.statuses = {};
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
 
-    // v2 carries no model in a prompt body: the session is switched first.
-    const switched = openCode.state.switched.filter((entry) => entry.path.endsWith('/model'));
-    expect(switched.map((entry) => entry.body.model)).toEqual([
-      { providerID: 'openai', id: 'gpt-6-astra' },
-      { providerID: 'openai', id: 'gpt-6-astra' },
+    // OMP switches the model on the session; the prompt carries one text.
+    expect(omp.state.switched).toEqual([
+      { sessionId: SESSION, provider: 'openai', modelId: 'gpt-6-astra' },
+      { sessionId: SESSION, provider: 'openai', modelId: 'gpt-6-astra' },
     ]);
-    expect(openCode.state.switched.filter((entry) => entry.path.endsWith('/agent')).map((entry) => entry.body.agent))
-      .toEqual(['plan', 'plan']);
+    expect(omp.state.sent.map((entry) => entry.text)).toEqual(['plain', 'second']);
     expect(resolveAutoSelection).toHaveBeenCalledTimes(2);
     expect(resolveAutoSelection.mock.calls[0][0]).toMatchObject({ sessionId: SESSION, directory: DIRECTORY, requestText: 'plain' });
+  });
+
+  it('fails a routed send that needs an agent rather than dropping the choice', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const resolveAutoSelection = vi.fn(async () => ({ model: { providerID: 'openai', id: 'gpt-6-astra' }, agent: 'plan', decision: {} }));
+    const { runtime, omp, emit } = createRuntime({ resolveAutoSelection });
+    runtime.start();
+    await runtime.enqueue(SESSION, DIRECTORY, item({ content: 'plain', text: 'plain', sendConfig: { providerID: 'openchamber', modelID: 'auto' } }));
+
+    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
+    await settle();
+
+    // The agent is checked before the model is touched, so the session was left
+    // as it was and the item stays queued.
+    expect(omp.state.switched).toEqual([]);
+    expect(omp.state.sent).toEqual([]);
+    expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(1);
   });
 });
 
@@ -162,7 +186,7 @@ describe('parseQueuedItemInput', () => {
       agentMention: 'reviewer',
       attachments: [],
       context: [],
-      sendConfig: { providerID: 'anthropic', modelID: 'claude', agent: 'build' },
+      sendConfig: { providerID: 'anthropic', modelID: 'claude' },
     });
   });
 
@@ -190,24 +214,21 @@ describe('parseQueuedItemInput', () => {
 
 describe('message queue runtime', () => {
   it('delivers the head of the queue when the session goes idle, in order', async () => {
-    const { runtime, openCode, emit, promptSent, broadcasts } = createRuntime();
+    const { runtime, omp, emit, promptSent, broadcasts } = createRuntime();
     runtime.start();
-    openCode.state.active = { [SESSION]: { type: 'running' } };
+    omp.state.busy[SESSION] = true;
 
     await runtime.enqueue(SESSION, DIRECTORY, item({ content: 'first', text: 'first' }));
     await runtime.enqueue(SESSION, DIRECTORY, item({ content: 'second', text: 'second' }));
     await settle();
-    expect(openCode.state.sent).toHaveLength(0);
+    expect(omp.state.sent).toHaveLength(0);
 
-    openCode.state.active = {};
+    omp.state.busy[SESSION] = false;
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
 
-    expect(openCode.state.sent).toHaveLength(1);
-    expect(openCode.state.sent[0].path).toBe(`/api/session/${SESSION}/prompt`);
-    // v2 selects model and agent on the session, so the prompt carries text
-    // and attachments only.
-    expect(openCode.state.sent[0].body).toEqual({ text: 'first' });
+    expect(omp.state.sent).toHaveLength(1);
+    expect(omp.state.sent[0]).toEqual({ sessionId: SESSION, text: 'first' });
     expect(promptSent).toEqual([SESSION]);
     expect(runtime.sessionSnapshot(SESSION).items.map((entry) => entry.content)).toEqual(['second']);
     // Clients learned about the in-flight item and then the removal.
@@ -220,125 +241,117 @@ describe('message queue runtime', () => {
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'busy' } } });
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
-    expect(openCode.state.sent).toHaveLength(2);
+    expect(omp.state.sent).toHaveLength(2);
     expect(runtime.sessionSnapshot(SESSION).items).toEqual([]);
   });
 
-  it('waits for a background subagent before sending the queued message', async () => {
-    const { runtime, openCode, emit } = createRuntime();
+  it('sends on the parent\'s own idle: the OMP runtime lists no subagent sessions', async () => {
+    const { runtime, omp, emit } = createRuntime();
     runtime.start();
-    // The parent paused: it is idle while its background subagent works.
-    openCode.state.children = { [SESSION]: ['ses_child'] };
-    openCode.state.active = { ses_child: { type: 'running' } };
 
     await runtime.enqueue(SESSION, DIRECTORY, item({ content: 'next', text: 'next' }));
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
-    expect(openCode.state.sent).toHaveLength(0);
 
-    // The subagent finished and OpenCode ran the parent again with its result.
-    openCode.state.active = {};
-    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'busy' } } });
-    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
-    await settle();
-    expect(openCode.state.sent).toHaveLength(1);
-    expect(openCode.state.sent[0].body).toEqual({ text: 'next' });
+    expect(omp.state.sent).toHaveLength(1);
+    expect(omp.state.sent[0]).toEqual({ sessionId: SESSION, text: 'next' });
   });
 
   it('does not send into a running turn even when the status event says idle', async () => {
-    const { runtime, openCode, emit } = createRuntime({ now: () => 10_000 });
+    const { runtime, omp, emit } = createRuntime({ now: () => 10_000 });
     runtime.start();
     // Live unfinished turn: created after this runtime started.
-    openCode.state.tail = [{ type: 'assistant', time: { created: 10_001 } }];
+    omp.state.items = [assistantItem({ created: 10_001 })];
     await runtime.enqueue(SESSION, DIRECTORY, item());
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
-    expect(openCode.state.sent).toHaveLength(0);
+    expect(omp.state.sent).toHaveLength(0);
 
     // The reply completes: that alone drains the queue (a missed idle event
     // must not strand it).
-    openCode.state.tail = [{ type: 'assistant', time: { created: 10_001, completed: 10_002 } }];
+    omp.state.items = [assistantItem({ created: 10_001, completed: 10_002 })];
+    omp.state.busy[SESSION] = false;
     emit({ type: 'message.updated', properties: { info: { role: 'assistant', sessionID: SESSION, time: { created: 10_001, completed: 10_002 } } } });
     await settle();
-    expect(openCode.state.sent).toHaveLength(1);
+    expect(omp.state.sent).toHaveLength(1);
   });
 
   it('delivers past an unfinished tail that predates this runtime (dead pre-restart run)', async () => {
-    const { runtime, openCode, emit } = createRuntime({ now: () => 10_000 });
+    const { runtime, omp, emit } = createRuntime({ now: () => 10_000 });
     runtime.start();
     // Assistant reply interrupted by a server restart: unfinished, but older
     // than this runtime — no completion event will ever arrive for it, so it
     // must not block a restored queue forever.
-    openCode.state.tail = [{ type: 'assistant', time: { created: 1 } }];
+    omp.state.items = [assistantItem({ created: 1 })];
     await runtime.enqueue(SESSION, DIRECTORY, item());
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
-    expect(openCode.state.sent).toHaveLength(1);
-    expect(openCode.state.sent[0].path).toBe(`/api/session/${SESSION}/prompt`);
+    expect(omp.state.sent).toHaveLength(1);
+    expect(omp.state.sent[0]).toEqual({ sessionId: SESSION, text: 'follow up' });
   });
 
-  it('treats an unreachable OpenCode as unknown, not idle', async () => {
-    const { runtime, openCode, emit } = createRuntime({ retryDelayMs: () => 10 });
+  it('treats an unreachable runtime as unknown, not idle', async () => {
+    const { runtime, omp, emit } = createRuntime({ retryDelayMs: () => 10 });
     runtime.start();
     await runtime.enqueue(SESSION, DIRECTORY, item());
-    openCode.state.failNext = /\/api\/session\/active$/;
+    omp.state.fail = { op: 'status', error: new Error('runtime down') };
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle(5);
-    expect(openCode.state.sent).toHaveLength(0);
-    // Retried after the status fetch recovers.
+    expect(omp.state.sent).toHaveLength(0);
+    // Retried after the status read recovers.
     await settle(40);
-    expect(openCode.state.sent).toHaveLength(1);
+    expect(omp.state.sent).toHaveLength(1);
   });
 
   it('keeps a failed item and retries with backoff', async () => {
-    const { runtime, openCode, emit, broadcasts } = createRuntime({ retryDelayMs: () => 20 });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { runtime, omp, emit, broadcasts } = createRuntime({ retryDelayMs: () => 20 });
     runtime.start();
     await runtime.enqueue(SESSION, DIRECTORY, item());
-    openCode.state.failNext = /\/prompt$/;
+    omp.state.fail = { op: 'prompt', error: new Error('prompt rejected') };
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle(10);
-    expect(openCode.state.sent).toHaveLength(0);
+    expect(omp.state.sent).toHaveLength(0);
     expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(1);
     expect(runtime.sessionSnapshot(SESSION).sendingId).toBeNull();
     expect(broadcasts.at(-1).properties.session.sendingId).toBeNull();
     await settle(40);
-    expect(openCode.state.sent).toHaveLength(1);
+    expect(omp.state.sent).toHaveLength(1);
     expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(0);
   });
 
   it('holds delivery briefly after a user abort', async () => {
-    const { runtime, openCode, emit } = createRuntime();
+    const { runtime, omp, emit } = createRuntime();
     runtime.start();
     await runtime.enqueue(SESSION, DIRECTORY, item());
-    // v2 reports a user abort as `session.execution.interrupted`, which the
-    // translator turns into an aborted `session.idle`.
+    // The hub turns an interruption into an aborted `session.idle`.
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     emit({ type: 'session.idle', properties: { sessionID: SESSION, aborted: true, reason: 'user' } });
     await settle(10);
-    expect(openCode.state.sent).toHaveLength(0);
+    expect(omp.state.sent).toHaveLength(0);
     await settle(80);
-    expect(openCode.state.sent).toHaveLength(1);
+    expect(omp.state.sent).toHaveLength(1);
   });
 
   it('honors a hold until it is released', async () => {
-    const { runtime, openCode, emit } = createRuntime();
+    const { runtime, omp, emit } = createRuntime();
     runtime.start();
     await runtime.enqueue(SESSION, DIRECTORY, item());
     runtime.setHold(SESSION, true, 60_000);
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
-    expect(openCode.state.sent).toHaveLength(0);
+    expect(omp.state.sent).toHaveLength(0);
 
     runtime.setHold(SESSION, false);
     await settle();
-    expect(openCode.state.sent).toHaveLength(1);
+    expect(omp.state.sent).toHaveLength(1);
   });
 
-  it('survives a restart and delivers once OpenCode reconnects', async () => {
+  it('survives a restart and delivers once the runtime reconnects', async () => {
     const dataDir = makeDataDir();
     const first = createRuntime({ dataDir });
     first.runtime.start();
-    first.openCode.state.active = { [SESSION]: { type: 'running' } };
+    first.omp.state.busy[SESSION] = true;
     await first.runtime.enqueue(SESSION, DIRECTORY, item({ content: 'persisted', text: 'persisted', contextPreview: 'Saved context preview' }));
     await first.runtime.flush();
     first.runtime.stop();
@@ -350,8 +363,8 @@ describe('message queue runtime', () => {
     expect(second.runtime.sessionSnapshot(SESSION).items[0].contextPreview).toBe('Saved context preview');
     second.connect();
     await settle();
-    expect(second.openCode.state.sent).toHaveLength(1);
-    expect(second.openCode.state.sent[0].body).toEqual({ text: 'persisted' });
+    expect(second.omp.state.sent).toHaveLength(1);
+    expect(second.omp.state.sent[0]).toEqual({ sessionId: SESSION, text: 'persisted' });
   });
 
   it('moves an unreadable queue file aside instead of treating it as empty', async () => {
@@ -364,17 +377,11 @@ describe('message queue runtime', () => {
   });
 
   it('refuses to remove or take the item currently being sent', async () => {
-    const { runtime, openCode, emit } = createRuntime();
+    const { runtime, omp, emit } = createRuntime();
     runtime.start();
     let release;
-    // active map, message tail, the subagent check (active map, children),
-    // model switch, then the prompt itself (held open until released)
-    openCode.fetchImpl.mockImplementationOnce(async () => Response.json({ location: {}, data: {} }))
-      .mockImplementationOnce(async () => Response.json({ data: [], cursor: {} }))
-      .mockImplementationOnce(async () => Response.json({ data: {} }))
-      .mockImplementationOnce(async () => Response.json({ data: [], cursor: {} }))
-      .mockImplementationOnce(async () => new Response(null, { status: 204 }))
-      .mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(new Response(null, { status: 204 })); }));
+    // The send is held open at the prompt until released.
+    omp.host.prompt.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(true); }));
     const { itemId } = await runtime.enqueue(SESSION, DIRECTORY, item());
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
@@ -440,14 +447,13 @@ describe('message queue runtime', () => {
   it('names the directory in the broadcast that empties a queue', async () => {
     // The UI keys its projection by directory; without it the client cannot
     // tell which queue just delivered its last message and keeps showing it.
-    const { runtime, emit, broadcasts, openCode } = createRuntime();
+    const { runtime, emit, broadcasts, omp } = createRuntime();
     runtime.start();
     await runtime.enqueue(SESSION, DIRECTORY, item());
-    openCode.state.active = {};
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
 
-    expect(openCode.state.sent).toHaveLength(1);
+    expect(omp.state.sent).toHaveLength(1);
     expect(runtime.snapshot().sessions).toEqual([]);
     expect(broadcasts.at(-1).properties.session).toEqual({ sessionId: SESSION, directory: DIRECTORY, items: [], sendingId: null });
   });
@@ -471,30 +477,15 @@ describe('message queue runtime', () => {
     expect(broadcasts.at(-1).properties.session).toMatchObject({ sessionId: SESSION, items: [] });
   });
 
-  it('dispatches a queued slash command through the command endpoint', async () => {
-    const { runtime, openCode, emit } = createRuntime();
-    runtime.start();
-    openCode.state.commands = [{ name: 'review' }];
-    await runtime.enqueue(SESSION, DIRECTORY, item({ content: '/review src', text: '/review src', sendConfig: { providerID: 'p', modelID: 'm', agent: 'build', variant: 'max' } }));
-    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
-    await settle();
-    expect(openCode.state.sent).toHaveLength(1);
-    expect(openCode.state.sent[0].path).toBe(`/api/session/${SESSION}/command`);
-    // v2's command route takes `text`, and the selection lives on the session.
-    expect(openCode.state.sent[0].body).toEqual({ name: 'review', text: 'src' });
-  });
-
-  it('delivers captured context as synthetic messages, instructions first, before project knowledge', async () => {
+  it('folds captured context and project knowledge into the prompt, instructions first', async () => {
     const knowledge = {
       resolvePendingForSession: async () => ({ text: 'pinned notes', signature: 'sig-1' }),
       recordDelivered: async () => {},
     };
-    const { runtime, openCode, emit } = createRuntime({ knowledge });
+    const { runtime, omp, emit } = createRuntime({ knowledge });
     runtime.start();
     const metadata = { openchamberContext: { kind: 'github-pr', number: 7, title: 'PR', url: 'https://x/pr/7' } };
     await runtime.enqueue(SESSION, DIRECTORY, item({
-      agentMention: 'reviewer',
-      attachments: [{ id: 'a', filename: 'f.txt', mimeType: 'text/plain', size: 1, source: 'local', dataUrl: 'data:text/plain,hi' }],
       context: [
         { kind: 'context', text: 'the diff', metadata, instructions: 'how to read it' },
         { kind: 'synthetic', text: 'conflict payload' },
@@ -504,98 +495,54 @@ describe('message queue runtime', () => {
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
 
-    // v2 has no inline synthetic parts: everything attached to the message is
-    // admitted as its own synthetic message, before the prompt.
-    expect(openCode.state.sent.map((entry) => entry.path)).toEqual([
-      `/api/session/${SESSION}/synthetic`,
-      `/api/session/${SESSION}/synthetic`,
-      `/api/session/${SESSION}/synthetic`,
-      `/api/session/${SESSION}/synthetic`,
-      `/api/session/${SESSION}/synthetic`,
-      `/api/session/${SESSION}/prompt`,
-    ]);
-    expect(openCode.state.sent.slice(0, 5).map((entry) => entry.body)).toEqual([
-      { text: 'how to read it', resume: false },
-      { text: 'the diff', resume: false, metadata },
-      { text: 'conflict payload', resume: false },
-      { text: 'use the skill', resume: false },
-      { text: 'pinned notes', resume: false },
-    ]);
-    expect(openCode.state.sent.at(-1).body).toEqual({
-      text: 'follow up',
-      files: [{ uri: 'data:text/plain,hi', name: 'f.txt' }],
-      agents: [{ name: 'reviewer' }],
-    });
+    // OMP sends one authored text per turn and has no synthetic message, so the
+    // context rides in front of the message instead of ahead of it.
+    expect(omp.state.sent).toHaveLength(1);
+    expect(omp.state.sent[0].text).toBe([
+      'how to read it',
+      'the diff',
+      'conflict payload',
+      'use the skill',
+      'pinned notes',
+      'follow up',
+    ].join('\n\n'));
   });
 
-  it('keeps files on the command route, which is all that route accepts', async () => {
-    const { runtime, openCode, emit } = createRuntime();
+  it('fails a queued message with attachments rather than dropping them', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { runtime, omp, emit } = createRuntime();
     runtime.start();
-    openCode.state.commands = [{ name: 'review' }];
     await runtime.enqueue(SESSION, DIRECTORY, item({
-      content: '/review',
-      text: '/review',
       attachments: [{ id: 'a', filename: 'f.txt', mimeType: 'text/plain', size: 1, source: 'local', dataUrl: 'data:text/plain,hi' }],
     }));
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
-    expect(openCode.state.sent[0].path).toBe(`/api/session/${SESSION}/command`);
-    expect(openCode.state.sent[0].body).toEqual({
-      name: 'review',
-      text: '',
-      files: [{ uri: 'data:text/plain,hi', name: 'f.txt' }],
-    });
+
+    expect(omp.state.sent).toEqual([]);
+    expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(1);
+    expect(String(warn.mock.calls.at(-1)?.[1] ?? '')).toContain('message attachments');
   });
 
-  it('admits captured context as synthetic messages and still runs a queued command through the command route', async () => {
-    // The command route takes attachments only, so the context goes ahead as
-    // synthetic messages; the command itself keeps its route, because sending
-    // "/review ..." as a prompt would skip the template OpenCode expands there.
-    const { runtime, openCode, emit } = createRuntime();
+  it('fails a queued command loudly instead of sending it as raw slash text', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { runtime, omp, emit } = createRuntime();
     runtime.start();
-    openCode.state.commands = [{ name: 'review', description: 'Review' }];
-    const metadata = { openchamberContext: { kind: 'chat-quote', quote: 'q', text: 'why?' } };
-    await runtime.enqueue(SESSION, DIRECTORY, item({
-      content: '/review src "error handling"',
-      text: '/review src "error handling"',
-      context: [{ kind: 'context', text: 'quoted', metadata }],
-    }));
+    omp.state.commands = [{ name: 'review' }];
+    await runtime.enqueue(SESSION, DIRECTORY, item({ content: '/review src', text: '/review src' }));
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
 
-    expect(openCode.state.sent.map((entry) => entry.path)).toEqual([
-      `/api/session/${SESSION}/synthetic`,
-      `/api/session/${SESSION}/command`,
-    ]);
-    expect(openCode.state.sent[0].body).toEqual({ text: 'quoted', resume: false, metadata });
-    expect(openCode.state.sent[1].body).toEqual({ name: 'review', text: 'src "error handling"' });
+    expect(omp.state.commands).toEqual([{ name: 'review' }]);
+    expect(omp.state.sent).toEqual([]);
+    expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(1);
+    expect(String(warn.mock.calls.at(-1)?.[1] ?? '')).toContain('the "/review" command');
   });
 
-  it('delivers pending project knowledge ahead of a queued command and records it', async () => {
-    const recorded = [];
-    const knowledge = {
-      resolvePendingForSession: async () => ({ text: 'pinned notes', signature: 'sig-1' }),
-      recordDelivered: async (sessionId, directory, signature) => { recorded.push({ sessionId, directory, signature }); },
-    };
-    const { runtime, openCode, emit } = createRuntime({ knowledge });
+  it('fails before admitting anything when the command lookup fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { runtime, omp, emit } = createRuntime();
     runtime.start();
-    openCode.state.commands = [{ name: 'review' }];
-    await runtime.enqueue(SESSION, DIRECTORY, item({ content: '/review', text: '/review' }));
-    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
-    await settle();
-
-    expect(openCode.state.sent.map((entry) => entry.path)).toEqual([
-      `/api/session/${SESSION}/synthetic`,
-      `/api/session/${SESSION}/command`,
-    ]);
-    expect(openCode.state.sent[0].body).toEqual({ text: 'pinned notes', resume: false });
-    expect(recorded).toEqual([{ sessionId: SESSION, directory: DIRECTORY, signature: 'sig-1' }]);
-  });
-
-  it('admits nothing when the command lookup fails, so a retry cannot duplicate the context', async () => {
-    const { runtime, openCode, emit } = createRuntime();
-    runtime.start();
-    openCode.state.failNext = /^\/api\/command$/;
+    omp.state.fail = { op: 'commands', error: new Error('command list unavailable') };
     await runtime.enqueue(SESSION, DIRECTORY, item({
       content: '/review',
       text: '/review',
@@ -604,7 +551,7 @@ describe('message queue runtime', () => {
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
 
-    expect(openCode.state.sent).toEqual([]);
+    expect(omp.state.sent).toEqual([]);
     expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(1);
   });
 
@@ -620,26 +567,20 @@ describe('message queue runtime', () => {
     expect(taken.item.context).toEqual(context);
   });
 
-  it('attaches pending project knowledge and records its delivery', async () => {
+  it('attaches pending project knowledge to the prompt and records its delivery', async () => {
     const recorded = [];
     const knowledge = {
       resolvePendingForSession: async () => ({ text: 'pinned notes', signature: 'sig-1' }),
       recordDelivered: async (sessionId, directory, signature) => { recorded.push({ sessionId, directory, signature }); },
     };
-    const { runtime, openCode, emit } = createRuntime({ knowledge });
+    const { runtime, omp, emit } = createRuntime({ knowledge });
     runtime.start();
-    await runtime.enqueue(SESSION, DIRECTORY, item({ agentMention: 'reviewer', attachments: [{ id: 'a', filename: 'f.txt', mimeType: 'text/plain', size: 1, source: 'local', dataUrl: 'data:text/plain,hi' }] }));
+    await runtime.enqueue(SESSION, DIRECTORY, item());
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
-    // Knowledge is admitted as a synthetic message ahead of the prompt.
-    expect(openCode.state.sent[0].path).toBe(`/api/session/${SESSION}/synthetic`);
-    expect(openCode.state.sent[0].body).toEqual({ text: 'pinned notes', resume: false });
-    expect(openCode.state.sent[1].path).toBe(`/api/session/${SESSION}/prompt`);
-    expect(openCode.state.sent[1].body).toEqual({
-      text: 'follow up',
-      files: [{ uri: 'data:text/plain,hi', name: 'f.txt' }],
-      agents: [{ name: 'reviewer' }],
-    });
+
+    expect(omp.state.sent).toHaveLength(1);
+    expect(omp.state.sent[0].text).toBe('pinned notes\n\nfollow up');
     expect(recorded).toEqual([{ sessionId: SESSION, directory: DIRECTORY, signature: 'sig-1' }]);
   });
 });

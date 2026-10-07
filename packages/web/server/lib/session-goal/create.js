@@ -47,8 +47,6 @@ const fitObjective = async ({ objective, directory, sessionID, providerID, model
 };
 
 export const createSessionGoal = async ({
-  baseUrl,
-  authHeaders,
   sessionID,
   directory,
   objective,
@@ -99,10 +97,8 @@ export const createSessionGoal = async ({
     createdAt: now,
     updatedAt: now,
   };
-  // OpenCode 2.x accepts session metadata only at create time, so the goal
-  // record lives in OpenChamber's own store next to the objective text.
-  void baseUrl;
-  void authHeaders;
+  // The goal record lives in OpenChamber's own store next to the objective text:
+  // the runtime takes no session metadata beyond what it owns.
   if (typeof persistSessionGoal !== 'function') {
     throw new Error('goal mode needs a session metadata store to save the goal in');
   }

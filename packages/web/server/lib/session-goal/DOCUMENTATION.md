@@ -89,21 +89,21 @@ before touching the filesystem). Rationale: metadata rides every
    ~250ms for an explicit Resume so the nudge feels immediate — since setting
    a goal on an idle session emits no status transition.
 3. On fire (`tick`), gated by the `sessionGoalEnabled` setting:
-   - fetch session (skip sub-agent sessions), require an `active` goal;
-   - authoritative live-activity check after the quiet window: re-read
-     `/api/session/active`, bail if the parent resumed; then list the
-     parent's subagent sessions through `GET /api/session?parentID=` (cursor
-     paged) and bail while any of them is active. A status or children fetch
-     failure is unknown, not empty, so it skips the audit and retries after
-     another quiet window;
-     both reads live in `../opencode/session-activity.js`, shared with the
+   - read the session's record from the OMP runtime's own session index,
+     require an `active` goal (OMP lists no subagent sessions, so there is no
+     child to skip);
+   - authoritative live-activity check after the quiet window: read the
+     session's busy flag and bail if it resumed; the OMP runtime lists no
+     subagent sessions, so there is no children page to walk. A status read
+     that could not be made is unknown, not empty, so it skips the audit and
+     retries after another quiet window;
+     the probe lives in `../openchamber/session-activity.js`, shared with the
      notification runtime;
-   - messages come from `/api/session/:id/message` as v2's flat records
-     (`type`, `content[]`, `model`, `finish`, `tokens`); `toLoopMessage`
-     projects them into the `{ info, parts }` view the rest of the tick reads,
-     and a completed `compaction` record plays v1's `summary: true` assistant
-     turn. v2 gives a compaction only `time.created`, so the projection
-     stamps `time.completed` from it: every "finished" check in the tick reads
+   - messages come from the session's canonical `{ info, parts }` page,
+     oldest first. `toLoopMessage` normalizes it into the view the rest of the
+     tick reads, and a completed `compaction` record plays the
+     `summary: true` assistant turn; the projection stamps `time.completed`
+     from `time.created`: every "finished" check in the tick reads
      `time.completed`, and without it a compaction looks still running. Other
      plumbing roles are dropped from the view;
    - quiescence check via the message tail (trailing user message or

@@ -4,7 +4,7 @@ import path from 'path';
 
 import { assertGitAvailable, looksLikeAuthError, runGit } from './git.js';
 import { parseSkillRepoSource } from './source.js';
-import { OPENCODE_CONFIG_DIR } from '../opencode/shared.js';
+import { OPENCODE_CONFIG_DIR } from '../openchamber/agent-config-files.js';
 
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
 

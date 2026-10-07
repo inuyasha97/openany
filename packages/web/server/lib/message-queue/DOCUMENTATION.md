@@ -101,40 +101,36 @@ persisted "sending" flag would strand a message forever.
    the session is held. It re-arms after a 2 s post-abort hold (the UI's
    old behavior: a stop is not immediately followed by the next prompt) or
    while the head item is in retry backoff.
-4. Idleness is re-verified against OpenCode before sending, because
+4. Idleness is re-verified against the OMP runtime before sending, because
    a prompt into a running turn steers into it instead of starting the
-   next one: `GET /api/session/active` must not list the session, and the
-   trailing message must not be an unfinished assistant reply (that route
-   lists only running sessions, so a missed busy event leaves no entry while
-   a turn still streams). An unfinished reply created before this
-   runtime started does not block: its run died with the previous server and
-   will never complete, so a restored queue would wait on it forever. A reply
-   with no `created` time still blocks. A failed fetch is unknown, never idle:
-   the tick re-arms with backoff.
-   The turn must also be over for the session's subagents: a parent idles
-   while a background subagent works and runs again when OpenCode hands the
-   result back. While `../opencode/session-activity.js` finds a running child
-   the head waits (the rerun's idle event re-arms it, a 5 s recheck covers a
-   missed one); a failed check is unknown and backs off like the rest.
-5. The head is marked in flight (broadcast), then sent. The captured model and
-   agent are switched onto the session first (`POST /session/:id/model`,
-   `/agent`), because v2 holds both on the session rather than in the body; a
-   captured `openchamber/auto` is resolved into a real pair by the routing
-   runtime beforehand. Then the captured context goes ahead as synthetic
-   messages (`POST /session/:id/synthetic` with `resume: false`, an attached
-   item's metadata riding along), followed by pending project knowledge
+   next one: the session's busy flag must be false, and the
+   trailing message must not be an unfinished assistant reply (the flag can
+   be false while a turn still streams, if a busy event was missed). An
+   unfinished reply created before this runtime started does not block: its
+   run died with the previous server and will never complete, so a restored
+   queue would wait on it forever. A reply with no `created` time still
+   blocks. A failed read is unknown, never idle: the tick re-arms with
+   backoff.
+   The OMP runtime lists no subagent sessions — a subagent runs inside its
+   parent's turn — so the probe
+   (`../openchamber/session-activity.js`) answers "no working children"; it
+   still passes a status read that could not be made through as unknown.
+5. The head is marked in flight (broadcast), then sent. The captured model is
+   switched onto the session first (`setSessionModel`), because the runtime
+   holds it on the session rather than in the prompt; a captured
+   `openchamber/auto` is resolved into a real pair by the routing runtime
+   beforehand. Then the captured context, the pending project knowledge
    (`sessionKnowledgeRuntime.resolvePendingForSession`, recorded as delivered
-   only after the send is accepted), and then the message itself:
-   - text starting with `/` that names a command in OpenCode's `/command`
-     list (skills included) goes to `POST /session/:id/command` (body fields
-     `name` and `text` since OpenCode 2.0.8) with its file attachments. The
-     command route takes files only, which is why the context went ahead of
-     it; sending "/name args" as a prompt instead would skip the template
-     OpenCode expands only on that route. The command lookup runs before
-     anything is admitted, so a failed lookup fails the send without leaving
+   only after the send is accepted) and the message text go out as ONE
+   authored prompt, in that order: OMP sends one text per turn and has no
+   synthetic message.
+   - A command that a queued text names in the runtime's command list, an
+     agent selection, a model variant, an agent mention or file attachments
+     have no OMP counterpart: the send fails with `OmpUnsupportedError`
+     (`code: OMP_UNSUPPORTED`, status 501). The command lookup runs before
+     anything is sent, so a failed lookup fails the send without leaving
      context behind for the retry to duplicate;
-   - otherwise `POST /session/:id/prompt` with the user's text, files and
-     agent mention.
+   - otherwise the prompt carries the user's text.
    Success removes the item, persists, broadcasts, and marks the user
    message sent for notifications. Failure keeps the item, backs off
    2 s → 60 s (doubling per consecutive failure of that item), and re-arms.

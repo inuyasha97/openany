@@ -4,7 +4,7 @@ import {
   getWorktreeBootstrapStatus as getWorktreeBootstrapStatusDefault,
   resolvePrimaryWorktreeRoot,
 } from '../git/index.js';
-import { expandSnippets } from '../opencode/snippets.js';
+import { expandSnippets } from '../openchamber/snippets.js';
 import { AUTO_MODEL_REF, isAutoModel } from '../routing/defaults.js';
 import { parseScheduledCommandPrompt } from '../scheduled-tasks/runtime.js';
 import { createSessionGoal } from '../session-goal/create.js';
@@ -379,8 +379,6 @@ export const createOpenChamberSessionService = (dependencies) => {
     readSettingsFromDiskMigrated,
     sanitizeProjects,
     validateDirectoryPath,
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders,
     emitSessionCreatedEvent,
     broadcastGlobalUiEvent,
     createSessionGoal: createSessionGoalOverride,
@@ -406,10 +404,6 @@ export const createOpenChamberSessionService = (dependencies) => {
   }
   const archiveStore = injectedArchiveStore || createArchiveStore({ dataDir });
   const sessionMetadataStore = injectedSessionMetadataStore || createSessionMetadataStore({ dataDir });
-
-  // The goal record is still created through the goal runtime, which is handed
-  // the OpenCode-shaped coordinates it has always taken (see `index.js`).
-  const openCodeBaseUrl = () => buildOpenCodeUrl('/', '').replace(/\/$/, '');
 
   const waitForWorktreeBootstrapReady = async ({ directory }) => {
     const deadline = Date.now() + WORKTREE_BOOTSTRAP_TIMEOUT_MS;
@@ -472,8 +466,6 @@ export const createOpenChamberSessionService = (dependencies) => {
   };
 
   const dispatchPrompt = async ({
-    baseUrl,
-    authHeaders,
     sessionID,
     directory,
     projectId,
@@ -534,8 +526,6 @@ export const createOpenChamberSessionService = (dependencies) => {
       // The runtime publishes no command template, so a slash command's goal
       // objective is the prompt the user typed rather than the expanded body.
       await (createSessionGoalOverride || createSessionGoal)({
-        baseUrl,
-        authHeaders,
         sessionID,
         directory,
         objective: expandedPrompt,
@@ -746,8 +736,6 @@ export const createOpenChamberSessionService = (dependencies) => {
       await waitForWorktreeBootstrapReady({ directory: sessionDirectory });
     }
 
-    const baseUrl = openCodeBaseUrl();
-    const authHeaders = getOpenCodeAuthHeaders();
     const sessionID = await createSession({
       directory: sessionDirectory,
       ...(title ? { title } : {}),
@@ -756,8 +744,6 @@ export const createOpenChamberSessionService = (dependencies) => {
     let dispatch = { model, promptDispatched: false, dispatchedAsCommand: false };
     if (prompt) {
       dispatch = await dispatchPrompt({
-        baseUrl,
-        authHeaders,
         sessionID,
         directory: sessionDirectory,
         projectId: resolvedDirectory.projectId,
@@ -835,8 +821,6 @@ export const createOpenChamberSessionService = (dependencies) => {
         requestedModel,
       });
 
-      const baseUrl = openCodeBaseUrl();
-      const authHeaders = getOpenCodeAuthHeaders();
       if (action === 'fork') {
         targetSession = await forkSession();
         targetSessionID = targetSession.id;
@@ -856,8 +840,6 @@ export const createOpenChamberSessionService = (dependencies) => {
       });
 
       const dispatch = await dispatchPrompt({
-        baseUrl,
-        authHeaders,
         sessionID: targetSessionID,
         directory,
         projectId: resolvedDirectory.projectId,

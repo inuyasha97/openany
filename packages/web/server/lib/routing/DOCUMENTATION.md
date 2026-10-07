@@ -112,16 +112,18 @@ Classification providers:
   Zen answers with no credential at all. Usable while
   `ZEN_JEV_PROMOTION_ACTIVE` is true; flip it when OpenCode ends the promotion.
 - `zen-key`: the same endpoint as `jev-1.13` with a Zen API key read from
-  OpenCode's credentials (`opencode/auth.js`, entry `opencode`, type `api`).
-  An OpenCode account sign-in is an OAuth credential, and zen rejects it as a
-  key ("Invalid API key", checked 2026-09-27), so it does not count. The paid
+  OMP's credentials (`openchamber/credentials.js`, entry `opencode`, type
+  `api`). OMP stores the Zen key as `opencode-zen` and the reader republishes
+  it under `opencode`, which is the entry this classifier reads. An OMP
+  account sign-in is an OAuth credential, and zen rejects it as a key
+  ("Invalid API key", checked 2026-09-27), so it does not count. The paid
   call itself is not verified live yet.
 - `openrouter`: `openrouter.ai/api/v1/systemone` as `jev-latest` (OpenRouter's
-  `~typesafe/jev-latest` alias) with the OpenRouter API key saved in OpenCode
+  `~typesafe/jev-latest` alias) with the OpenRouter API key saved in OMP
   (entry `openrouter`, type `api`), billed to that OpenRouter account.
 - `vercel`: `ai-gateway.vercel.sh/typesafe/v1/systemone` as `typesafe-ai/jev`
-  with the Vercel AI Gateway API key saved in OpenCode (entry `vercel`, type
-  `api`). Both gateways implement TypeSafe's request and response shapes, so
+  with the Vercel AI Gateway API key saved in OMP (entry `vercel`, type
+  `api`; OMP stores it as `vercel-ai-gateway` and the reader republishes it). Both gateways implement TypeSafe's request and response shapes, so
   `jev.js` is the same for every source. Both answer 401 without a key
   (checked 2026-09-27); a paid call is not verified live yet.
 - `typesafe`: `api.typesafe.ai/v1/systemone` as `jev-latest` with the key saved
@@ -165,17 +167,19 @@ up in OpenChamber for Jev before keys borrowed from OpenCode); none usable
 means no Jev.
 `zen-promo` needs no credential, so it is never a fallback: only an explicit
 pick sends anything there, and `off` never falls back.
-The OpenCode keys are read on every request, so a key added or removed in
-OpenCode counts from the next request on.
+The stored keys are read on every request, so a key added or removed in OMP
+counts from the next request on.
 
 OpenRouter and Vercel also count a key in `OPENROUTER_API_KEY` /
-`AI_GATEWAY_API_KEY` (`readOpenCodeKeys`), because OpenCode connects those
-providers from the variable live and never stores it (v2 `integration.ts`
-`resolveConnections`). A key saved in OpenCode wins. The server's
-`process.env` already carries the login-shell snapshot and a managed OpenCode
-is spawned from it, so both see the same variable; an external OpenCode
-started elsewhere may not, and then the variable simply is not seen. Zen has
-no variable.
+`AI_GATEWAY_API_KEY` (`readOpenCodeKeys`), which is where both providers fall
+back before they are ever logged in. A stored key wins, and the reader already
+folds OpenRouter's variable into its own answer, so the two agree. The
+server's `process.env` already carries the login-shell snapshot and a managed
+OMP is spawned from it, so both see the same variable; an OMP started
+elsewhere may not, and then the variable simply is not seen. Zen has no
+variable in this map: OMP reads `OPENCODE_API_KEY` for it, which the
+credential reader does fold in, so a keyless zen install picks up the
+variable through the stored entry.
 
 Every zen call is tagged `x-opencode-client: openchamber`. Dax approved the
 free use in Slack on 2026-09-22 on terms the code and the copy keep together:

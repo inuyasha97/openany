@@ -27,7 +27,7 @@ import {
   resolveClassifier,
 } from './classifier.js';
 import { loadRoutingHistory } from './history.js';
-import { readAuthFile } from '../opencode/auth.js';
+import { readAuthFile } from '../openchamber/credentials.js';
 import { readSessionMessages, setSessionModel } from '../agents/omp-host-access.js';
 import { ENTERPRISE_MODE_ERROR, isEnterpriseMode } from '../enterprise-mode.js';
 

@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 
-import { createUpstreamSseReader } from './upstream-reader.js';
 import { serializeMessageStreamWsEvent } from './protocol.js';
 import { translateWireEvent } from './translate-v2.js';
 import { createDeltaCoalescer, DELTA_COALESCE_WINDOW_MS } from './delta-coalescer.js';
@@ -10,12 +9,13 @@ import { createDeltaCoalescer, DELTA_COALESCE_WINDOW_MS } from './delta-coalesce
 const MESSAGE_STREAM_GLOBAL_REPLAY_LIMIT = 2048;
 const MESSAGE_STREAM_GLOBAL_REPLAY_BYTES = 8 * 1024 * 1024;
 
+/**
+ * The server's shared event hub: it coalesces, numbers, replays and fans out
+ * the events the runtime pushes into it (`injectEvent`) to every server-side
+ * subscriber and to the browser stream bridge. There is no upstream HTTP
+ * reader any more — the OMP runtime host is the only producer.
+ */
 export function createGlobalMessageStreamHub({
-  buildOpenCodeUrl,
-  getOpenCodeAuthHeaders,
-  fetchImpl = fetch,
-  upstreamStallTimeoutMs,
-  upstreamReconnectDelayMs,
   replayLimit = MESSAGE_STREAM_GLOBAL_REPLAY_LIMIT,
   replayByteLimit = MESSAGE_STREAM_GLOBAL_REPLAY_BYTES,
   deltaCoalesceWindowMs = DELTA_COALESCE_WINDOW_MS,
@@ -26,25 +26,16 @@ export function createGlobalMessageStreamHub({
   const eventSubscribers = new Set();
   // The event subscribers that also take the events of isolated spaces.
   const spaceSubscribers = new Set();
-  const statusSubscribers = new Set();
   const replay = [];
   let replayBytes = 0;
   let latestEventId;
-  // OpenCode's event stream carries no SSE ids (verified on 1.18.30: not one
-  // frame in a full response), and an event without an id never entered the
-  // replay buffer, so a reconnecting browser had no cursor and every event in
-  // the gap was gone. The replay log is this hub's own, so the hub numbers
-  // what upstream leaves unnumbered. The per-process prefix makes a cursor
-  // from before a restart miss instead of matching an unrelated sequence
-  // number, which reports `replayReset` and sends the client to repair.
+  // The replay log is this hub's own, so events that carry no id (projected
+  // runtime events do not) are numbered here. The per-process prefix makes a
+  // cursor from before a restart miss instead of matching an unrelated
+  // sequence number, which reports `replayReset` and sends the client to
+  // repair.
   const replayIdPrefix = `oc-${randomUUID().slice(0, 8)}-`;
   let replaySequence = 0;
-
-  let controller = null;
-  let reader = null;
-  let connected = false;
-  let everConnected = false;
-  let buildUrlFailed = false;
 
   const notifySubscriber = (kind, subscriber, payload) => {
     try {
@@ -59,12 +50,6 @@ export function createGlobalMessageStreamHub({
     }
   };
 
-  const notifyStatus = (status) => {
-    for (const subscriber of Array.from(statusSubscribers)) {
-      notifySubscriber('status', subscriber, status);
-    }
-  };
-
   const normalizeEvent = ({ envelope, payload }) => {
     const directory =
       typeof envelope?.directory === 'string' && envelope.directory.length > 0 ? envelope.directory : 'global';
@@ -72,7 +57,7 @@ export function createGlobalMessageStreamHub({
       ? envelope.eventId
       : `${replayIdPrefix}${String(++replaySequence).padStart(12, '0')}`;
     // An event of an isolated space carries the space's id; subscribers see it only when they
-    // asked for space events, because a consumer that acts on the host's OpenCode by
+    // asked for space events, because a consumer that acts on the host's runtime by
     // directory must never act on a space's directory.
     const spaceId = typeof envelope?.spaceId === 'string' && envelope.spaceId.length > 0 ? envelope.spaceId : null;
     let serializedFrame;
@@ -126,79 +111,7 @@ export function createGlobalMessageStreamHub({
 
   const coalescer = createDeltaCoalescer({ emit: commitEvent, windowMs: deltaCoalesceWindowMs });
 
-  const start = () => {
-    if (reader) {
-      return;
-    }
-
-    controller = new AbortController();
-    reader = createUpstreamSseReader({
-      signal: controller.signal,
-      stallTimeoutMs: upstreamStallTimeoutMs,
-      reconnectDelayMs: upstreamReconnectDelayMs,
-      fetchImpl,
-      buildUrl: () => {
-        buildUrlFailed = false;
-        try {
-          return new URL(buildOpenCodeUrl('/api/event', ''));
-        } catch {
-          buildUrlFailed = true;
-          throw new Error('OpenCode service unavailable');
-        }
-      },
-      getHeaders: getOpenCodeAuthHeaders,
-      onConnect() {
-        connected = true;
-        const wasReady = everConnected;
-        everConnected = true;
-        notifyStatus({ type: 'connect', wasReady });
-      },
-      onDisconnect({ reason }) {
-        connected = false;
-        notifyStatus({ type: 'disconnect', reason });
-      },
-      onEvent(event) {
-        coalescer.push(event);
-      },
-      onError(error) {
-        if (controller?.signal.aborted) {
-          return;
-        }
-
-        notifyStatus({
-          type: everConnected ? 'error' : 'initial-error',
-          error,
-          buildUrlFailed,
-        });
-      },
-    });
-
-    void reader.start();
-  };
-
-  const stop = () => {
-    connected = false;
-    // Text that already arrived belongs in the retained replay suffix.
-    coalescer.flush();
-    reader?.stop();
-    if (controller && !controller.signal.aborted) {
-      controller.abort();
-    }
-    reader = null;
-    controller = null;
-    everConnected = false;
-    buildUrlFailed = false;
-  };
-
   return {
-    start,
-    stop,
-    isConnected() {
-      return connected;
-    },
-    hasConnected() {
-      return everConnected;
-    },
     /**
      * `spaces: true` also delivers the events of isolated spaces, which carry `spaceId`.
      * Without it a subscriber sees the host's events only, as every consumer did before spaces.
@@ -218,12 +131,6 @@ export function createGlobalMessageStreamHub({
      */
     injectEvent({ payload, directory, spaceId }) {
       coalescer.push({ envelope: { directory, spaceId }, payload });
-    },
-    subscribeStatus(subscriber) {
-      statusSubscribers.add(subscriber);
-      return () => {
-        statusSubscribers.delete(subscriber);
-      };
     },
     // A client that becomes ready must not receive text from before it was
     // ready merged into its first live delta, so the bridge commits pending

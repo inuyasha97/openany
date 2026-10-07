@@ -1,6 +1,5 @@
-import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
-const FETCH_TIMEOUT_MS = 15_000;
-const MESSAGE_FETCH_LIMIT = 20;
+import { readSessionMessages, readSessions } from '../agents/omp-host-access.js';
+import { unsupportedOnOmp } from '../openchamber/omp-unsupported.js';
 
 const isRecord = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
@@ -17,31 +16,14 @@ const readContextState = (session) => {
   return { metadata, openchamber, messages };
 };
 
-const buildContextPrompt = (entries) => {
-  const timeline = entries.map(({ pinned, text }) => {
-    const timestamp = new Date(pinned.createdAt).toISOString();
-    return `## ${pinned.role} — ${timestamp}\n\n${text}`;
-  }).join('\n\n---\n\n');
-  return [
-    'The following messages are from the compacted conversation. The user explicitly marked them as important and required in your context. Pay close attention to them; they may have been sent by either the user or you before compaction.',
-    'Use them while continuing the pre-compaction work. Do not treat this context restoration as a new standalone task.',
-    'If any tasks or next steps remain, do not acknowledge, summarize, or mention this restored context in a separate response. Simply continue the work and use it silently as background context. Do not append a recap of it after completing those tasks. Only if no tasks or next steps remain, give the user a very brief summary of the important restored context in no more than one short paragraph, without lists or a detailed recap.',
-    '',
-    timeline,
-  ].join('\n');
-};
-
 /**
  * Re-injects the messages the user pinned as obligatory after a compaction.
  *
  * Both the pinned list and the cursor live in OpenChamber's own session
- * metadata store — v2 accepts session metadata only at create time.
- * `readSessionMetadata` reads it and `persistContextCursor` records how far we
- * got; without both seams the runtime stays inert.
+ * metadata store. `readSessionMetadata` reads it and `persistContextCursor`
+ * would record how far we got; without both seams the runtime stays inert.
  */
 export const createContextObligatoryRuntime = ({
-  buildOpenCodeUrl,
-  getOpenCodeAuthHeaders,
   sessionKnowledgeRuntime = null,
   persistContextCursor = null,
   readSessionMetadata = null,
@@ -49,28 +31,14 @@ export const createContextObligatoryRuntime = ({
   const inflight = new Set();
   let stopped = false;
 
-  const openCodeFetch = async (fetchPath, { directory, method = 'GET', body, query } = {}) => {
-    const params = new URLSearchParams(query || {});
-    if (directory) params.set('directory', directory);
-    const search = params.toString();
-    const response = await fetch(`${buildOpenCodeUrl(fetchPath, '')}${search ? `?${search}` : ''}`, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-        ...getOpenCodeAuthHeaders(),
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    if (!response.ok) throw new Error(`OpenCode ${method} ${fetchPath} failed with ${response.status}`);
-    return unwrapOpenCodeResponse(await response.json().catch(() => null));
-  };
-
   const tick = async (sessionId, directory) => {
-    const session = await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}`, { directory });
-    if (session?.parentID) return;
-    // Pins and the cursor are OpenChamber's, not OpenCode's.
+    // OMP lists only top-level sessions, so this is an existence and
+    // availability check: an unknown session or an unavailable runtime ends
+    // the tick. There is no parent to skip — a subagent transcript is not a
+    // session in the runtime's own index.
+    const sessions = await readSessions().catch(() => null);
+    if (!Array.isArray(sessions) || !sessions.some((entry) => entry?.id === sessionId)) return;
+    // Pins and the cursor are OpenChamber's, not the runtime's.
     const stored = { metadata: await readSessionMetadata(sessionId) };
     const state = readContextState(stored);
 
@@ -94,30 +62,18 @@ export const createContextObligatoryRuntime = ({
 
     if (state.messages.length === 0 && !knowledge.text) return;
 
-    const recent = await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/message`, {
-      directory,
-      query: { limit: String(MESSAGE_FETCH_LIMIT) },
-    });
-    // v2 pages messages as `{ data, cursor }`, newest first, and a compaction
-    // is its own message role rather than an assistant message flagged
-    // `summary`.
-    const recentMessages = Array.isArray(recent?.data) ? recent.data : [];
-    if (recentMessages.length === 0) return;
-    const summary = recentMessages.find((message) => message?.type === 'compaction' && message?.status === 'completed');
-    // A v2 compaction message has only `time.created`; `status` says it finished.
-    if (!summary?.id) return;
-    if (state.openchamber.context_obligatory_last_compaction_message_id === summary.id) return;
+    const page = await readSessionMessages(sessionId).catch(() => null);
+    const items = Array.isArray(page?.items) ? page.items : [];
+    if (items.length === 0) return;
+    // A compaction is its own role on the canonical page, with `status` saying
+    // it finished.
+    const summary = items.find((item) => item?.info?.role === 'compaction' && item.info.status === 'completed');
+    if (!summary?.info?.id) return;
+    if (state.openchamber.context_obligatory_last_compaction_message_id === summary.info.id) return;
 
     const fetched = await Promise.allSettled(state.messages.map(async (pinned) => {
-      const message = await openCodeFetch(
-        `/api/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(pinned.id)}`,
-        { directory },
-      );
-      // A user message carries `text`; an assistant one carries `content[]`.
-      const parts = Array.isArray(message?.content)
-        ? message.content
-        : (typeof message?.text === 'string' ? [{ type: 'text', text: message.text }] : []);
-      const text = parts
+      const item = items.find((entry) => entry?.info?.id === pinned.id);
+      const text = (Array.isArray(item?.parts) ? item.parts : [])
         .filter((part) => part?.type === 'text' && typeof part.text === 'string')
         .map((part) => part.text.trim())
         .filter(Boolean)
@@ -130,29 +86,14 @@ export const createContextObligatoryRuntime = ({
       .sort((left, right) => left.pinned.createdAt - right.pinned.createdAt);
     if (entries.length === 0 && !knowledge.text) return;
 
-    // v2 has no inline synthetic parts, and the model/agent selection lives on
-    // the session, so the restored context is simply its own synthetic message.
-    await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/synthetic`, {
-      directory,
-      method: 'POST',
-      body: {
-        text: [knowledge.text, entries.length > 0 ? buildContextPrompt(entries) : '']
-          .filter(Boolean)
-          .join('\n\n---\n\n'),
-        resume: false,
-      },
-    });
-
-    // A merge patch: the store folds this into whatever else the session's
-    // `openchamber` namespace holds, so a concurrent goal or assist write is
-    // not clobbered.
-    const patch = { context_obligatory_last_compaction_message_id: summary.id };
-    if (knowledge.signature) {
-      // Recorded together with the cursor: the session now carries this
-      // knowledge again, so the next send must not repeat it.
-      patch[sessionKnowledgeRuntime.metadataKey] = knowledge.signature;
-    }
-    await persistContextCursor(sessionId, directory, { openchamber: patch });
+    // OpenCode injected the restored context as a synthetic message — neither
+    // a user turn nor an assistant one — and recorded the compaction cursor
+    // behind it. OMP has no synthetic surface and its prompt carries a single
+    // authored text, so the context cannot be restored without starting a turn
+    // and reclassifying it as the user's own message: fail visibly instead, and
+    // leave the cursor unadvanced so an equivalent re-injects rather than skips
+    // it.
+    throw unsupportedOnOmp('restoring pinned context as a synthetic message');
   };
 
   let parkedNoticeLogged = false;

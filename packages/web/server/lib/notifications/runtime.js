@@ -1,5 +1,5 @@
-import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
-import { createSessionActivityProbe } from '../opencode/session-activity.js';
+import { readSessions } from '../agents/omp-host-access.js';
+import { createSessionActivityProbe } from '../openchamber/session-activity.js';
 import { isEnterpriseMode } from '../enterprise-mode.js';
 
 
@@ -17,19 +17,18 @@ export const createNotificationTriggerRuntime = (deps) => {
     sendPushToAllUiSessions,
     sendApnsToAllUiSessions,
     isAnyInteractiveClientVisible,
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders,
     // OpenChamber's own session metadata (the goal lives there, not on the
-    // OpenCode record). Optional: without it no goal can suppress a push.
+    // runtime record). Optional: without it no goal can suppress a push.
     readSessionMetadata = null,
   } = deps;
   let getIsSessionAutoAccepting = deps.getIsSessionAutoAccepting;
-  const activityProbe = createSessionActivityProbe({ buildOpenCodeUrl, getOpenCodeAuthHeaders, timeoutMs: 2000 });
+  const activityProbe = createSessionActivityProbe();
 
-  // A parent goes idle while a background subagent still works; OpenCode then
-  // hands the result back and the parent runs again. That first idle is a
-  // pause, so it announces nothing. When the check cannot be made, the idle is
-  // announced as before: a missed "ready" is worse than an early one.
+  // OpenCode let a parent go idle while a background subagent still worked and
+  // then ran the parent again with the result. OMP lists no subagent sessions
+  // and keeps a subagent inside its parent's turn, so the probe never finds a
+  // working child; the check stays because it is cheap and still honours a
+  // status read that could not be made.
   const isPausedForSubagents = async (sessionId) => {
     const statuses = await activityProbe.fetchActiveSessionStatuses();
     if (!statuses) return false;
@@ -258,29 +257,14 @@ export const createNotificationTriggerRuntime = (deps) => {
     if (cached !== undefined) return cached;
 
     try {
-      const base = buildOpenCodeUrl(`/api/session/${encodeURIComponent(sessionId)}`, '');
-      const url = directory ? `${base}?directory=${encodeURIComponent(directory)}` : base;
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          ...getOpenCodeAuthHeaders(),
-        },
-        signal: AbortSignal.timeout(2000),
-      });
-      if (!response.ok) {
-        return undefined;
-      }
-      const session = unwrapOpenCodeResponse(await response.json().catch(() => null));
-      if (!session || typeof session !== 'object') {
-        return undefined;
-      }
-
-      const parentID = typeof session.parentID === 'string' && session.parentID.length > 0
-        ? session.parentID
-        : null;
-      setCachedSessionParentId(sessionId, directory, parentID);
-      return parentID;
+      // OMP exposes no parent/child link on a session and lists no subagent
+      // sessions, so a session the runtime knows has no parent. A runtime that
+      // cannot be asked answers `undefined` — "could not look".
+      const sessions = await readSessions();
+      if (!Array.isArray(sessions)) return undefined;
+      if (!sessions.some((entry) => entry?.id === sessionId)) return undefined;
+      setCachedSessionParentId(sessionId, directory, null);
+      return null;
     } catch {
       return undefined;
     }
@@ -813,20 +797,12 @@ export const createNotificationTriggerRuntime = (deps) => {
   // Goal settle push: same fanout as the trigger paths (web-push with the
   // full text; APNs with the generic per-type title and the session name as
   // body, so the relay never sees content).
-  const sendGoalSettlePush = async ({ sessionId, directory, status, title, body }) => {
+  const sendGoalSettlePush = async ({ sessionId, status, title, body }) => {
     let sessionName = '';
     try {
-      const base = buildOpenCodeUrl(`/api/session/${encodeURIComponent(sessionId)}`, '');
-      const url = directory ? `${base}?directory=${encodeURIComponent(directory)}` : base;
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { Accept: 'application/json', ...getOpenCodeAuthHeaders() },
-        signal: AbortSignal.timeout(2000),
-      });
-      if (response.ok) {
-        const session = unwrapOpenCodeResponse(await response.json().catch(() => null));
-        if (typeof session?.title === 'string') sessionName = session.title.trim();
-      }
+      const sessions = await readSessions();
+      const session = Array.isArray(sessions) ? sessions.find((entry) => entry?.id === sessionId) : null;
+      if (typeof session?.title === 'string') sessionName = session.title.trim();
     } catch {
       // Session name is presentation sugar for the mobile push — never block on it.
     }

@@ -1,22 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { configureOmpRuntimeHost } from '../agents/omp-host-access.js';
 import { createNotificationTemplateRuntime } from './template-runtime.js';
-
-const originalFetch = globalThis.fetch;
 
 const createRuntime = (settings = {}) => createNotificationTemplateRuntime({
   readSettingsFromDisk: async () => settings,
   persistSettings: vi.fn(async () => {}),
-  buildOpenCodeUrl: (path) => path,
-  getOpenCodeAuthHeaders: () => ({}),
   resolveGitBinaryForSpawn: () => 'git',
 });
 
-describe('notification template runtime zen models', () => {
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
+afterEach(() => {
+  configureOmpRuntimeHost(null);
+});
 
+describe('notification template runtime zen models', () => {
   it('returns no selectable zen models after provider retirement', async () => {
     const runtime = createRuntime();
     const models = await runtime.fetchFreeZenModels();
@@ -32,10 +29,6 @@ describe('notification template runtime zen models', () => {
 });
 
 describe('notification template message extraction', () => {
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
   it('excludes reasoning parts from payload message text', () => {
     const runtime = createRuntime();
 
@@ -68,24 +61,36 @@ describe('notification template message extraction', () => {
   });
 
   it('excludes reasoning parts when fetching assistant messages', async () => {
+    // The canonical `{ info, parts }` page the OMP host serves, oldest first.
+    configureOmpRuntimeHost(() => ({
+      getMessages: async () => ({
+        items: [
+          { info: { id: 'msg-u', sessionID: 'session-1', role: 'user', time: { created: 1 } }, parts: [{ type: 'text', text: 'ask' }] },
+          {
+            info: { id: 'msg-1', sessionID: 'session-1', role: 'assistant', finish: 'stop', time: { created: 1, completed: 2 } },
+            parts: [
+              { type: 'reasoning', text: 'private chain of thought' },
+              { type: 'text', text: 'final answer' },
+            ],
+          },
+        ],
+        cursor: {},
+      }),
+      listSessions: async () => [],
+    }));
     const runtime = createRuntime();
-    // v2 pages messages as `{ data, cursor }` and an assistant message is a
-    // flat record carrying `content[]`.
-    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
-      data: [
-        {
-          id: 'msg-1',
-          type: 'assistant',
-          finish: 'stop',
-          content: [
-            { type: 'reasoning', text: 'private chain of thought' },
-            { type: 'text', text: 'final answer' },
-          ],
-        },
-      ],
-      cursor: {},
-    })));
 
     await expect(runtime.fetchLastAssistantMessageText('session-1', 'msg-1')).resolves.toBe('final answer');
+  });
+
+  it('reads the session title from the runtime record', async () => {
+    configureOmpRuntimeHost(() => ({
+      listSessions: async () => [{ id: 'session-1', sessionPath: '/sessions/1.jsonl', cwd: '/repo', title: 'Fix the billing export' }],
+      getMessages: async () => ({ items: [], cursor: {} }),
+    }));
+    const runtime = createRuntime();
+
+    await expect(runtime.buildTemplateVariables({ properties: { info: {} } }, 'session-1'))
+      .resolves.toMatchObject({ session_name: 'Fix the billing export' });
   });
 });

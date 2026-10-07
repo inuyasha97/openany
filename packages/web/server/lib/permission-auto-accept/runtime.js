@@ -1,10 +1,10 @@
 import { z } from 'zod';
+import { listPermissions, readSessions, replyPermission } from '../agents/omp-host-access.js';
 import { PERMISSION_MODES, isAutoAnsweringMode, isPermissionMode, toPermissionMode } from './modes.js';
 
 const SETTINGS_KEY = 'permissionAutoAccept';
 const DEFAULT_MODE_SETTINGS_KEY = 'permissionDefaultMode';
 const RETRY_DELAYS_MS = [0, 250, 1000];
-const REQUEST_TIMEOUT_MS = 5000;
 const SESSION_CACHE_LIMIT = 10000;
 const OUTCOME_CACHE_LIMIT = 1000;
 
@@ -40,8 +40,6 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createPermissionAutoAcceptRuntime({
   globalEventHub,
-  buildOpenCodeUrl,
-  getOpenCodeAuthHeaders,
   readSettingsFromDiskMigrated,
   persistSettings,
   broadcastGlobalUiEvent,
@@ -53,9 +51,7 @@ export function createPermissionAutoAcceptRuntime({
   // What a pre-modes `true` becomes: `safety` when the old global safety-net
   // switch was on, else `auto`. Asked only while converting such a policy.
   resolveLegacyEnabledMode = async () => 'auto',
-  fetchImpl = fetch,
   retryDelaysMs = RETRY_DELAYS_MS,
-  requestTimeoutMs = REQUEST_TIMEOUT_MS,
 }) {
   let policy = normalizePolicy().policy;
   let loaded = false;
@@ -174,34 +170,16 @@ export function createPermissionAutoAcceptRuntime({
     }
   };
 
-  const request = async (path, { directory, method = 'GET', body } = {}) => {
-    const url = new URL(buildOpenCodeUrl(path, ''));
-    const response = await fetchImpl(url, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-        // OpenCode 2.x scopes a request to a directory through this header;
-        // the pending-permission list and services behind it are per location.
-        ...(directory ? { 'x-opencode-directory': encodeURIComponent(directory) } : {}),
-        ...getOpenCodeAuthHeaders(),
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(requestTimeoutMs),
-    });
-    if (!response.ok) {
-      const error = new Error(`OpenCode request failed (${response.status})`);
-      error.status = response.status;
-      throw error;
-    }
-    return response.json().catch(() => null);
-  };
-
   const getSession = async (sessionId, directory) => {
     const cached = sessions.get(sessionId);
     if (cached) return cached;
-    const info = await request(`/api/session/${encodeURIComponent(sessionId)}`, { directory });
-    rememberSession(info?.data ?? info, directory);
+    // The runtime has no per-session read on this path, so the list is the
+    // lookup. A missing runtime reads as "unknown session", which fails the
+    // lineage walk closed to `ask`.
+    const known = await readSessions().catch(() => null);
+    const info = Array.isArray(known) ? known.find((session) => session?.id === sessionId) : null;
+    if (!info) return null;
+    rememberSession({ id: info.id, directory: info.cwd }, directory);
     return sessions.get(sessionId) ?? null;
   };
 
@@ -240,13 +218,16 @@ export function createPermissionAutoAcceptRuntime({
       const verdict = evaluatePermission ? await evaluatePermission(permission, directory) : null;
       if (verdict?.action !== 'accept') return 'held';
     }
-    // v2 scopes a permission reply under its session.
-    await request(`/api/session/${encodeURIComponent(permission.sessionID)}/permission/${encodeURIComponent(permission.id)}/reply`, {
-      directory,
-      method: 'POST',
-      // OpenCode 2.0.8 renamed the reply body field `reply` to `decision`.
-      body: { decision: 'once' },
-    });
+    const answered = await replyPermission(permission.sessionID, permission.id, 'once');
+    if (answered === null) {
+      // No runtime mounted: the request cannot be answered here, so it stays
+      // with the user rather than being silently considered handled.
+      const error = new Error('The OMP runtime is not available');
+      error.status = 503;
+      throw error;
+    }
+    // `false` means the runtime no longer knows the request (the old 404): the
+    // user already answered it elsewhere.
     return 'replied';
   };
 
@@ -300,20 +281,23 @@ export function createPermissionAutoAcceptRuntime({
     if (existing) return existing;
     const task = (async () => {
       await load();
-      const scopes = [undefined, ...normalizedDirectories];
+      const known = await readSessions().catch(() => null);
+      if (!Array.isArray(known)) return;
+      const wanted = new Set(normalizedDirectories);
       const pendingById = new Map();
-      for (const directory of scopes) {
-        let payload;
-        try {
-          payload = await request('/api/permission/request', { directory });
-        } catch {
-          continue;
+      for (const session of known) {
+        if (typeof session?.id !== 'string' || !session.id) continue;
+        if (wanted.size > 0) {
+          const cwd = typeof session.cwd === 'string' ? session.cwd.trim() : '';
+          const inScope = cwd && [...wanted].some((directory) => cwd === directory || cwd.startsWith(`${directory}/`));
+          if (!inScope) continue;
         }
-        const pending = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : null;
-        if (!pending) continue;
+        const pending = await listPermissions(session.id).catch(() => null);
+        if (!Array.isArray(pending)) continue;
+        const directory = typeof session.cwd === 'string' && session.cwd ? session.cwd : undefined;
         for (const permission of pending) {
           if (!permission?.id) continue;
-          pendingById.set(permission.id, { permission, directory: permission.directory ?? directory });
+          pendingById.set(permission.id, { permission, directory });
         }
       }
       await Promise.all(Array.from(pendingById.values()).map(({ permission, directory }) =>
@@ -354,15 +338,11 @@ export function createPermissionAutoAcceptRuntime({
 
   const start = () => {
     const unsubscribeEvent = globalEventHub.subscribeEvent(processEvent);
-    const unsubscribeStatus = globalEventHub.subscribeStatus((status) => {
-      if (status?.type === 'connect') void reconcilePending();
-    });
     void load().then(() => reconcilePending()).catch((error) => {
       console.warn('[permission-auto-accept] failed to load policy:', error?.message ?? error);
     });
     return () => {
       unsubscribeEvent();
-      unsubscribeStatus();
     };
   };
 

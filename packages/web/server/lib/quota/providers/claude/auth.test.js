@@ -17,7 +17,7 @@ vi.mock('fs', () => {
   return { ...fs, default: fs };
 });
 
-vi.mock('../../../opencode/auth.js', () => ({ readAuthFile: () => openCodeAuth() }));
+vi.mock('../../../openchamber/credentials.js', () => ({ readAuthFile: () => openCodeAuth() }));
 
 import { loadClaudeCredential } from './auth.js';
 

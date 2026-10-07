@@ -28,10 +28,10 @@ import { z } from 'zod';
  *
  * Each feature that could send conversation content anywhere else checks it
  * at its own server boundary:
- * - Model providers come only from the OpenCode config: connecting one,
+ * - Model providers come only from the runtime's own config: connecting one,
  *   signing in, adding a key or creating a custom provider through this
- *   server is refused (`opencode/routes.js`). OpenCode's `provider.use`
- *   policy is the real lock; this closes the way in through the app.
+ *   server is refused. The runtime's provider policy is the real lock; this
+ *   closes the way in through the app.
  * - Jev classification is off, unless the administrator pinned their own
  *   endpoint (`routing/runtime.js`).
  * - External tunnels are refused: their provider sees plain text (`tunnels`).

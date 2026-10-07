@@ -1,14 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { configureOmpRuntimeHost } from '../agents/omp-host-access.js';
 import { createNotificationTriggerRuntime } from './runtime.js';
 
 /**
- * The "ready" push is built from the translated `message.updated` events.
- * v2 splits a turn: the step start names agent and model, the step end
- * carries the finish. What is pinned here: the finish is announced with the
- * agent and model from the start, a user abort announces nothing, and an
- * active goal (which lives in OpenChamber's own metadata) silences the push.
+ * The "ready" push is built from the translated assistant-step events: the
+ * step start names agent and model, the step end carries the finish. What is
+ * pinned here: the finish is announced with the agent and model from the
+ * start, a user abort announces nothing, and an active goal (which lives in
+ * OpenChamber's own metadata) silences the push.
  */
+
+afterEach(() => {
+  configureOmpRuntimeHost(null);
+});
+
 const makeRuntime = ({ metadata = {} } = {}) => {
   const emitDesktopNotification = vi.fn(() => true);
   const runtime = createNotificationTriggerRuntime({
@@ -24,8 +30,6 @@ const makeRuntime = ({ metadata = {} } = {}) => {
     sendPushToAllUiSessions: vi.fn(async () => undefined),
     sendApnsToAllUiSessions: vi.fn(async () => undefined),
     isAnyInteractiveClientVisible: () => true,
-    buildOpenCodeUrl: (path) => `http://opencode.test${path}`,
-    getOpenCodeAuthHeaders: () => ({}),
     readSessionMetadata: async () => metadata,
   });
   return { runtime, emitDesktopNotification };
@@ -42,9 +46,21 @@ const stepEnded = (sessionID, id) => ({
 
 const turnEnded = (sessionID) => ({ type: 'session.idle', properties: { sessionID } });
 
-describe('ready notification on v2 step events', () => {
+/** A fake OMP runtime answering one busy flag per session. */
+const stubOmp = ({ busy = {} } = {}) => {
+  const host = {
+    listSessions: vi.fn(async () => [{ id: 'ses_1', sessionPath: '/sessions/1.jsonl', cwd: '/repo', title: 'One' }]),
+    getSessionStatus: vi.fn(async (id) => ({ busy: busy[id] === true })),
+    getMessages: vi.fn(async () => ({ items: [], cursor: {} })),
+  };
+  configureOmpRuntimeHost(() => host);
+  return host;
+};
+
+describe('ready notification on assistant step events', () => {
   it('announces the turn end with the agent and model of its last step', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stubOmp();
     const { runtime, emitDesktopNotification } = makeRuntime();
 
     await runtime.maybeSendPushForTrigger(stepStarted('ses_1', 'msg_1'));
@@ -65,6 +81,7 @@ describe('ready notification on v2 step events', () => {
   });
 
   it('announces nothing for a user abort', async () => {
+    stubOmp();
     const { runtime, emitDesktopNotification } = makeRuntime();
 
     await runtime.maybeSendPushForTrigger({
@@ -76,6 +93,7 @@ describe('ready notification on v2 step events', () => {
   });
 
   it('stays quiet while a goal from OpenChamber\'s own metadata is active', async () => {
+    stubOmp();
     const { runtime, emitDesktopNotification } = makeRuntime({
       metadata: { openchamber: { goal: { id: 'g', status: 'active', objective: 'x' } } },
     });
@@ -88,42 +106,31 @@ describe('ready notification on v2 step events', () => {
   });
 });
 
-describe('ready notification while background subagents run', () => {
-  const stubOpenCode = ({ active, children }) => {
-    vi.stubGlobal('fetch', vi.fn(async (input) => {
-      const url = new URL(String(input));
-      if (url.pathname === '/api/session/active') return Response.json({ data: active() });
-      if (url.pathname === '/api/session') return Response.json({ data: children, cursor: {} });
-      return Response.json({});
-    }));
-  };
-
-  it('stays silent on the pause and announces the real turn end', async () => {
+describe('ready notification while a background turn runs', () => {
+  it('announces the idle: the runtime lists no subagent sessions', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    let active = { ses_child: { type: 'running' } };
-    stubOpenCode({ active: () => active, children: [{ id: 'ses_child', parentID: 'ses_1' }] });
+    const host = stubOmp({ busy: { ses_1: true } });
     const { runtime, emitDesktopNotification } = makeRuntime();
 
     await runtime.maybeSendPushForTrigger(stepStarted('ses_1', 'msg_1'));
     await runtime.maybeSendPushForTrigger(turnEnded('ses_1'));
-    expect(emitDesktopNotification).not.toHaveBeenCalled();
 
-    // The subagent finished and OpenCode ran the parent again with its result.
-    active = {};
-    await runtime.maybeSendPushForTrigger(turnEnded('ses_1'));
+    // OMP keeps a subagent inside its parent's turn and lists no child
+    // sessions, so the idle is the end of the turn and announces.
+    expect(host.listSessions).toHaveBeenCalled();
     expect(emitDesktopNotification).toHaveBeenCalledTimes(1);
-    vi.unstubAllGlobals();
   });
 
-  it('announces the idle when the subagent check cannot be made', async () => {
+  it('announces the idle when the status read cannot be made', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 503 })));
+    // No runtime mounted: the probe answers `null`, and the notice must not be
+    // swallowed by a check that could not run.
+    configureOmpRuntimeHost(null);
     const { runtime, emitDesktopNotification } = makeRuntime();
 
     await runtime.maybeSendPushForTrigger(stepStarted('ses_1', 'msg_1'));
     await runtime.maybeSendPushForTrigger(turnEnded('ses_1'));
     expect(emitDesktopNotification).toHaveBeenCalledTimes(1);
-    vi.unstubAllGlobals();
   });
 });
 
@@ -144,8 +151,6 @@ describe('push content in enterprise mode', () => {
       sendPushToAllUiSessions,
       sendApnsToAllUiSessions,
       isAnyInteractiveClientVisible: () => false,
-      buildOpenCodeUrl: (path) => `http://opencode.test${path}`,
-      getOpenCodeAuthHeaders: () => ({}),
       readSessionMetadata: async () => ({}),
     });
     return { runtime, sendPushToAllUiSessions, sendApnsToAllUiSessions };
@@ -153,7 +158,7 @@ describe('push content in enterprise mode', () => {
 
   it('sends only the scenario title and the deep link, on both channels', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: {} })));
+    stubOmp();
     process.env.OPENCHAMBER_ENTERPRISE_MODE = 'true';
     try {
       const { runtime, sendPushToAllUiSessions, sendApnsToAllUiSessions } = makePushRuntime();
@@ -167,7 +172,6 @@ describe('push content in enterprise mode', () => {
       expect(JSON.stringify([web, sendApnsToAllUiSessions.mock.calls[0][0]])).not.toMatch(/billing|customer/);
     } finally {
       delete process.env.OPENCHAMBER_ENTERPRISE_MODE;
-      vi.unstubAllGlobals();
     }
   });
 });
@@ -188,37 +192,29 @@ describe('subagent finish with subagent notifications off', () => {
       sendPushToAllUiSessions: vi.fn(async () => undefined),
       sendApnsToAllUiSessions: vi.fn(async () => undefined),
       isAnyInteractiveClientVisible: () => true,
-      buildOpenCodeUrl: (path) => `http://opencode.test${path}`,
-      getOpenCodeAuthHeaders: () => ({}),
       readSessionMetadata: async () => ({}),
     });
     return { runtime, emitDesktopNotification };
   };
 
-  // OpenCode answers `GET /api/session/:id` as `{ data }` with no `location`.
-  const stubSessionRecord = () => {
-    vi.stubGlobal('fetch', vi.fn(async (input) => {
-      const url = new URL(String(input));
-      if (url.pathname === '/api/session/active') return Response.json({ data: {} });
-      if (url.pathname === '/api/session/ses_child') return Response.json({ data: { id: 'ses_child', parentID: 'ses_parent' } });
-      return Response.json({ data: [], cursor: {} });
-    }));
-  };
-
-  it('reads the parent from the session record envelope', async () => {
+  it('asks the runtime whether the session is a subagent session', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    stubSessionRecord();
+    // OMP exposes no parent on a session record, so the runtime's answer is
+    // "no parent" — the finish is announced.
+    const host = stubOmp();
     const { runtime, emitDesktopNotification } = makeSubtaskRuntime();
 
-    await runtime.maybeSendPushForTrigger(stepStarted('ses_child', 'msg_c'));
-    await runtime.maybeSendPushForTrigger(turnEnded('ses_child'));
-    expect(emitDesktopNotification).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
+    await runtime.maybeSendPushForTrigger(stepStarted('ses_1', 'msg_c'));
+    await runtime.maybeSendPushForTrigger(turnEnded('ses_1'));
+
+    expect(host.listSessions).toHaveBeenCalled();
+    expect(emitDesktopNotification).toHaveBeenCalledTimes(1);
   });
 
   it('a partial session update does not erase a known parent', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 503 })));
+    // No runtime mounted: the fallback lookup cannot be made.
+    configureOmpRuntimeHost(null);
     const { runtime, emitDesktopNotification } = makeSubtaskRuntime();
 
     await runtime.maybeSendPushForTrigger({ type: 'session.created', properties: { sessionID: 'ses_child', info: { id: 'ses_child', parentID: 'ses_parent' } } });
@@ -226,7 +222,7 @@ describe('subagent finish with subagent notifications off', () => {
     await runtime.maybeSendPushForTrigger({ type: 'session.updated', properties: { sessionID: 'ses_child', info: { id: 'ses_child', cost: 1 } } });
     await runtime.maybeSendPushForTrigger(stepStarted('ses_child', 'msg_c'));
     await runtime.maybeSendPushForTrigger(turnEnded('ses_child'));
+
     expect(emitDesktopNotification).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
   });
 });

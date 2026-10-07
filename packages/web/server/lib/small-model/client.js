@@ -10,13 +10,6 @@
 
 import { getOmpRuntimeHost } from '../agents/omp-host-access.js';
 
-/**
- * Compatibility no-op. The transport is the globally wired OMP host, so there
- * is no per-module connection to configure any more. Kept only because
- * `server/index.js` still imports it.
- */
-export function configureOpenCodeRuntimeProviders() {}
-
 /** Drops the cached catalog. An OMP restart can change the model list. */
 export function resetOpenCodeRuntimeProviders() {
   modelCache = null;

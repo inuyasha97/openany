@@ -40,7 +40,8 @@ const WORKING = new Set(['busy', 'retry']);
 /**
  * `settingsPath` is the file the host writes, `readSessionStates()` the server's own live status
  * by session, `{ [id]: { status, lastUpdateAt } }`, `readPendingRequests()` the permission asks
- * and forms still waiting for an answer by session, and `stopSpace()` ends the server. A session
+ * and forms still waiting for an answer by session, and `stopSpace()` ends the server. Both
+ * readers may be async: the runtime host answers over its own protocol. A session
  * that is working counts as activity now, and every status change counts at the time it came, so
  * a turn that began and ended between two checks is not missed. A session that waits for the
  * user's answer stays busy in OpenCode's status the whole time; it counts as idle (the
@@ -62,11 +63,11 @@ export function createIdleStop({ settingsPath, readSessionStates, readPendingReq
     }
   };
 
-  const noteActivity = () => {
+  const noteActivity = async () => {
     const current = now();
-    const pending = readPendingRequests();
+    const pending = await readPendingRequests();
     const waiting = (sessionId) => (pending[sessionId]?.permissions?.length ?? 0) + (pending[sessionId]?.forms?.length ?? 0) > 0;
-    for (const [sessionId, state] of Object.entries(readSessionStates())) {
+    for (const [sessionId, state] of Object.entries(await readSessionStates())) {
       if (WORKING.has(state.status) && !waiting(sessionId)) lastActive = current;
       else if (state.lastUpdateAt > lastActive) lastActive = Math.min(state.lastUpdateAt, current);
     }
@@ -75,7 +76,7 @@ export function createIdleStop({ settingsPath, readSessionStates, readPendingReq
   /** One check. Resolves true when it stopped the space. */
   const check = async () => {
     if (stopping) return false;
-    noteActivity();
+    await noteActivity();
     const setting = await readSetting();
     if (!setting?.enabled || now() - lastActive < setting.hours * HOUR_MS) return false;
     stopping = true;
