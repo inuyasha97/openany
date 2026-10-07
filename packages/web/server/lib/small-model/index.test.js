@@ -1,455 +1,319 @@
 import fs from 'fs';
-import { registerSmallModelRoutes } from './routes.js';
-import http from 'node:http';
 import os from 'os';
 import path from 'path';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { configureOmpRuntimeHost } from '../agents/omp-host-access.js';
+import { registerSmallModelRoutes } from './routes.js';
+import { resetOpenCodeRuntimeProviders } from './client.js';
 
 // The settings override is read straight from disk, so without this the suite
 // would resolve whatever small model the developer running it has configured.
 const TEMP_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'small-model-settings-'));
 process.env.OPENCHAMBER_DATA_DIR = TEMP_DATA_DIR;
 
-const { generateSmallModelText, describeSmallModel, listAuthenticatedProviders, setUnavailableRetryDelaysForTest } = await import('./index.js');
-const { configureOpenCodeRuntimeProviders, resetOpenCodeRuntimeProviders } = await import('./client.js');
+const { generateSmallModelText, describeSmallModel, listAuthenticatedProviders } = await import('./index.js');
 
-// A real OpenCode stub over HTTP. The module talks to OpenCode through
-// `@opencode/client`, so driving it with a socket exercises the same request
-// shapes the running server sees — no module substitution involved.
-const state = {
-  models: [],
-  providers: [],
-  defaultModel: null,
-  generate: () => ({ text: 'generated' }),
-  requests: [],
-  generateErrors: [],
-};
-
+/** An OMP catalog entry: what `getOmpRuntimeHost().listModels()` reports. */
 const MODEL = (overrides = {}) => ({
   id: 'claude-haiku-4-5',
-  modelID: 'claude-haiku-4-5',
-  providerID: 'anthropic',
+  provider: 'anthropic',
   name: 'Claude Haiku',
-  enabled: true,
-  limit: { context: 8_000, output: 4_000 },
+  contextWindow: 8_000,
+  maxTokens: 4_000,
+  input: ['text'],
   ...overrides,
 });
 
-const LOCATION = { directory: '/proj', project: { id: 'p', directory: '/proj', canonical: '/proj' } };
-
-let server;
-let baseUrl;
-
-const readBody = (req) => new Promise((resolve) => {
-  let raw = '';
-  req.on('data', (chunk) => { raw += chunk; });
-  req.on('end', () => {
-    try {
-      resolve(raw ? JSON.parse(raw) : {});
-    } catch {
-      resolve({});
-    }
-  });
+/** A canonical history record for an assistant turn. */
+const assistantItem = (text, { completed = 1 } = {}) => ({
+  info: {
+    role: 'assistant',
+    time: completed === undefined ? { created: 1 } : { created: 1, completed },
+  },
+  parts: typeof text === 'string' ? [{ type: 'text', text }] : [],
 });
 
-beforeAll(async () => {
-  server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
-    const body = req.method === 'POST' ? await readBody(req) : {};
-    state.requests.push({ method: req.method, path: url.pathname, body, headers: req.headers });
-    const send = (payload) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(payload));
-    };
-    if (url.pathname === '/api/model') return send({ location: LOCATION, data: state.models });
-    if (url.pathname === '/api/model/default') return send({ location: LOCATION, data: state.defaultModel });
-    if (url.pathname === '/api/provider') return send({ location: LOCATION, data: state.providers });
-    if (url.pathname === '/api/experimental/generate') {
-      const error = state.generateErrors.shift();
-      if (error) {
-        res.writeHead(400, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify(error));
-      }
-      return send({ location: LOCATION, data: state.generate(body) });
-    }
-    res.writeHead(404).end('{}');
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  baseUrl = `http://127.0.0.1:${server.address().port}`;
-});
+// The module reads the OMP runtime host per call, so a fake host exercises the
+// same catalog and session shapes the running server sees.
+const state = {
+  models: [],
+  created: [],
+  deleted: [],
+  setModels: [],
+  prompts: [],
+  /** `(id) => history page`; replace to fail or to keep a turn incomplete. */
+  history: async () => ({ items: [assistantItem('generated')] }),
+  nextId: 1,
+};
 
-afterAll(() => {
-  server?.close();
-  fs.rmSync(TEMP_DATA_DIR, { recursive: true, force: true });
-});
+const host = {
+  listModels: async () => state.models,
+  createSession: async (input = {}) => {
+    const id = `throwaway-${state.nextId++}`;
+    state.created.push({ id, cwd: input.cwd });
+    return { id };
+  },
+  setModel: async (id, provider, modelId) => { state.setModels.push({ id, provider, modelId }); },
+  prompt: async (id, text) => { state.prompts.push({ id, text }); return true; },
+  getMessages: (id) => state.history(id),
+  deleteSession: async (id) => { state.deleted.push(id); return true; },
+};
 
 beforeEach(() => {
   state.models = [MODEL()];
-  state.providers = [{ id: 'anthropic', name: 'Anthropic', activation: 'auto', package: 'x' }];
-  state.defaultModel = MODEL();
-  state.generate = () => ({ text: 'generated' });
-  state.requests = [];
-  state.generateErrors = [];
-  configureOpenCodeRuntimeProviders({
-    buildOpenCodeUrl: (requestPath) => `${baseUrl}${requestPath.startsWith('/') ? requestPath : `/${requestPath}`}`,
-    getOpenCodeAuthHeaders: () => ({ Authorization: 'Basic test' }),
-  });
+  state.created = [];
+  state.deleted = [];
+  state.setModels = [];
+  state.prompts = [];
+  state.history = async () => ({ items: [assistantItem('generated')] });
+  state.nextId = 1;
+  configureOmpRuntimeHost(() => host);
   resetOpenCodeRuntimeProviders();
 });
 
-const lastGenerate = () => state.requests.filter((entry) => entry.path === '/api/experimental/generate').at(-1);
+afterEach(() => {
+  configureOmpRuntimeHost(null);
+});
+
+afterAll(() => {
+  fs.rmSync(TEMP_DATA_DIR, { recursive: true, force: true });
+});
 
 describe('generateSmallModelText', () => {
-  const unavailable = { _tag: 'InvalidRequestError', message: 'Model unavailable: zai-coding-plan/glm-5.3-flash' };
-  const options = { prompt: 'write a commit', model: 'zai-coding-plan/glm-5.3-flash' };
-
-  beforeEach(() => setUnavailableRetryDelaysForTest([1, 1, 1]));
-  afterEach(() => setUnavailableRetryDelaysForTest());
-
-  it('retries a cold catalog with the same model and prompt', async () => {
-    state.generateErrors = [unavailable];
-    const result = await generateSmallModelText(options);
-    expect(result.text).toBe('generated');
-    const calls = state.requests.filter((entry) => entry.path === '/api/experimental/generate');
-    expect(calls).toHaveLength(2);
-    expect(calls[0].body).toEqual(calls[1].body);
+  it('rejects a missing prompt without opening a session', async () => {
+    await expect(generateSmallModelText({ prompt: '   ' })).rejects.toMatchObject({ statusCode: 400 });
+    expect(state.created).toEqual([]);
   });
 
-  it('keeps backing off while the plugin model loads', async () => {
-    state.generateErrors = [unavailable, unavailable, unavailable];
-    const result = await generateSmallModelText(options);
-    expect(result.text).toBe('generated');
-    expect(state.requests.filter((entry) => entry.path === '/api/experimental/generate')).toHaveLength(4);
-  });
-
-  it('reports persistent model unavailability once the backoff runs out', async () => {
-    state.generateErrors = [unavailable, unavailable, unavailable, unavailable];
-    await expect(generateSmallModelText(options)).rejects.toMatchObject({
-      message: unavailable.message, statusCode: 503, code: 'small-model-unavailable',
+  it('round-trips create → setModel → prompt → messages → delete', async () => {
+    const result = await generateSmallModelText({
+      prompt: 'write a commit',
+      directory: '/proj',
+      model: 'anthropic/claude-haiku-4-5',
     });
-    expect(state.requests.filter((entry) => entry.path === '/api/experimental/generate')).toHaveLength(4);
-  });
 
-  it('does not retry other invalid requests', async () => {
-    state.generateErrors = [{ _tag: 'InvalidRequestError', message: 'Invalid prompt' }];
-    await expect(generateSmallModelText(options)).rejects.toMatchObject({ message: 'Invalid prompt' });
-    expect(state.requests.filter((entry) => entry.path === '/api/experimental/generate')).toHaveLength(1);
-  });
-
-  it('does not retry provider failures with the same message', async () => {
-    state.generateErrors = [{ _tag: 'ServiceUnavailableError', message: unavailable.message }];
-    await expect(generateSmallModelText(options)).rejects.toMatchObject({ _tag: 'ServiceUnavailableError' });
-    expect(state.requests.filter((entry) => entry.path === '/api/experimental/generate')).toHaveLength(1);
-  });
-
-  it('cancels without sending the retry', async () => {
-    setUnavailableRetryDelaysForTest();
-    const controller = new AbortController();
-    state.generateErrors = [unavailable];
-    const pending = generateSmallModelText({ ...options, signal: controller.signal });
-    const timer = setTimeout(() => controller.abort(), 100);
-    try {
-      await expect(pending).rejects.toThrow();
-      expect(state.requests.filter((entry) => entry.path === '/api/experimental/generate')).toHaveLength(1);
-    } finally {
-      clearTimeout(timer);
-    }
-  });
-
-  it('honors the timeout during the retry delay', async () => {
-    setUnavailableRetryDelaysForTest();
-    state.generateErrors = [unavailable];
-    await expect(generateSmallModelText({ ...options, timeoutMs: 100 })).rejects.toThrow();
-    expect(state.requests.filter((entry) => entry.path === '/api/experimental/generate')).toHaveLength(1);
-  });
-
-  it('sends the prompt to /api/generate on the resolved model', async () => {
-    const result = await generateSmallModelText({ prompt: 'summarize this', directory: '/proj' });
-
-    // No provider to stay on and no Settings pick: OpenCode's default.
-    expect(result).toMatchObject({ text: 'generated', providerID: 'anthropic', modelID: 'claude-haiku-4-5', source: 'default' });
-    expect(lastGenerate().body).toEqual({
-      prompt: 'summarize this',
-      model: { id: 'claude-haiku-4-5', providerID: 'anthropic' },
+    expect(result).toEqual({
+      text: 'generated',
+      providerID: 'anthropic',
+      modelID: 'claude-haiku-4-5',
+      source: 'request',
     });
-  });
-
-  it('scopes the request to the directory', async () => {
-    await generateSmallModelText({ prompt: 'hi', directory: '/proj/sub dir' });
-
-    expect(lastGenerate().headers['x-opencode-directory']).toBe(encodeURIComponent('/proj/sub dir'));
+    expect(state.created).toEqual([{ id: 'throwaway-1', cwd: '/proj' }]);
+    expect(state.setModels).toEqual([{ id: 'throwaway-1', provider: 'anthropic', modelId: 'claude-haiku-4-5' }]);
+    expect(state.prompts).toEqual([{ id: 'throwaway-1', text: 'write a commit' }]);
+    expect(state.deleted).toEqual(['throwaway-1']);
   });
 
   it('leads the prompt with the system instructions', async () => {
-    await generateSmallModelText({ prompt: 'the task', system: 'you are terse', directory: '/proj' });
-
-    expect(lastGenerate().body.prompt).toBe('you are terse\n\nthe task');
-  });
-
-  it('honours an explicit request model', async () => {
-    const result = await generateSmallModelText({ prompt: 'hi', model: 'openai/gpt-5.6-luna', directory: '/proj' });
-
-    expect(result.source).toBe('request');
-    expect(lastGenerate().body.model).toEqual({ id: 'gpt-5.6-luna', providerID: 'openai' });
-  });
-
-  it('sends an explicit Claude Code model like any other', async () => {
-    const result = await generateSmallModelText({ prompt: 'hi', model: 'claude-code/haiku', directory: '/proj' });
-
-    expect(result).toMatchObject({ providerID: 'claude-code', modelID: 'haiku', source: 'request' });
-    expect(lastGenerate().body.model).toEqual({ id: 'haiku', providerID: 'claude-code' });
-  });
-
-  it('stays on the session provider when the caller forbids switching', async () => {
-    const result = await generateSmallModelText({
-      prompt: 'hi',
+    await generateSmallModelText({
+      prompt: 'the task',
+      system: 'you are terse',
       directory: '/proj',
-      preferredProviderID: 'openai',
-      preferredModelID: 'gpt-5.6-luna',
-      restrictToPreferredProvider: true,
+      model: 'anthropic/claude-haiku-4-5',
     });
 
-    expect(result).toMatchObject({ providerID: 'openai', modelID: 'gpt-5.6-luna', source: 'session-model' });
+    expect(state.prompts[0].text).toBe('you are terse\n\nthe task');
   });
 
-  it('prefers the small model of the session provider over the session model itself', async () => {
-    state.models = [
-      MODEL({ id: 'claude-sonnet-5', modelID: 'claude-sonnet-5', family: 'claude-sonnet' }),
-      MODEL({ id: 'claude-haiku-4-5', modelID: 'claude-haiku-4-5', family: 'claude-haiku', time: { released: 1 } }),
-      MODEL({ id: 'claude-haiku-5', modelID: 'claude-haiku-5', family: 'claude-haiku', time: { released: 2 } }),
-      MODEL({ id: 'claude-haiku-6', modelID: 'claude-haiku-6', family: 'claude-haiku', time: { released: 3 }, status: 'beta' }),
-      MODEL({ id: 'gpt-5.6-luna', modelID: 'gpt-5.6-luna', providerID: 'openai', family: 'gpt-luna' }),
-    ];
+  it('falls back to the temp directory when the caller names none', async () => {
+    await generateSmallModelText({ prompt: 'hi', model: 'anthropic/claude-haiku-4-5' });
 
-    const result = await generateSmallModelText({
-      prompt: 'hi',
-      directory: '/proj',
-      preferredProviderID: 'anthropic',
-      preferredModelID: 'claude-sonnet-5',
-      restrictToPreferredProvider: true,
+    expect(state.created[0].cwd).toBe(os.tmpdir());
+  });
+
+  it('resolves the small model of the preferred provider', async () => {
+    state.models = [MODEL({ id: 'claude-sonnet-5' }), MODEL({ id: 'claude-haiku-4-5' })];
+
+    const result = await generateSmallModelText({ prompt: 'hi', directory: '/proj', preferredProviderID: 'anthropic' });
+
+    expect(result).toMatchObject({ providerID: 'anthropic', modelID: 'claude-haiku-4-5', source: 'session-provider-small' });
+  });
+
+  it('joins every text part of the newest completed assistant turn', async () => {
+    state.history = async () => ({
+      items: [
+        assistantItem('old'),
+        { info: { role: 'assistant', time: { created: 2 } }, parts: [{ type: 'text', text: 'partial' }] },
+        { info: { role: 'assistant', time: { created: 3, completed: 3 } }, parts: [{ type: 'text', text: 'first ' }, { type: 'text', text: 'second' }] },
+      ],
     });
 
-    // Newest active haiku of the session provider; the other provider's
-    // gpt-luna ranks higher in the family list but is another subscription.
-    expect(result).toMatchObject({ providerID: 'anthropic', modelID: 'claude-haiku-5', source: 'session-provider-small' });
-    expect(lastGenerate().body.model).toEqual({ id: 'claude-haiku-5', providerID: 'anthropic' });
+    const result = await generateSmallModelText({ prompt: 'hi', model: 'anthropic/claude-haiku-4-5' });
+
+    expect(result.text).toBe('first second');
   });
 
-  it('never takes a small model from another connected provider', async () => {
-    state.models = [
-      MODEL({ id: 'claude-sonnet-5', modelID: 'claude-sonnet-5', family: 'claude-sonnet' }),
-      MODEL({ id: 'gemini-3.6-flash', modelID: 'gemini-3.6-flash', providerID: 'google', family: 'gemini-flash' }),
-    ];
-    state.defaultModel = state.models[0];
+  it('deletes the throwaway session even when the read fails', async () => {
+    state.history = async () => { throw new Error('history read failed'); };
 
-    // Anthropic has no small family here; the caller allows leaving it, yet
-    // the connected Google flash is not someone's pick for this content.
-    const withProvider = await generateSmallModelText({
-      prompt: 'hi',
-      directory: '/proj',
-      preferredProviderID: 'anthropic',
-      preferredModelID: 'claude-sonnet-5',
-    });
-    expect(withProvider).toMatchObject({ providerID: 'anthropic', modelID: 'claude-sonnet-5', source: 'default' });
-
-    const withoutProvider = await generateSmallModelText({ prompt: 'hi', directory: '/proj' });
-    expect(withoutProvider).toMatchObject({ providerID: 'anthropic', modelID: 'claude-sonnet-5', source: 'default' });
-    expect(state.requests.some((entry) => entry.body?.model?.providerID === 'google')).toBe(false);
+    await expect(generateSmallModelText({ prompt: 'hi', model: 'anthropic/claude-haiku-4-5' })).rejects.toThrow('history read failed');
+    expect(state.deleted).toEqual(['throwaway-1']);
   });
 
-  it('reads the family from the model id when the catalog has none (custom provider)', async () => {
-    state.models = [
-      MODEL({ id: 'my-big-model', modelID: 'my-big-model', providerID: 'my-proxy' }),
-      MODEL({ id: 'gemini-3.6-flash', modelID: 'gemini-3.6-flash', providerID: 'my-proxy' }),
-      MODEL({ id: 'gpt-5.4-nano', modelID: 'gpt-5.4-nano', providerID: 'my-proxy' }),
-    ];
+  it('deletes the throwaway session even when the prompt fails', async () => {
+    const failing = { ...host, prompt: async () => { throw new Error('prompt rejected'); } };
+    configureOmpRuntimeHost(() => failing);
 
-    const result = await generateSmallModelText({
-      prompt: 'hi',
-      directory: '/proj',
-      preferredProviderID: 'my-proxy',
-      preferredModelID: 'my-big-model',
-      restrictToPreferredProvider: true,
-    });
-
-    expect(result).toMatchObject({ providerID: 'my-proxy', modelID: 'gemini-3.6-flash', source: 'session-provider-small' });
+    await expect(generateSmallModelText({ prompt: 'hi', model: 'anthropic/claude-haiku-4-5' })).rejects.toThrow('prompt rejected');
+    expect(state.deleted).toEqual(['throwaway-1']);
   });
 
-  it('picks Claude Code haiku as the small model like any other provider', async () => {
-    state.models = [MODEL({ id: 'haiku', modelID: 'haiku', providerID: 'claude-code', family: 'claude-haiku' })];
+  it('times out without an answer and still deletes the session', async () => {
+    state.history = async () => ({ items: [{ info: { role: 'assistant', time: { created: 1 } }, parts: [{ type: 'text', text: 'partial' }] }] });
 
-    const result = await generateSmallModelText({ prompt: 'hi', directory: '/proj', preferredProviderID: 'claude-code' });
-
-    expect(result).toMatchObject({ providerID: 'claude-code', modelID: 'haiku', source: 'session-provider-small' });
+    await expect(generateSmallModelText({ prompt: 'hi', model: 'anthropic/claude-haiku-4-5', timeoutMs: 20 }))
+      .rejects.toMatchObject({ statusCode: 504, code: 'small-model-timeout' });
+    expect(state.deleted).toEqual(['throwaway-1']);
   });
 
-  it('ignores a disabled small model and falls back to the session model', async () => {
-    state.models = [
-      MODEL({ id: 'claude-sonnet-5', modelID: 'claude-sonnet-5', family: 'claude-sonnet' }),
-      MODEL({ id: 'claude-haiku-5', modelID: 'claude-haiku-5', family: 'claude-haiku', enabled: false }),
-    ];
+  it('fails as no small model when the runtime is not mounted', async () => {
+    configureOmpRuntimeHost(null);
 
-    const result = await generateSmallModelText({
-      prompt: 'hi',
-      directory: '/proj',
-      preferredProviderID: 'anthropic',
-      preferredModelID: 'claude-sonnet-5',
-      restrictToPreferredProvider: true,
-    });
-
-    expect(result).toMatchObject({ providerID: 'anthropic', modelID: 'claude-sonnet-5', source: 'session-model' });
+    await expect(generateSmallModelText({ prompt: 'hi' })).rejects.toMatchObject({ statusCode: 404 });
+    expect(state.created).toEqual([]);
   });
 
-  it('refuses rather than switch provider when the session has no model of its own', async () => {
+  it('fails as no small model when nothing resolves', async () => {
+    await expect(generateSmallModelText({ prompt: 'hi', directory: '/proj' })).rejects.toMatchObject({ statusCode: 404 });
+    expect(state.created).toEqual([]);
+  });
+
+  it('refuses structured output rather than pretending', async () => {
     await expect(generateSmallModelText({
-      prompt: 'hi',
+      prompt: 'describe',
+      model: 'anthropic/claude-haiku-4-5',
+      responseSchema: { type: 'object' },
+    })).rejects.toMatchObject({ statusCode: 422, code: 'structured-output-unsupported' });
+    expect(state.created).toEqual([]);
+  });
+
+  it('truncates and flags an oversized prompt by default', async () => {
+    const result = await generateSmallModelText({
+      prompt: 'x'.repeat(20_000),
+      model: 'anthropic/claude-haiku-4-5',
       directory: '/proj',
-      preferredProviderID: 'openai',
-      restrictToPreferredProvider: true,
-    })).rejects.toMatchObject({ statusCode: 404 });
-  });
-
-  it('reports a missing OpenCode as no small model', async () => {
-    configureOpenCodeRuntimeProviders(null);
-
-    await expect(generateSmallModelText({ prompt: 'hi', directory: '/proj' }))
-      .rejects.toMatchObject({ statusCode: 404 });
-  });
-});
-
-describe('oversized input', () => {
-  // 8k context leaves 4k input tokens after the default output reserve → 16k chars.
-  const huge = (overrides = {}) => ({ prompt: 'x'.repeat(20_000), directory: '/proj', ...overrides });
-
-  it('truncates and flags the response by default', async () => {
-    const result = await generateSmallModelText(huge());
+    });
 
     expect(result.inputTruncated).toBe(true);
-    const sent = lastGenerate().body.prompt;
-    expect(sent.length).toBeLessThan(20_000);
-    expect(sent.endsWith('…')).toBe(true);
+    expect(state.prompts[0].text.length).toBeLessThan(20_000);
+    expect(state.prompts[0].text.endsWith('…')).toBe(true);
   });
 
-  it('refuses without calling the model when the caller cannot survive truncation', async () => {
-    await expect(generateSmallModelText(huge({ onOverflow: 'error' }))).rejects.toMatchObject({
+  it('refuses without opening a session when the caller cannot survive truncation', async () => {
+    await expect(generateSmallModelText({
+      prompt: 'x'.repeat(20_000),
+      model: 'anthropic/claude-haiku-4-5',
+      directory: '/proj',
+      onOverflow: 'error',
+    })).rejects.toMatchObject({
       statusCode: 413,
       code: 'context-too-small',
       requiredChars: 20_000,
       availableChars: 16_000,
     });
 
-    expect(lastGenerate()).toBeUndefined();
-  });
-
-  it('reserves exactly the requested output budget from the input allowance', async () => {
-    state.models = [MODEL({ limit: { context: 100_000, output: 32_000 } })];
-    state.defaultModel = state.models[0];
-
-    await expect(generateSmallModelText({
-      prompt: 'x'.repeat(304_001),
-      directory: '/proj',
-      maxOutputTokens: 24_000,
-      onOverflow: 'error',
-    })).rejects.toMatchObject({ code: 'context-too-small', availableChars: 304_000 });
-  });
-
-  it('falls back to a conservative context when OpenCode does not list the model', async () => {
-    state.models = [];
-
-    await expect(generateSmallModelText({ prompt: 'x'.repeat(300_000), directory: '/proj', onOverflow: 'error' }))
-      .rejects.toMatchObject({ availableChars: 60_000 * 4 });
-  });
-});
-
-describe('structured output', () => {
-  const schema = { type: 'object', properties: { title: { type: 'string' } } };
-
-  it('puts the schema in the prompt and returns the parsed JSON text', async () => {
-    state.generate = () => ({ text: '{"title":"ok"}' });
-
-    const result = await generateSmallModelText({ prompt: 'describe', directory: '/proj', responseSchema: schema });
-
-    expect(result.text).toBe('{"title":"ok"}');
-    expect(lastGenerate().body.prompt).toContain('Reply with JSON matching this schema and nothing else:');
-    expect(lastGenerate().body.prompt).toContain('"title"');
-  });
-
-  it('tolerates a json fence', async () => {
-    state.generate = () => ({ text: '```json\n{"title":"ok"}\n```' });
-
-    const result = await generateSmallModelText({ prompt: 'describe', directory: '/proj', responseSchema: schema });
-
-    expect(JSON.parse(result.text)).toEqual({ title: 'ok' });
-  });
-
-  it('retries once when the reply is not JSON', async () => {
-    let calls = 0;
-    state.generate = () => {
-      calls += 1;
-      return { text: calls === 1 ? 'Sure! Here you go.' : '{"title":"ok"}' };
-    };
-
-    const result = await generateSmallModelText({ prompt: 'describe', directory: '/proj', responseSchema: schema });
-
-    expect(calls).toBe(2);
-    expect(result.text).toBe('{"title":"ok"}');
-  });
-
-  it('gives up with structured-output-unsupported after the retry', async () => {
-    state.generate = () => ({ text: 'I cannot do that.' });
-
-    await expect(generateSmallModelText({ prompt: 'describe', directory: '/proj', responseSchema: schema }))
-      .rejects.toMatchObject({ statusCode: 422, code: 'structured-output-unsupported' });
-
-    expect(state.requests.filter((entry) => entry.path === '/api/experimental/generate')).toHaveLength(2);
+    expect(state.created).toEqual([]);
   });
 });
 
 describe('describeSmallModel', () => {
-  it('reports the default model and its budget', async () => {
-    const described = await describeSmallModel({ directory: '/proj' });
+  it('answers null when the runtime is not mounted', async () => {
+    configureOmpRuntimeHost(null);
+
+    expect(await describeSmallModel({ directory: '/proj' })).toBeNull();
+  });
+
+  // OpenCode's default-model lookup has no OMP equivalent: with no explicit
+  // model, no settings override and no provider there is nothing to resolve.
+  it('answers null when nothing resolves', async () => {
+    expect(await describeSmallModel({ directory: '/proj' })).toBeNull();
+  });
+
+  it('resolves the small model of the preferred provider from the catalog', async () => {
+    state.models = [
+      MODEL({ id: 'claude-sonnet-5' }),
+      MODEL({ id: 'claude-haiku-4-5' }),
+      MODEL({ id: 'gemini-3.6-flash', provider: 'google' }),
+    ];
+
+    const described = await describeSmallModel({ directory: '/proj', preferredProviderID: 'anthropic' });
 
     expect(described).toMatchObject({
       providerID: 'anthropic',
       modelID: 'claude-haiku-4-5',
-      source: 'default',
+      source: 'session-provider-small',
       inputCharBudget: 16_000,
       contextTokens: 8_000,
       contextKnown: true,
       hasLogin: true,
       outputTokenLimit: 4_000,
-      // /api/generate has no structured-output mode, so the capability is
-      // never a settled `false` — callers must try it.
+      // The capability is not knowable before a call, so it is never a
+      // settled `false` — callers must try it.
       structuredOutput: null,
     });
   });
 
-  it('reports the override model instead of the default', async () => {
+  it('answers null when the preferred provider has no small family', async () => {
+    state.models = [MODEL({ id: 'claude-sonnet-5' })];
+
+    const described = await describeSmallModel({
+      directory: '/proj',
+      preferredProviderID: 'anthropic',
+      preferredModelID: 'claude-sonnet-5',
+    });
+
+    expect(described).toBeNull();
+  });
+
+  it('honours an explicit override model', async () => {
+    const described = await describeSmallModel({ directory: '/proj', overrideModel: 'google/gemini-3.6-flash' });
+
+    expect(described).toMatchObject({ providerID: 'google', modelID: 'gemini-3.6-flash', source: 'request' });
+  });
+
+  it('reports the settings override instead of the provider small model', async () => {
     fs.writeFileSync(
       path.join(TEMP_DATA_DIR, 'settings.json'),
       JSON.stringify({ smallModelUseDefault: false, smallModelOverride: 'openai/gpt-5.6-luna' }),
     );
 
     try {
-      const described = await describeSmallModel({ directory: '/proj' });
+      const described = await describeSmallModel({ directory: '/proj', preferredProviderID: 'anthropic' });
       expect(described).toMatchObject({ providerID: 'openai', modelID: 'gpt-5.6-luna', source: 'settings' });
     } finally {
       fs.rmSync(path.join(TEMP_DATA_DIR, 'settings.json'), { force: true });
     }
   });
 
-  it('reports hasLogin false for a model OpenCode has disabled', async () => {
-    state.models = [MODEL({ enabled: false })];
+  it('reads the family from the model id when the catalog has none', async () => {
+    state.models = [
+      MODEL({ id: 'my-big-model', provider: 'my-proxy' }),
+      MODEL({ id: 'gemini-3.6-flash', provider: 'my-proxy' }),
+    ];
 
-    expect(await describeSmallModel({ directory: '/proj' })).toMatchObject({ hasLogin: false });
+    const described = await describeSmallModel({ directory: '/proj', preferredProviderID: 'my-proxy' });
+
+    expect(described).toMatchObject({ providerID: 'my-proxy', modelID: 'gemini-3.6-flash', source: 'session-provider-small' });
   });
 
-  it('lets the reserve be decided from the resolved model limits', async () => {
-    state.models = [MODEL({ limit: { context: 100_000, output: 8_000 } })];
-    state.defaultModel = state.models[0];
+  it('finds a derived catalog entry by its wire model id', async () => {
+    state.models = [MODEL({ id: 'claude-haiku-4-5', requestModelId: 'claude-haiku-4-5-20260101' })];
 
     const described = await describeSmallModel({
       directory: '/proj',
+      overrideModel: 'anthropic/claude-haiku-4-5-20260101',
+    });
+
+    // Matched through `modelID`, so the limits come back with it.
+    expect(described).toMatchObject({ contextTokens: 8_000, outputTokenLimit: 4_000 });
+  });
+
+  it('lets the reserve be decided from the resolved model limits', async () => {
+    state.models = [MODEL({ contextWindow: 100_000, maxTokens: 8_000 })];
+
+    const described = await describeSmallModel({
+      directory: '/proj',
+      preferredProviderID: 'anthropic',
       outputReserveTokens: ({ contextTokens, outputTokenLimit }) => Math.min(contextTokens / 10, outputTokenLimit),
     });
 
@@ -458,72 +322,80 @@ describe('describeSmallModel', () => {
     expect(described.inputCharBudget).toBe(92_000 * 4);
   });
 
-  it('answers null when OpenCode is not reachable', async () => {
-    configureOpenCodeRuntimeProviders(null);
+  it('falls back to a conservative context when the catalog does not list the model', async () => {
+    state.models = [];
 
-    expect(await describeSmallModel({ directory: '/proj' })).toBeNull();
+    const described = await describeSmallModel({ directory: '/proj', overrideModel: 'ghost/not-listed' });
+
+    expect(described).toMatchObject({ contextKnown: false, contextTokens: 64_000, hasLogin: true });
+    expect(described.inputCharBudget).toBe(60_000 * 4);
   });
 });
 
 describe('listAuthenticatedProviders', () => {
-  it('offers a provider that has at least one enabled model', async () => {
+  it('offers a provider the catalog has a model for', async () => {
     expect(await listAuthenticatedProviders()).toEqual(['anthropic']);
   });
 
-  it('hides a provider whose models are all disabled', async () => {
-    state.models = [MODEL({ enabled: false })];
+  it('offers each provider once', async () => {
+    state.models = [MODEL(), MODEL({ id: 'haiku', provider: 'claude-code' })];
 
-    expect(await listAuthenticatedProviders()).toEqual([]);
+    expect(await listAuthenticatedProviders()).toEqual(['anthropic', 'claude-code']);
   });
 
-  // The provider list comes back empty on setups where models are perfectly
-  // usable, so it can only add names, never remove them.
-  it('derives providers from the model list when the provider list is empty', async () => {
-    state.providers = [];
-
-    expect(await listAuthenticatedProviders()).toEqual(['anthropic']);
-  });
-
-  it('offers Claude Code', async () => {
-    state.models = [MODEL(), MODEL({ id: 'sonnet', modelID: 'sonnet', providerID: 'claude-code' })];
-
-    expect(await listAuthenticatedProviders()).toContain('claude-code');
-  });
-
-  it('answers an empty list when OpenCode is not reachable', async () => {
-    configureOpenCodeRuntimeProviders(null);
+  it('answers an empty list when the runtime is not mounted', async () => {
+    configureOmpRuntimeHost(null);
 
     expect(await listAuthenticatedProviders()).toEqual([]);
   });
 });
 
+describe('small model routes', () => {
+  const handlers = { get: {}, post: {} };
+  const app = {
+    get(route, handler) { handlers.get[route] = handler; },
+    post(route, handler) { handlers.post[route] = handler; },
+  };
+  registerSmallModelRoutes(app, { getSmallModelService: async () => import('./index.js') });
 
-describe('small model failure response', () => {
-  it('preserves the model-specific reason without advice to change settings', async () => {
-    let generate;
-    registerSmallModelRoutes({
-      get() {},
-      post(_path, handler) { generate = handler; },
-    }, {
-      getSmallModelService: async () => ({ generateSmallModelText }),
+  const respond = () => {
+    const response = { statusCode: 200, payload: undefined };
+    response.status = (value) => { response.statusCode = value; return response; };
+    response.json = (value) => { response.payload = value; };
+    return response;
+  };
+
+  it('reports availability and the authenticated providers', async () => {
+    const response = respond();
+    await handlers.get['/api/small-model']({ query: {} }, response);
+
+    expect(response.payload).toEqual({ available: false, model: null, authenticatedProviders: ['anthropic'] });
+  });
+
+  it('reports the resolved model for a provider the caller names', async () => {
+    const response = respond();
+    await handlers.get['/api/small-model']({ query: { providerID: 'anthropic' } }, response);
+
+    expect(response.payload).toMatchObject({
+      available: true,
+      model: { providerID: 'anthropic', modelID: 'claude-haiku-4-5', source: 'session-provider-small' },
     });
-    setUnavailableRetryDelaysForTest([1]);
-    state.generateErrors = [
-      { _tag: 'InvalidRequestError', message: 'Model unavailable: zai-coding-plan/glm-5.3-flash' },
-      { _tag: 'InvalidRequestError', message: 'Model unavailable: zai-coding-plan/glm-5.3-flash' },
-    ];
-    let status;
-    let payload;
-    const response = {
-      status(value) { status = value; return response; },
-      json(value) { payload = value; },
-    };
-    await generate({ body: { prompt: 'commit', model: 'zai-coding-plan/glm-5.3-flash' } }, response);
-    expect(status).toBe(503);
-    expect(payload).toEqual({
-      error: 'Model unavailable: zai-coding-plan/glm-5.3-flash',
-      code: 'small-model-unavailable',
-    });
-    setUnavailableRetryDelaysForTest();
+  });
+
+  it('returns the generated text on POST', async () => {
+    const response = respond();
+    await handlers.post['/api/small-model/generate']({ body: { prompt: 'commit', model: 'anthropic/claude-haiku-4-5' } }, response);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toMatchObject({ text: 'generated', providerID: 'anthropic', modelID: 'claude-haiku-4-5' });
+  });
+
+  it('surfaces the unavailable failure on POST', async () => {
+    configureOmpRuntimeHost(null);
+    const response = respond();
+    await handlers.post['/api/small-model/generate']({ body: { prompt: 'commit' } }, response);
+
+    expect(response.statusCode).toBe(404);
+    expect(response.payload).toEqual({ error: 'No small model available — the OMP runtime is not reachable' });
   });
 });

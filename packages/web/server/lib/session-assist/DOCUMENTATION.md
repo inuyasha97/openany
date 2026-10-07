@@ -7,21 +7,22 @@ unchanged; an empty suggestion is a successful outcome.
 
 ## Ownership
 
-- `runtime.js` owns idle timers, cancellation, provider selection, SDK reads,
-  freshness checks, settings gates, and metadata writes.
-- `context.js` reads bounded history and constructs human turns. It removes
-  tool payloads and injected prompts before retaining message text.
+- `runtime.js` owns idle timers, cancellation, provider selection, runtime-host
+  reads, freshness checks, settings gates, and metadata writes.
+- `context.js` reads history and constructs human turns. It removes tool
+  payloads and injected prompts before retaining message text.
 - `prompt.js` owns the generation instructions and total input budget.
 - `../small-model/DOCUMENTATION.md` owns provider/auth resolution, generation,
   output limits, and overflow behavior.
 
 ## What the model receives
 
-Read backward through the official SDK in pages of 50 messages until three
-human turns are covered, history ends, or eight pages have been read. A failed
-page or repeated cursor aborts generation; it is not treated as complete history.
-At the page limit, use fewer available human turns. If the latest answer's human
-request has not been found, skip generation rather than invent its context.
+Read the session's history oldest first through the OMP runtime host
+(`../agents/omp-host-access.js`). The host serves a session's whole history in
+one page, so a single read covers every turn the Small Model can need. A failed
+read aborts generation; it is not treated as complete history. If the latest
+answer's human request has not been found, skip generation rather than invent
+its context.
 
 Three turns retain the substance behind short commit confirmations without
 bringing an entire old task back into the prompt. This was compared against
@@ -29,22 +30,22 @@ one, five, ten, and full-history contexts on long maintainer sessions. There
 is no full-history cache and no assumed provider prefix-cache behavior.
 
 The latest content record must be a completed, successful, non-summary
-assistant answer with visible text. OpenCode closes every turn with an `idle`
-record and appends agent/model/location switches as records of their own;
-`newestContentId` looks past those, both here and in the re-check before the
-write, so an ordinary v2 transcript still ends in its answer. An `idle` whose
-outcome is `failed` or `interrupted` is not skipped: it disqualifies the turn.
-Child, archived, and reverted sessions are skipped. A new prompt clears the
-revert boundary before its next idle event.
+assistant answer with visible text. Records that carry no conversation content
+— the agent/model/location switches and an `idle` marker whose outcome is
+`succeeded` — are skipped by `newestContentId`, both here and in the re-check
+before the write. The OMP host keeps no such records in a history read, so the
+newest content record is normally the last one; the guard keeps a reader that
+does report them correct. An `idle` whose outcome is `failed` or `interrupted`
+is not skipped: it disqualifies the turn. Sessions the runtime no longer lists,
+and archived sessions, are skipped. OMP has no parent and no revert boundary, so
+there is no child or reverted session to exclude here.
 
-Human turns follow chronological message intervals. OpenCode can insert
-synthetic continuation users during compaction, so a final answer's `parentID`
-need not point directly at the original human request. These continuations stay
-within their human turn; compaction summaries are excluded. An interrupted
-request remains context with its last visible progress explicitly labeled as
-unfinished, rather than being dropped or called a final answer.
-An answer must still reference that human user or one of its continuation
-users; a late answer for an older request cannot be assigned to a newer request.
+Human turns follow chronological message intervals: a turn is one user message
+and the assistant reply that follows it. Compaction summaries are excluded. An
+interrupted request remains context with its last visible progress explicitly
+labeled as unfinished, rather than being dropped or called a final answer. The
+final answer must close the newest user turn; a late answer to an older request
+is not accepted.
 
 ### Attached context and language
 
@@ -55,7 +56,7 @@ formatter is `packages/ui/src/lib/messages/messageMarkdown.ts`.
 The server projects those persisted parts into model context without importing
 the UI runtime: code comments, file/chat quotes, browser annotations, PR comments,
 checks, terminal selections, and linked GitHub/Linear items remain attached to
-the user turn even when their transport part is synthetic. The OpenCode
+the user turn even when their transport record is a `synthetic` one. The
 `opencodeComment` mirror is also accepted. Unrecognized synthetic prompts and
 ignored parts are excluded. Malformed attached text fails the generation.
 
@@ -81,9 +82,9 @@ the minimum prompt cannot fit, skip generation. `onOverflow: 'error'` prevents
 the Small Model service from silently cutting off the instructions. Expected
 context/output-budget failures are quiet and do not write metadata.
 
-OpenCode message pages still contain complete tool payloads on the wire. A
-single long turn can therefore require substantial I/O even though its retained
-model context is small. Page/count bounds are not a network-byte quota.
+A history read still carries complete tool payloads even though the retained
+model context is small. A single long turn can therefore require substantial
+I/O. The read is not a network-byte quota.
 
 ## Generation and lifecycle
 
@@ -98,7 +99,9 @@ model context is small. Page/count bounds are not a network-byte quota.
    gate, no timer, no read. No history scan or
    startup backfill runs.
 2. Busy/retry events and newly created user messages clear pending work and
-   abort in-flight reads/generation. Re-emitted old user updates do not cancel it.
+   abort in-flight generation. The host history read itself is not
+   interruptible; the run checks its abort signal between steps. Re-emitted old
+   user updates do not cancel it.
 3. One generation runs per session. If a newer quiet window expires while an
    old canceled request is still settling, retain that pending run and start it
    after the old one finishes. Later activity cancels the pending run as well.
@@ -112,11 +115,12 @@ model context is small. Page/count bounds are not a network-byte quota.
    Completed work, optional offers, or a decision/action belonging to the user
    should return an empty suggestion. This is model judgment, not authorization
    enforcement or a guarantee that every generated field is factually correct.
-6. Re-read the latest message and fresh session before writing. A moved tail,
-   canceled run, changed endpoint/directory, archive, revert, or failed fresh
-   read discards the result. Never merge from the old pre-generation metadata.
+6. Re-read the history and the session list before writing. A moved tail,
+   canceled run, session that disappeared or changed its directory, archive, or
+   failed fresh read discards the result. Never merge from the old
+   pre-generation metadata.
 7. Re-check settings, clamp the enabled fields, and merge into fresh metadata.
-   The OpenCode update endpoint has no compare-and-set operation; another
+   The session metadata write has no compare-and-set operation; another
    writer after the final read is not guarded atomically.
 
 Stopping the runtime clears pending timers/runs and aborts in-flight operations.
@@ -135,9 +139,9 @@ Freshness has one rule, `getCurrentSessionAssist` in
 `packages/ui/src/lib/sessionAssistMetadata.ts`, computed from the session
 record alone so the chat and the sidebar row always agree: the payload is
 current while `generatedAt >= session.time.idle` and the session is not
-reverted. OpenCode moves `time.idle` at every turn end, succeeded or failed.
-Do not compare `forMessageID` with the last loaded message: in v2 the newest
-record is the turn's `idle` marker or a switch record, never the answer.
+reverted. The runtime moves `time.idle` at every turn end, succeeded or failed.
+Do not compare `forMessageID` with the last loaded message: the newest record
+can be a service record or an `idle` marker, never the answer itself.
 When a session turns busy, the runtime also deletes the assist it wrote
 (`persistSessionAssist(id, dir, null)`), so stored state goes stale only for
 payloads written by an earlier process; the `time.idle` rule retires those.

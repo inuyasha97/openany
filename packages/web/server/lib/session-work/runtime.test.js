@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { configureOmpRuntimeHost } from '../agents/omp-host-access.js';
 import { mergeMetadataPatch } from '../openchamber-sessions/session-metadata-store.js';
 import { decideAssist, decideOpen } from './questions.js';
 import { createSessionWorkRuntime } from './runtime.js';
@@ -6,29 +7,35 @@ import { createSessionLineage } from '../session-lineage.js';
 
 const ENDPOINT = { url: 'https://jev.test', model: 'jev', headers: {} };
 
-// v2 serves a session's messages newest first.
+// The canonical `{ info, parts }` records the OMP runtime serves, oldest first.
+const user = (id, text, created = 1) => ({
+  info: { id, role: 'user', time: { created } },
+  parts: text ? [{ type: 'text', text }] : [],
+});
+const assistant = (id, text, { created = 1, completed = 2, finish = 'stop' } = {}) => ({
+  info: { id, role: 'assistant', time: { created, completed }, finish, providerID: 'provider', modelID: 'model' },
+  parts: text ? [{ type: 'text', text }] : [],
+});
+
 const settledPair = [
-  { id: 'msg_a1', type: 'assistant', content: [{ type: 'text', text: 'Here is how it works.' }], finish: 'stop', time: { completed: 2 } },
-  { id: 'msg_u1', type: 'user', text: 'How does the sidebar work?', time: { created: 1 } },
+  user('msg_u1', 'How does the sidebar work?', 1),
+  assistant('msg_a1', 'Here is how it works.', { created: 1, completed: 2 }),
 ];
 const answeredTurn = [
-  { id: 'msg_idle', type: 'idle', outcome: 'succeeded' },
-  { id: 'msg_a2', type: 'assistant', content: [{ type: 'text', text: 'Done, try it.' }], finish: 'stop', time: { completed: 4 } },
-  { id: 'msg_u2', type: 'user', text: 'Implement it', time: { created: 3 } },
   ...settledPair,
+  user('msg_u2', 'Implement it', 3),
+  assistant('msg_a2', 'Done, try it.', { created: 3, completed: 4 }),
 ];
 
-const stubOpenCode = ({ session = {}, records = answeredTurn } = {}) => {
-  const fetchMock = vi.fn(async (input) => {
-    const url = new URL(String(input));
-    let body;
-    if (url.pathname === '/api/session/ses_1') body = { data: { id: 'ses_1', ...session } };
-    else if (url.pathname === '/api/session/ses_1/message') body = { data: records, cursor: {} };
-    else throw new Error(`unexpected ${url.pathname}`);
-    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-  });
-  vi.stubGlobal('fetch', fetchMock);
-  return fetchMock;
+const DEFAULT_SESSION = { id: 'ses_1', sessionPath: '/sessions/ses_1.json', cwd: '/repo', title: 'Session' };
+
+const stubOmp = ({ sessions = [DEFAULT_SESSION], records = answeredTurn } = {}) => {
+  const host = {
+    listSessions: vi.fn(async () => sessions),
+    getMessages: vi.fn(async () => ({ items: records, cursor: {} })),
+  };
+  configureOmpRuntimeHost(() => host);
+  return host;
 };
 
 const makeRuntime = ({ metadata = {}, answers = {}, askError = null, settings = {}, endpoint = ENDPOINT, lineage = null } = {}) => {
@@ -44,8 +51,6 @@ const makeRuntime = ({ metadata = {}, answers = {}, askError = null, settings = 
   const jev = { ask: vi.fn(async () => { if (askError) throw askError; return { answers, ms: 5 }; }) };
   let time = 100;
   const runtime = createSessionWorkRuntime({
-    buildOpenCodeUrl: (fetchPath) => `http://opencode.test${fetchPath}`,
-    getOpenCodeAuthHeaders: () => ({}),
     getSettings: () => ({ enabled: true, autoOpen: true, ...settings }),
     classifierEndpoint: async () => endpoint,
     jev,
@@ -68,7 +73,7 @@ const settle = async (check) => {
 };
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  configureOmpRuntimeHost(null);
   vi.restoreAllMocks();
 });
 
@@ -89,7 +94,7 @@ describe('session work decisions', () => {
 
 describe('session work runtime: a message was sent', () => {
   it('asks Jev on the new message with the settled turns as history, and opens the session', async () => {
-    stubOpenCode({ records: [{ id: 'msg_new', type: 'user', text: 'Now fix the header' }, ...settledPair] });
+    stubOmp({ records: [...settledPair, user('msg_new', 'Now fix the header', 50)] });
     const { runtime, jev, records } = makeRuntime({ answers: { change: { noul: 0.95 }, toward_change: { noul: 0.9 } } });
 
     runtime.processPayload(sent());
@@ -103,7 +108,7 @@ describe('session work runtime: a message was sent', () => {
   });
 
   it('does not ask again for a session already in work, or for the same message twice', async () => {
-    stubOpenCode();
+    stubOmp();
     const open = makeRuntime({ metadata: { openchamber: { work: { state: 'open' } } } });
     open.runtime.processPayload(sent());
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -121,43 +126,42 @@ describe('session work runtime: a message was sent', () => {
   it('skips a known subsession without reading it, and learns one it had to read', async () => {
     const lineage = createSessionLineage();
     lineage.remember('ses_1', 'ses_parent');
-    const fetchMock = stubOpenCode();
+    const host = stubOmp();
     const known = makeRuntime({ lineage, answers: { change: { noul: 1 } } });
     known.runtime.processPayload(sent());
     expect(await known.runtime.evaluateTurnEnd({ sessionId: 'ses_1', directory: '/repo', assist: { recap: true, suggestion: true } })).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(host.listSessions).not.toHaveBeenCalled();
+    expect(host.getMessages).not.toHaveBeenCalled();
     expect(known.jev.ask).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
 
+    // OMP exposes no parent, so a session read anyway is learned as top-level.
     const learning = createSessionLineage();
-    stubOpenCode({ session: { parentID: 'ses_parent' } });
+    stubOmp();
     const unknown = makeRuntime({ lineage: learning });
     await unknown.runtime.evaluateTurnEnd({ sessionId: 'ses_1', directory: '/repo', assist: { recap: true, suggestion: true } });
-    expect(learning.isChild('ses_1')).toBe(true);
+    expect(learning.isChild('ses_1')).toBe(false);
   });
 
-  it('asks nothing with auto-open off, without Jev, or in a child, review, or chat session', async () => {
+  it('asks nothing with auto-open off, without Jev, or in a review or chat session', async () => {
     for (const setup of [
       { runtime: { settings: { autoOpen: false } } },
       { runtime: { endpoint: null } },
-      { session: { parentID: 'ses_parent' } },
-      { session: { metadata: { openchamber: { kind: 'review', originalSessionID: 'ses_0' } } } },
-      { session: { location: { directory: '/home/me/.config/openchamber/chats/2026-09-27/hello' } } },
+      { runtime: { metadata: { openchamber: { kind: 'review', originalSessionID: 'ses_0' } } } },
+      { sessions: [{ ...DEFAULT_SESSION, cwd: '/home/me/.config/openchamber/chats/2026-09-27/hello' }] },
     ]) {
-      stubOpenCode({ session: setup.session });
+      stubOmp({ sessions: setup.sessions });
       const { runtime, jev } = makeRuntime({ answers: { change: { noul: 1 } }, ...setup.runtime });
       runtime.processPayload(sent());
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(jev.ask).not.toHaveBeenCalled();
-      vi.unstubAllGlobals();
     }
   });
 });
 
 describe('session work runtime: a turn ended', () => {
   it('asks the open questions and the assist questions in one call, and opens on the answer', async () => {
-    stubOpenCode();
+    stubOmp();
     const { runtime, jev, records } = makeRuntime({
       answers: { change: { noul: 0.97 }, recap: { noul: 0.9 }, next_step: { noul: 0.1 } },
     });
@@ -172,7 +176,7 @@ describe('session work runtime: a turn ended', () => {
   });
 
   it('asks only whether the work looks done in a session already in work, and a new turn retires the hint', async () => {
-    stubOpenCode();
+    stubOmp();
     const { runtime, jev, records, updateMetadata } = makeRuntime({
       metadata: { openchamber: { work: { state: 'open', openedAt: 1 } } },
       answers: { wrap_up: { noul: 0.93 } },
@@ -194,7 +198,7 @@ describe('session work runtime: a turn ended', () => {
   });
 
   it('drops a late done answer once the next turn started', async () => {
-    stubOpenCode();
+    stubOmp();
     const { runtime, jev, records } = makeRuntime({
       metadata: { openchamber: { work: { state: 'open', openedAt: 1 } } },
     });
@@ -225,7 +229,7 @@ describe('session work runtime: a turn ended', () => {
   });
 
   it('never closes: a closing turn in a session in work only hints', async () => {
-    stubOpenCode();
+    stubOmp();
     const { runtime, records } = makeRuntime({
       metadata: { openchamber: { work: { state: 'open', openedAt: 1 } } },
       answers: { wrap_up: { noul: 0.99 }, change: { noul: 0 } },
@@ -235,7 +239,7 @@ describe('session work runtime: a turn ended', () => {
   });
 
   it('answers unknown on a Jev failure and changes nothing', async () => {
-    stubOpenCode();
+    stubOmp();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { runtime, updateMetadata } = makeRuntime({ askError: new Error('Jev timed out after 4000ms') });
 
@@ -246,10 +250,11 @@ describe('session work runtime: a turn ended', () => {
   });
 
   it('makes no call when the feature and both assist fields are off', async () => {
-    const fetchMock = stubOpenCode();
+    const host = stubOmp();
     const { runtime, jev } = makeRuntime({ settings: { enabled: false } });
     expect(await runtime.evaluateTurnEnd({ sessionId: 'ses_1', directory: '/repo', assist: { recap: false, suggestion: false } })).toBeNull();
     expect(jev.ask).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(host.listSessions).not.toHaveBeenCalled();
+    expect(host.getMessages).not.toHaveBeenCalled();
   });
 });

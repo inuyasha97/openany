@@ -6,13 +6,14 @@
  * fallback model) and to the user's own decision for the safety net: a request
  * Jev could not check waits for the user, and the UI is told why.
  *
- * OpenCode 2.x holds the model and the agent on the session, switched by their
- * own calls, and a prompt body carries only the user's text. So Auto is a
- * per-session state here: the sentinel arrives on `POST /session/:id/model`
- * and is swallowed, and every prompt in that session is routed until a real
- * model is selected.
+ * The runtime holds the model on the session, switched by its own call, and a
+ * prompt body carries only the user's text. So Auto is a per-session state
+ * here: the sentinel arrives on `POST /session/:id/model` and is swallowed,
+ * and every prompt in that session is routed until a real model is selected.
+ * OMP does not expose model roles over RPC, so a category's agent cannot be
+ * applied; a routed send that needs one fails loudly (see
+ * `applySessionSelection`) instead of running on the composer's agent.
  */
-import { OpenCode } from '@opencode/client';
 import { z } from 'zod';
 import { AUTO_MODEL_REF, BUILTIN_CATEGORIES, ZEN_JEV_PROMOTION_ACTIVE, isAutoModel } from './defaults.js';
 import { createRoutingStore, parseEffectiveConfig } from './store.js';
@@ -27,6 +28,7 @@ import {
 } from './classifier.js';
 import { loadRoutingHistory } from './history.js';
 import { readAuthFile } from '../opencode/auth.js';
+import { readSessionMessages, setSessionModel } from '../agents/omp-host-access.js';
 import { ENTERPRISE_MODE_ERROR, isEnterpriseMode } from '../enterprise-mode.js';
 
 const HISTORY_TIMEOUT_MS = 2500;
@@ -102,8 +104,6 @@ export const readOpenCodeKeys = ({ readAuth = readAuthFile, env = process.env } 
 
 export function createRoutingRuntime({
   dataDir,
-  buildOpenCodeUrl,
-  getOpenCodeAuthHeaders,
   broadcastGlobalUiEvent,
   fetchImpl = fetch,
   store = createRoutingStore({ dataDir }),
@@ -115,7 +115,7 @@ export function createRoutingRuntime({
   now = Date.now,
 }) {
   const permissionDecisions = new Map();
-  // Sessions the user put on Auto. The sentinel never reaches OpenCode, so
+  // Sessions the user put on Auto. The sentinel never reaches the runtime, so
   // nothing upstream remembers the choice for us.
   // TODO(v2): this is process memory. A server restart drops the mark and the
   // session silently runs on whatever model it was last switched to while the
@@ -202,24 +202,17 @@ export function createRoutingRuntime({
     return state;
   };
 
-  const openCodeClient = (directory) => {
-    const headers = { ...getOpenCodeAuthHeaders() };
-    // v2 scopes by header and rejects non-ASCII header values.
-    const scope = z.string().trim().min(1).safeParse(directory);
-    if (scope.success) headers['x-opencode-directory'] = encodeURIComponent(scope.data);
-    return OpenCode.make({ baseUrl: buildOpenCodeUrl('/', '').replace(/\/$/, ''), headers });
-  };
-
-  const readHistory = async ({ sessionId, directory }) => {
-    const client = openCodeClient(directory);
+  /**
+   * The settled turns before the send, read through the OMP runtime seam. A
+   * page the runtime cannot answer (`null`) is a failed read, not an empty
+   * history: `loadRoutingHistory` throws and the caller falls back to routing
+   * on the request alone.
+   */
+  const readHistory = async (sessionId) => {
     const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS);
     return loadRoutingHistory({
       signal,
-      // v2 pages a session's messages newest first and returns `{ data, cursor }`.
-      readPage: ({ limit, cursor }) => client.message.list(
-        { sessionID: sessionId, limit, ...(cursor ? { cursor } : { order: 'desc' }) },
-        { signal },
-      ),
+      readPage: () => readSessionMessages(sessionId),
     });
   };
 
@@ -247,9 +240,9 @@ export function createRoutingRuntime({
    * rewriting a body in place the way v1 allowed.
    *
    * Throws only when Auto cannot be honoured at all (no fallback configured):
-   * the sentinel must never reach OpenCode.
+   * the sentinel must never reach the runtime.
    */
-  const resolveAutoSelection = async ({ sessionId, directory, model, agent, requestText }) => {
+  const resolveAutoSelection = async ({ sessionId, model, agent, requestText }) => {
     if (!isAutoModel(model)) return null;
     const state = await describe();
     const config = state.config;
@@ -261,7 +254,7 @@ export function createRoutingRuntime({
     if (state.autoReady) {
       let history = [];
       try {
-        history = await readHistory({ sessionId, directory });
+        history = await readHistory(sessionId);
       } catch (error) {
         console.warn('[routing] history unavailable, routing on the request alone:', errorMessage(error));
       }
@@ -307,21 +300,42 @@ export function createRoutingRuntime({
 
   const isAutoSession = (sessionId) => Boolean(sessionId) && autoSessions.has(sessionId);
 
-  /** Switches the session onto a resolved selection, the way a v2 send does. */
-  const applySessionSelection = async (sessionId, directory, selection) => {
-    const client = openCodeClient(directory);
-    await client.session.switchModel({ sessionID: sessionId, model: selection.model });
-    if (selection.agent) await client.session.switchAgent({ sessionID: sessionId, agent: selection.agent });
+  /**
+   * OMP does not expose model roles over RPC, so a category's agent cannot be
+   * applied to a session. Answered as unsupported rather than as a no-op: a
+   * routed send that needs one must not silently run on the composer's agent
+   * while the decision claims the category's.
+   */
+  const switchSessionAgent = (agent) => {
+    throw Object.assign(
+      new Error(`This runtime cannot switch the session to the "${agent}" agent: OMP does not expose model roles over RPC`),
+      { status: 501 },
+    );
+  };
+
+  /**
+   * Switches the session onto a resolved selection. The agent is checked
+   * before the model is touched, so a selection that cannot be applied in full
+   * leaves the session as it was.
+   */
+  const applySessionSelection = async (sessionId, selection) => {
+    if (selection.agent) switchSessionAgent(selection.agent);
+    const switched = await setSessionModel(sessionId, selection.model.providerID, selection.model.id);
+    if (switched === null) {
+      throw Object.assign(
+        new Error('The OMP runtime is not available, so the routed model could not be applied'),
+        { status: 503 },
+      );
+    }
   };
 
   /**
    * One send in a routed session: asks Jev on the request text, switches the
    * session onto the answer, and keeps the body in step with it.
    */
-  const routeSend = async ({ sessionId, directory, body }) => {
+  const routeSend = async ({ sessionId, body }) => {
     const resolved = await resolveAutoSelection({
       sessionId,
-      directory,
       model: AUTO_MODEL_REF,
       agent: agentBodySchema.safeParse(body).data?.agent ?? null,
       requestText: requestTextOf(body),
@@ -329,7 +343,7 @@ export function createRoutingRuntime({
     if (!resolved) return null;
     // v2 prompt and command bodies carry neither model nor agent: switching
     // the session is the whole application of the decision.
-    await applySessionSelection(sessionId, directory, resolved);
+    await applySessionSelection(sessionId, resolved);
     return resolved.decision;
   };
 

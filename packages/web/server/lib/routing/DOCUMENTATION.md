@@ -37,9 +37,10 @@ Auto. There is no env gate — the feature shipped dark behind
 - `jev.js` — request builders, answer parsing, and the HTTP call with a
   timeout to the endpoint `classifierEndpoint` chose.
 - `history.js` — the last three settled turns through session assist's
-  `loadAssistContext` (text parts only, attached quotes included, no files or
-  tool payloads), each user message cut to its head and each answer to head
-  plus tail. The new request is never cut.
+  `loadAssistContext` over the OMP runtime's canonical session records
+  (`../agents/omp-host-access.js`; text parts only, attached quotes included,
+  no files or tool payloads), each user message cut to its head and each
+  answer to head plus tail. The new request is never cut.
 - `runtime.js` — `createRoutingRuntime`: `describe`, `classifierEndpoint` (the
   endpoint a Jev request goes to now, or null; also used by
   `../session-work` and `../session-goal`), `noteModelSelection`,
@@ -52,21 +53,26 @@ Auto. There is no env gate — the feature shipped dark behind
 
 ## Invariants
 
-- The sentinel never reaches OpenCode. OpenCode 2.x holds the model and agent
-  on the session and a prompt body carries only the user's text, so Auto is
+- The sentinel never reaches the runtime. The runtime holds the model on the
+  session and a prompt body carries only the user's text, so Auto is
   per-session state: `POST /api/session` drops the sentinel from the create
-  body (the session starts on OpenCode's default; the first send switches it),
-  `POST /api/session/:id/model` with the sentinel is
+  body (the session starts on the runtime's default; the first send switches
+  it), `POST /api/session/:id/model` with the sentinel is
   swallowed and marks the session (`noteModelSelection`), and every
   `POST /api/session/:id/{prompt,command}` in a marked session is routed
   (`routeSend`) and switches the session onto the answer before the send is
   forwarded. Both sit ahead of the generic proxy, which replays a parsed body.
-  The message queue calls `resolveAutoSelection` itself and applies the answer
-  with the model/agent switches it already makes. Without a fallback model the
+  The model switch goes through the OMP runtime seam
+  (`../agents/omp-host-access.js`), so it is scoped by session alone. OMP does
+  not expose model roles over RPC: a category agent cannot be applied, so
+  `applySessionSelection` throws 501 before touching the model and the send is
+  not forwarded, rather than running on the composer's agent while the decision
+  claims the category's. The message queue calls `resolveAutoSelection` itself
+  and applies the answer with the model switch it already makes. Without a
+  fallback model the
   runtime throws 400 rather than forwarding. The OpenChamber session service
-  (`openchamber-sessions/routes.js`) talks to OpenCode through the SDK and can
-  pick Auto up from Session Defaults, so it calls `resolveAutoSelection` itself
-  before switching the session.
+  (`openchamber-sessions/routes.js`) can pick Auto up from Session Defaults, so
+  it calls `resolveAutoSelection` itself before switching the session.
 - The mark lives in process memory. A server restart between the model switch
   and the next send drops it (see the TODO in `runtime.js`).
 - Routing failures keep the user's own behaviour: a Jev error, timeout, unknown
@@ -82,7 +88,10 @@ Auto. There is no env gate — the feature shipped dark behind
   entries. `safetyNet.threshold` still applies.
 - A category without a model uses the fallback model *and* variant; a variant
   only travels with the model it was chosen for. A category agent replaces the
-  composer's agent; an empty one keeps it.
+  composer's agent; an empty one keeps it. The runtime seam applies the model
+  only (`setSessionModel(sessionId, provider, modelId)`): the thinking variant
+  has no OMP equivalent and is dropped, and a category agent fails the send as
+  above.
 - Auto is offered (`autoReady`) with a usable classification provider
   (`jevAvailable`), `enabled`, a fallback model and at least two enabled
   categories.
@@ -216,7 +225,8 @@ features that need Jev.
 `store.test.js` (defaults, deviation round-trip, deleted built-ins, malformed
 file, token file mode, classifier pick, custom endpoint file), `runtime.test.js` (request text,
 excerpts, decisions, endpoints, custom URL normalization and setter,
-classifier fallback, rewrite and fallback
+classifier fallback, the OMP send path — history read, model switch and the
+unsupported category agent — rewrite and fallback
 paths, safety net accept/hold/skip/unavailable), `routes.http.test.js`
 (sentinel dropped from a create and swallowed on the model switch, routed send
 ahead of a stand-in proxy, the routes). The queue and auto-accept tests cover

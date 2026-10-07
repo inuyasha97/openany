@@ -7,13 +7,18 @@ import {
 import { expandSnippets } from '../opencode/snippets.js';
 import { AUTO_MODEL_REF, isAutoModel } from '../routing/defaults.js';
 import { parseScheduledCommandPrompt } from '../scheduled-tasks/runtime.js';
-import { buildGoalIntroText, createSessionGoal } from '../session-goal/create.js';
+import { createSessionGoal } from '../session-goal/create.js';
 import { OpenChamberControlError, asControlError } from '../openchamber-control/error.js';
 import { readObjective, writeObjective } from '../session-goal/objectives.js';
 import { createArchiveStore } from './archive-store.js';
 import { applyForkInheritance } from './fork-inheritance.js';
-import { createOpenCodeClient as defaultCreateOpenCodeClient } from './opencode-client.js';
-import { createSessionMetadataStore, createOpenCodeSessionMetadata } from './session-metadata-store.js';
+import {
+  getOmpRuntimeHost,
+  promptSession,
+  readSessionMessages,
+  setSessionModel,
+} from '../agents/omp-host-access.js';
+import { createSessionMetadataStore } from './session-metadata-store.js';
 
 const asNonEmptyString = (value) => {
   if (typeof value !== 'string') return null;
@@ -22,6 +27,90 @@ const asNonEmptyString = (value) => {
 };
 
 const asList = (value) => (Array.isArray(value) ? value : []);
+
+/**
+ * A surface the OpenCode runtime had and OMP does not. Answered as unsupported
+ * rather than ignored or guessed: the caller gets one clear failure, and the
+ * route's error handler answers it with its own status instead of turning a
+ * missing method into a 500 somewhere deeper in the dispatch.
+ */
+const unsupportedOnOmp = (what) => {
+  throw new OpenChamberControlError(`${what} is not supported on the OMP runtime`, 501);
+};
+
+/** The raw OMP host, or a clear failure when the runtime is not mounted. */
+const requireOmpHost = async () => {
+  const host = await getOmpRuntimeHost();
+  if (!host) throw new OpenChamberControlError('The OMP runtime is not available', 503);
+  return host;
+};
+
+/**
+ * The runtime's model catalogue in the shape the selection logic reads: OMP
+ * names a model as `{ provider, id }` while every lookup here is by
+ * `providerID`/`modelID`. An entry naming neither is unusable and dropped; an
+ * unreadable catalogue is empty, which callers read as "unknown" rather than as
+ * a rejection.
+ */
+const listModelCatalog = async () => {
+  const host = await getOmpRuntimeHost();
+  if (!host) return [];
+  const catalog = [];
+  for (const model of asList(await host.listModels())) {
+    const providerID = asNonEmptyString(model?.provider ?? model?.providerID);
+    const modelID = asNonEmptyString(model?.id ?? model?.modelID);
+    if (providerID && modelID) catalog.push({ providerID, modelID });
+  }
+  return catalog;
+};
+
+/** The runtime's slash commands, or none when the runtime is not mounted. */
+const listRuntimeCommands = async () => {
+  const host = await getOmpRuntimeHost();
+  if (!host) return [];
+  return asList(await host.listCommands());
+};
+
+/**
+ * OMP serves no agent catalogue, so no agent is resolved by id or by name and
+ * no agent informs a default. Kept as a narrow failure where the OpenCode call
+ * used to be, so the gap stays visible.
+ */
+const listAgents = async () => unsupportedOnOmp('Listing agents');
+
+/**
+ * OMP serves no OpenCode-level config, so it cannot supply a default agent or a
+ * default model any more. Kept as a narrow failure for the same reason.
+ */
+const listRuntimeConfig = async () => unsupportedOnOmp('Reading the runtime config');
+
+/**
+ * OMP switches a session's model in one RPC and exposes no agent switch, so a
+ * session cannot be moved onto an agent. Answered as unsupported rather than
+ * ignored: a dispatch that must run on a named agent must not silently run on
+ * whichever one the session already has.
+ */
+const switchSessionAgent = (agent) => {
+  unsupportedOnOmp(`Switching the session to the '${agent}' agent`);
+};
+
+/**
+ * `setModel(provider, modelId)` is the whole model switch: OMP has no reasoning
+ * variant to apply, so a session asked for one would silently run without it.
+ */
+const applyModelVariant = (variant) => {
+  unsupportedOnOmp(`The '${variant}' model variant`);
+};
+
+/**
+ * Rejects what OMP cannot apply, before any session, worktree or goal side
+ * effect happens, rather than dropping it from a request that would otherwise
+ * look like it succeeded.
+ */
+const rejectUnsupportedSelection = ({ agent, variant }) => {
+  if (agent) switchSessionAgent(agent);
+  if (variant) applyModelVariant(variant);
+};
 
 const splitModel = (value) => {
   const model = asNonEmptyString(value);
@@ -43,8 +132,6 @@ const resolveRequestedModel = (payload) => {
   return providerID && modelID ? { providerID, modelID } : null;
 };
 
-const FALLBACK_PROVIDER_ID = 'opencode';
-const FALLBACK_MODEL_ID = 'big-pickle';
 const MIN_GOAL_TOKEN_BUDGET = 1_000;
 const MAX_GOAL_TOKEN_BUDGET = 100_000_000;
 
@@ -68,27 +155,10 @@ const resolveGoalInput = (payload, prompt) => {
   return { ok: true, enabled, tokenBudget };
 };
 
-const isPrimaryAgentMode = (mode) => !mode || mode === 'primary' || mode === 'all';
-
-// OpenCode 2.x serves one flat model catalogue instead of models nested under
-// providers: every entry already names its provider.
+// OMP serves one flat model catalogue: every entry names its provider.
 const hasCatalogModel = (models, providerID, modelID) => models.some(
   (model) => model?.providerID === providerID && model?.modelID === modelID,
 );
-
-const findCatalogModel = (models, providerID, modelID) => models.find(
-  (model) => model?.providerID === providerID && model?.modelID === modelID,
-) || null;
-
-const resolveVariant = (models, providerID, modelID, variant) => {
-  const normalized = asNonEmptyString(variant);
-  if (!normalized) return undefined;
-  const model = findCatalogModel(models, providerID, modelID);
-  // A model the catalog does not know yet (cold or unreachable) keeps the
-  // user's saved variant instead of losing it to a discovery gap.
-  if (!model) return normalized;
-  return asList(model.variants).some((entry) => entry?.id === normalized) ? normalized : undefined;
-};
 
 // Config `model` is either "providerID/modelID" or the expanded object form.
 const parseConfigModel = (value) => {
@@ -104,170 +174,115 @@ const resolveProjectDefaults = (settings, directory, projectId) => {
     ? projects.find((entry) => entry?.id === projectId) || null
     : projects.find((entry) => entry?.path === directory) || null;
   return {
-    defaultAgent: asNonEmptyString(matchedProject?.defaultAgent),
     defaultModel: asNonEmptyString(matchedProject?.defaultModel),
-    defaultVariant: asNonEmptyString(matchedProject?.defaultVariant),
   };
 };
 
-/** `x-opencode-directory` is how v2 scopes a request; there is no query param. */
 /**
- * Everything the default model/agent resolution needs, from one directory-scoped
- * client. A failed lookup answers empty on purpose: an empty catalogue means
- * "unknown", and callers must never turn that into a rejection.
+ * The default-selection inputs the routes still read: the saved settings and
+ * the runtime's model catalogue. A failed lookup answers empty on purpose — an
+ * empty catalogue means "unknown", and callers must never turn that into a
+ * rejection.
+ *
+ * Two inputs the OpenCode runtime supplied are gone with it: an agent catalogue
+ * (a default agent) and its own config (the runtime's default model). Both
+ * lookups are still attempted so the gap stays a visible, narrow failure rather
+ * than a call that quietly disappeared, and their empty answer is read as
+ * "unknown" — never as "the runtime says there are none".
  */
-const fetchSelectionInputs = async ({ client, readSettingsFromDiskMigrated }) => {
+const fetchSelectionInputs = async ({ readSettingsFromDiskMigrated }) => {
   const settings = await readSettingsFromDiskMigrated();
-  const [models, agents, configEntries] = await Promise.all([
-    client.model.list().then((response) => asList(response?.data)).catch(() => []),
-    // v2 agents carry `id` (`build`, what prompts and sessions refer to) and a
-    // display `name` (`Build`); every lookup here is by id.
-    client.agent.list().then((response) => asList(response?.data)).catch(() => []),
-    client.config.get().then((response) => asList(response)).catch(() => []),
-  ]);
-
-  // Config entries arrive lowest priority first, so the last definition wins.
-  let opencodeDefaultAgent = null;
-  let opencodeDefaultModel = null;
-  for (const entry of configEntries) {
-    const info = entry?.info;
-    if (!info) continue;
-    const agent = asNonEmptyString(info.default_agent);
-    if (agent) opencodeDefaultAgent = agent;
-    const model = parseConfigModel(info.model);
-    if (model) opencodeDefaultModel = model;
-  }
-
-  return { settings, models, agents, opencodeDefaultAgent, opencodeDefaultModel };
-};
-
-const resolveDefaultSelection = ({ agents, models, settings, projectDefaults, opencodeDefaultAgent, opencodeDefaultModel }) => {
-  const primaryAgents = agents.filter((agent) => isPrimaryAgentMode(agent?.mode) && agent?.hidden !== true);
-  let resolvedAgent = null;
-  const projectDefaultAgent = asNonEmptyString(projectDefaults?.defaultAgent);
-  const settingsDefaultAgent = asNonEmptyString(settings?.defaultAgent);
-  // The project's default agent wins over the global one. v1 stored the agent's
-  // display name; v2 agents are addressed by id (`build` vs `Build`), so a
-  // setting saved before the upgrade still resolves.
-  const findAgentBySetting = (wantedName) => {
-    const wanted = wantedName.toLowerCase();
-    return agents.find((agent) => agent?.id === wantedName)
-      || agents.find((agent) => typeof agent?.name === 'string' && agent.name.toLowerCase() === wanted)
-      || agents.find((agent) => typeof agent?.id === 'string' && agent.id.toLowerCase() === wanted)
-      || null;
-  };
-  if (projectDefaultAgent) resolvedAgent = findAgentBySetting(projectDefaultAgent);
-  if (!resolvedAgent && settingsDefaultAgent) resolvedAgent = findAgentBySetting(settingsDefaultAgent);
-  if (!resolvedAgent && opencodeDefaultAgent) {
-    const candidate = agents.find((agent) => agent?.id === opencodeDefaultAgent) || null;
-    if (candidate && isPrimaryAgentMode(candidate.mode) && candidate.hidden !== true) {
-      resolvedAgent = candidate;
-    }
-  }
-  if (!resolvedAgent) {
-    resolvedAgent = primaryAgents.find((agent) => agent?.id === 'build') || primaryAgents[0] || agents[0] || null;
-  }
-
-  let model = null;
-  let variant;
-  const projectDefaultModel = parseConfigModel(projectDefaults?.defaultModel);
-  const settingsDefaultModel = parseConfigModel(settings?.defaultModel);
-  // A saved choice is honoured even when the catalog has not listed it yet: a
-  // discovery gap must not silently move the user onto another model.
-  if (projectDefaultModel) {
-    model = projectDefaultModel;
-    variant = resolveVariant(models, model.providerID, model.modelID, projectDefaults?.defaultVariant);
-  }
-  if (!model && settingsDefaultModel) {
-    model = settingsDefaultModel;
-    variant = resolveVariant(models, model.providerID, model.modelID, settings?.defaultVariant);
-  }
-
-  // An agent's model is a v2 `ModelRef`: `id` is the model id, not a composite.
-  const agentModel = resolvedAgent?.model;
-  if (!model && asNonEmptyString(agentModel?.providerID) && asNonEmptyString(agentModel?.id)) {
-    model = { providerID: agentModel.providerID, modelID: agentModel.id };
-    variant = resolveVariant(models, model.providerID, model.modelID, agentModel.variant);
-  }
-
-  if (!model && opencodeDefaultModel) {
-    model = opencodeDefaultModel;
-  }
-
-  if (!model && hasCatalogModel(models, FALLBACK_PROVIDER_ID, FALLBACK_MODEL_ID)) {
-    model = { providerID: FALLBACK_PROVIDER_ID, modelID: FALLBACK_MODEL_ID };
-  }
-
-  if (!model) {
-    const first = models[0];
-    if (asNonEmptyString(first?.providerID) && asNonEmptyString(first?.modelID)) {
-      model = { providerID: first.providerID, modelID: first.modelID };
-    }
-  }
-
-  return {
-    agent: resolvedAgent?.id,
-    model,
-    variant,
-  };
+  const models = await listModelCatalog().catch(() => []);
+  await Promise.all([listAgents().catch(() => []), listRuntimeConfig().catch(() => [])]);
+  return { settings, models };
 };
 
 /**
- * v2 selects model and agent per session, not per prompt: the choice is
- * switched once and then persists, so every dispatch sets it explicitly rather
- * than passing it alongside the prompt.
+ * The model a dispatch with no explicit choice runs on: the project's default,
+ * then the global one, then the catalogue's first entry. The steps the OpenCode
+ * runtime supplied are gone (see `fetchSelectionInputs`), and OMP resolves no
+ * default agent at all — an explicit one is rejected instead (see
+ * `switchSessionAgent`).
  */
-const applySessionSelection = async ({ client, sessionID, model, agent, variant }) => {
-  if (model) {
-    await client.session.switchModel({
-      sessionID,
-      model: { id: model.modelID, providerID: model.providerID, ...(variant ? { variant } : {}) },
-    });
+const resolveDefaultModel = ({ models, settings, projectDefaults }) => {
+  const projectDefaultModel = parseConfigModel(projectDefaults?.defaultModel);
+  if (projectDefaultModel) return projectDefaultModel;
+
+  const settingsDefaultModel = parseConfigModel(settings?.defaultModel);
+  if (settingsDefaultModel) return settingsDefaultModel;
+
+  const first = models[0];
+  if (asNonEmptyString(first?.providerID) && asNonEmptyString(first?.modelID)) {
+    return { providerID: first.providerID, modelID: first.modelID };
   }
-  if (agent) await client.session.switchAgent({ sessionID, agent });
+  return null;
 };
 
-const createSession = async ({ client, directory, title }) => {
-  const session = await client.session.create({
-    location: { directory },
-    ...(title ? { title } : {}),
-  });
+/**
+ * A dispatch sets the session's model before its prompt. OMP switches it in one
+ * RPC; the agent and the variant do not travel with the model and cannot be
+ * applied by it, so they are answered before it is reached (see
+ * `rejectUnsupportedSelection`).
+ */
+const applySessionSelection = async ({ sessionID, model }) => {
+  if (!model) return;
+  const switched = await setSessionModel(sessionID, model.providerID, model.modelID);
+  if (switched === null) throw new OpenChamberControlError('The OMP runtime is not available', 503);
+};
+
+const createSession = async ({ directory, title }) => {
+  const host = await requireOmpHost();
+  const session = await host.createSession({ cwd: directory });
   const sessionID = asNonEmptyString(session?.id);
   if (!sessionID) throw new Error('failed to create session');
+  // OMP opens a session on a directory and names it afterwards; there is no
+  // create-with-title call.
+  if (title) await host.renameSession(sessionID, title);
   return sessionID;
 };
 
-const forkSession = async ({ client, sessionID, messageID }) => {
-  const session = await client.session.fork({
-    sessionID,
-    // OpenCode 2.0.8 replaced the SessionForkBoundary object with an optional
-    // `before` message id. Omitting it carries the whole session over, which is
-    // what the old `{ type: 'through' }` boundary meant.
-    ...(messageID ? { before: messageID } : {}),
-  });
-  if (!asNonEmptyString(session?.id)) throw new Error('failed to fork session');
-  return session;
-};
+/**
+ * OpenCode forked a session at a message boundary; OMP's RPC surface has none
+ * (a session is its own transcript, and the fork request carries no OMP
+ * counterpart). Kept in the dispatch as a narrow failure so a caller asking for
+ * a fork is told instead of receiving a session that is not one.
+ */
+const forkSession = async () => unsupportedOnOmp('Forking a session');
 
-const listMessages = async ({ client, sessionID, limit }) => {
-  const response = await client.message.list({ sessionID, limit, order: 'desc' });
-  return asList(response?.data);
-};
+/**
+ * OpenCode admitted a message without starting a run — goal reminders and the
+ * session's standing project context travelled that way. OMP's only way in is a
+ * prompt, which does start the agent, so the call is answered as unsupported
+ * rather than the message being folded into something the caller kept it apart
+ * from.
+ */
+const sendSyntheticMessage = (what) => unsupportedOnOmp(`Recording the ${what} without starting a run`);
 
-const latestCompletedAssistantMessageID = async ({ client, sessionID }) => {
-  let messages;
-  try {
-    messages = await listMessages({ client, sessionID, limit: 100 });
-  } catch {
-    return null;
-  }
+/**
+ * OpenCode ran a catalogue command through its own route, with the typed
+ * arguments as the message. OMP has no such route — its commands travel inside
+ * a prompt — so an explicit command call is answered as unsupported rather than
+ * turned into a prompt the caller did not ask to send.
+ */
+const runSessionCommand = async (name) => unsupportedOnOmp(`Running the '${name}' session command`);
+
+/**
+ * The newest completed assistant message, from the runtime's canonical page.
+ * A page the runtime does not have (`null`: not mounted) leaves the id unknown;
+ * a page it could not answer throws, because "could not read" must not be
+ * reported as "there is no completed answer".
+ */
+const latestCompletedAssistantMessageID = async ({ sessionID }) => {
+  const page = await readSessionMessages(sessionID);
   let latest = null;
-  for (const message of messages) {
-    if (message?.type !== 'assistant' || !Number.isFinite(message?.time?.completed)) continue;
-    if (!latest || (message.time.created || 0) >= (latest.time?.created || 0)) latest = message;
+  for (const item of asList(page?.items)) {
+    const info = item?.info;
+    if (info?.role !== 'assistant' || !Number.isFinite(info?.time?.completed)) continue;
+    if (!latest || (info.time.created || 0) >= (latest.time?.created || 0)) latest = info;
   }
   return asNonEmptyString(latest?.id);
 };
+
 
 /**
  * Upper bound on one archive batch.
@@ -337,10 +352,10 @@ const resolveRequestedDirectory = async ({ payload, readSettingsFromDiskMigrated
 
 // createWorktree returns while the worktree is still being populated in the
 // background (git reset --hard after a --no-checkout add). Dispatching a
-// prompt into a half-populated directory makes opencode's run die with
-// UnknownError (agent and config files are not there yet), so wait until the
-// bootstrap reaches git-ready (population done) or fails before creating the
-// session and dispatching.
+// prompt into a half-populated directory makes the run die with UnknownError
+// (agent and config files are not there yet), so wait until the bootstrap
+// reaches git-ready (population done) or fails before creating the session and
+// dispatching.
 const WORKTREE_BOOTSTRAP_TIMEOUT_MS = 60_000;
 const WORKTREE_BOOTSTRAP_POLL_MS = 150;
 
@@ -366,7 +381,6 @@ export const createOpenChamberSessionService = (dependencies) => {
     validateDirectoryPath,
     buildOpenCodeUrl,
     getOpenCodeAuthHeaders,
-    waitForOpenCodeReady,
     emitSessionCreatedEvent,
     broadcastGlobalUiEvent,
     createSessionGoal: createSessionGoalOverride,
@@ -378,13 +392,12 @@ export const createOpenChamberSessionService = (dependencies) => {
     // store, broadcast, and tell the goal loop. Falls back to store+broadcast
     // when it is absent, which is what module tests use.
     persistSessionMetadata = null,
-    createOpenCodeClient = defaultCreateOpenCodeClient,
     createWorktree = createWorktreeDefault,
     getWorktreeBootstrapStatus = getWorktreeBootstrapStatusDefault,
-    // Auto routing. Sessions dispatched here talk to OpenCode through the SDK,
-    // not through the proxy that intercepts the Auto sentinel, so a default of
-    // `openchamber/auto` (Session Defaults) is resolved here before the
-    // session is switched onto it. Null when routing is not wired in.
+    // Auto routing. Sessions dispatched here reach the runtime through the OMP
+    // host, not through the proxy that intercepts the Auto sentinel, so a
+    // default of `openchamber/auto` (Session Defaults) is resolved here before
+    // the session is switched onto it. Null when routing is not wired in.
     resolveAutoSelection = null,
   } = dependencies;
 
@@ -392,21 +405,11 @@ export const createOpenChamberSessionService = (dependencies) => {
     throw new Error('openchamber session routes need either both stores or a dataDir');
   }
   const archiveStore = injectedArchiveStore || createArchiveStore({ dataDir });
-  const sessionMetadataStore = injectedSessionMetadataStore || createSessionMetadataStore({
-    dataDir,
-    openCode: createOpenCodeSessionMetadata({
-      buildOpenCodeUrl,
-      getOpenCodeAuthHeaders,
-      createOpenCodeClient,
-    }),
-  });
+  const sessionMetadataStore = injectedSessionMetadataStore || createSessionMetadataStore({ dataDir });
 
+  // The goal record is still created through the goal runtime, which is handed
+  // the OpenCode-shaped coordinates it has always taken (see `index.js`).
   const openCodeBaseUrl = () => buildOpenCodeUrl('/', '').replace(/\/$/, '');
-  const clientFor = (directory) => createOpenCodeClient({
-    baseUrl: openCodeBaseUrl(),
-    headers: getOpenCodeAuthHeaders(),
-    directory,
-  });
 
   const waitForWorktreeBootstrapReady = async ({ directory }) => {
     const deadline = Date.now() + WORKTREE_BOOTSTRAP_TIMEOUT_MS;
@@ -425,65 +428,50 @@ export const createOpenChamberSessionService = (dependencies) => {
   };
 
   /**
-   * The selection an existing session already runs on. v2 keeps it on the
-   * session record, so there is no need to walk the message history for it.
+   * The model an existing session already runs on. OMP keeps the live selection
+   * in the session's process, which the host does not expose, so the newest
+   * message that names a provider and a model stands in for it: the session
+   * keeps running on that model, and a dispatch that must not move it onto a
+   * global default reads it here first. OMP has no session agent or model
+   * variant to carry over.
+   *
+   * A page the runtime could not answer throws — a failed read must not be
+   * taken for "this session has no model", which would move the session onto
+   * the default behind the caller's back.
    */
-  const fetchSessionSelection = async ({ client, sessionID }) => {
-    try {
-      const session = await client.session.get({ sessionID });
-      const providerID = asNonEmptyString(session?.model?.providerID);
-      const modelID = asNonEmptyString(session?.model?.id);
-      return {
-        model: providerID && modelID ? { providerID, modelID } : null,
-        agent: asNonEmptyString(session?.agent),
-        variant: asNonEmptyString(session?.model?.variant),
-      };
-    } catch {
-      return null;
+  const fetchSessionSelection = async ({ sessionID }) => {
+    const page = await readSessionMessages(sessionID);
+    const items = asList(page?.items);
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const info = items[index]?.info;
+      const providerID = asNonEmptyString(info?.providerID);
+      const modelID = asNonEmptyString(info?.modelID);
+      if (providerID && modelID) return { model: { providerID, modelID } };
     }
+    return null;
   };
 
-  // An unknown agent or model makes the run fail after the prompt is accepted,
-  // leaving a session with no answer. Reject them before any session, worktree,
-  // or goal side effect happens.
-  const validateRequestedSelection = async ({ directory, requestedModel, requestedAgent, requestedVariant }) => {
-    if (!requestedModel && !requestedAgent && !requestedVariant) return;
-    const { models, agents } = await fetchSelectionInputs({
-      client: clientFor(directory),
-      readSettingsFromDiskMigrated,
-    });
+  // An unknown model makes the run fail after the prompt is accepted, leaving a
+  // session with no answer. Reject it before any session, worktree, or goal side
+  // effect happens. An agent is not validated here: OMP serves no agent
+  // catalogue to validate against, and a requested agent is rejected outright
+  // (see `rejectUnsupportedSelection`).
+  const validateRequestedModel = async ({ directory, requestedModel }) => {
+    if (!requestedModel) return;
+    const { models } = await fetchSelectionInputs({ readSettingsFromDiskMigrated });
 
-    // An empty list means the lookup failed or returned nothing authoritative;
-    // it must not turn a valid selection into a rejection.
-    if (requestedAgent && agents.length > 0) {
-      const agent = agents.find((entry) => entry?.id === requestedAgent) || null;
-      if (!agent) {
-        throw new OpenChamberControlError(`Unknown agent '${requestedAgent}' for ${directory}`, 400);
-      }
-      if (!isPrimaryAgentMode(agent.mode)) {
-        throw new OpenChamberControlError(`Agent '${requestedAgent}' is a subagent and cannot receive a prompt directly`, 400);
-      }
-    }
-
-    if (requestedModel && models.length > 0) {
-      if (!hasCatalogModel(models, requestedModel.providerID, requestedModel.modelID)) {
-        throw new OpenChamberControlError(
-          `Unknown model '${requestedModel.providerID}/${requestedModel.modelID}' for ${directory}`,
-          400,
-        );
-      }
-      if (requestedVariant
-        && !resolveVariant(models, requestedModel.providerID, requestedModel.modelID, requestedVariant)) {
-        throw new OpenChamberControlError(
-          `Unknown variant '${requestedVariant}' for model '${requestedModel.providerID}/${requestedModel.modelID}'`,
-          400,
-        );
-      }
+    // An empty catalogue means the lookup failed or returned nothing
+    // authoritative; it must not turn a valid selection into a rejection.
+    if (models.length === 0) return;
+    if (!hasCatalogModel(models, requestedModel.providerID, requestedModel.modelID)) {
+      throw new OpenChamberControlError(
+        `Unknown model '${requestedModel.providerID}/${requestedModel.modelID}' for ${directory}`,
+        400,
+      );
     }
   };
 
   const dispatchPrompt = async ({
-    client,
     baseUrl,
     authHeaders,
     sessionID,
@@ -492,34 +480,19 @@ export const createOpenChamberSessionService = (dependencies) => {
     prompt,
     goalInput,
     requestedModel,
-    requestedAgent,
-    requestedVariant,
     reuseSessionSelection = false,
   }) => {
     let model = requestedModel;
-    let agent = requestedAgent;
-    let variant = requestedVariant;
-    if (reuseSessionSelection && (!model || !agent)) {
-      const previous = await fetchSessionSelection({ client, sessionID });
-      if (previous) {
-        if (!model && previous.model) {
-          model = previous.model;
-          if (variant == null) variant = previous.variant ?? undefined;
-        }
-        if (!agent && previous.agent) agent = previous.agent;
-      }
+    if (reuseSessionSelection && !model) {
+      const previous = await fetchSessionSelection({ sessionID });
+      if (previous?.model) model = previous.model;
     }
-    if (!model || !agent) {
-      const inputs = await fetchSelectionInputs({ client, readSettingsFromDiskMigrated });
-      const defaults = resolveDefaultSelection({
+    if (!model) {
+      const inputs = await fetchSelectionInputs({ readSettingsFromDiskMigrated });
+      model = resolveDefaultModel({
         ...inputs,
         projectDefaults: resolveProjectDefaults(inputs.settings, directory, projectId),
       });
-      if (!model) {
-        model = defaults.model;
-        if (variant == null) variant = defaults.variant;
-      }
-      agent = agent || defaults.agent;
     }
     if (!model) {
       const error = new Error('No model is configured or available for the requested directory');
@@ -529,8 +502,8 @@ export const createOpenChamberSessionService = (dependencies) => {
 
     const expandedPrompt = expandSnippets(prompt, directory);
     if (isAutoModel(model)) {
-      // The sentinel must never reach OpenCode: neither the goal record nor the
-      // session switch below may carry it.
+      // The sentinel must never reach the runtime: neither the goal record nor
+      // the session switch below may carry it.
       if (!resolveAutoSelection) {
         throw new OpenChamberControlError('Auto routing is not available on this server. Choose a model.', 400);
       }
@@ -538,19 +511,19 @@ export const createOpenChamberSessionService = (dependencies) => {
         sessionId: sessionID,
         directory,
         model: AUTO_MODEL_REF,
-        agent: agent ?? null,
+        agent: null,
         requestText: expandedPrompt,
       });
+      // A category can name an agent; OMP cannot switch a session onto one, so
+      // a routed agent is answered rather than run on the wrong one.
+      if (routed.agent) switchSessionAgent(routed.agent);
       model = { providerID: routed.model.providerID, modelID: routed.model.id };
-      variant = routed.model.variant ?? undefined;
-      agent = routed.agent || agent;
     }
     const parsedCommand = parseScheduledCommandPrompt(prompt);
     let resolvedCommand = null;
     if (parsedCommand) {
       try {
-        const response = await client.command.list();
-        const commands = asList(response?.data);
+        const commands = await listRuntimeCommands();
         if (commands.some((candidate) => candidate?.name === parsedCommand.command)) {
           resolvedCommand = parsedCommand;
         }
@@ -558,7 +531,7 @@ export const createOpenChamberSessionService = (dependencies) => {
       }
     }
     if (goalInput.enabled) {
-      // v2 no longer publishes a command's template, so a slash command's goal
+      // The runtime publishes no command template, so a slash command's goal
       // objective is the prompt the user typed rather than the expanded body.
       await (createSessionGoalOverride || createSessionGoal)({
         baseUrl,
@@ -570,8 +543,8 @@ export const createOpenChamberSessionService = (dependencies) => {
         providerID: model.providerID,
         modelID: model.modelID,
         onWarning: (message, error) => console.warn(`[OpenChamberSessions] ${message}:`, error?.message || error),
-        // v2 has no session-metadata route, so the goal record goes to
-        // OpenChamber's own store — the same one the proxy overlays back.
+        // The goal record goes to OpenChamber's own store — the same one the
+        // proxy overlays back onto the sessions it serves.
         persistSessionGoal: async (goalSessionID, goalDirectory, goal) => {
           await writeMetadata(goalSessionID, { openchamber: { goal } }, goalDirectory);
         },
@@ -584,14 +557,16 @@ export const createOpenChamberSessionService = (dependencies) => {
     };
 
     try {
-      await applySessionSelection({ client, sessionID, model, agent, variant });
+      await applySessionSelection({ sessionID, model });
     } catch (error) {
       throw markGoalPartial(error);
     }
 
     // A session the agent dispatched has no UI to attach the project's
-    // standing context, so it is asked for here. Never fails the dispatch:
-    // a session that runs without its background beats one that never runs.
+    // standing context, so it is asked for here. The context is injected only
+    // if the runtime offers a way to record a message without starting a run;
+    // on OMP it does not, so a dispatch with context pending is answered
+    // instead of the context being dropped behind the caller's back.
     const knowledge = sessionKnowledgeRuntime
       ? await sessionKnowledgeRuntime.resolvePendingForSession(sessionID, directory)
         .catch(() => ({ text: '', signature: '' }))
@@ -606,57 +581,45 @@ export const createOpenChamberSessionService = (dependencies) => {
 
     if (resolvedCommand) {
       try {
-        // The command route takes no extra parts, so the context goes in
-        // first as a synthetic message that does not start execution.
-        if (knowledge.text) {
-          await client.session.synthetic({ sessionID, text: knowledge.text, resume: false });
-        }
-        await client.session.command({
-          sessionID,
-          // OpenCode 2.0.8 renamed the command body field `command` to `name`.
-          name: resolvedCommand.command,
-          text: resolvedCommand.arguments || '',
-        });
+        // The standing context goes in first, as a message that does not start
+        // a run on its own; OMP has no such call, so both it and the command
+        // route below fail narrowly instead of being dropped.
+        if (knowledge.text) sendSyntheticMessage('session context');
+        await runSessionCommand(resolvedCommand.command);
       } catch (error) {
         throw markGoalPartial(error);
       }
       await recordKnowledge();
     } else {
-      let landedMessageID = null;
+      let accepted;
       try {
-        if (knowledge.text) {
-          await client.session.synthetic({ sessionID, text: knowledge.text, resume: false });
+        if (knowledge.text) sendSyntheticMessage('session context');
+        accepted = await promptSession(sessionID, expandedPrompt);
+        if (accepted === null) {
+          throw new OpenChamberControlError('The OMP runtime is not available', 503);
         }
-        const sent = await client.session.prompt({ sessionID, text: expandedPrompt });
-        landedMessageID = asNonEmptyString(sent?.id);
         if (goalInput.enabled) {
           // Goal mode's reminder refers to "the user message above", so it is
-          // admitted after the prompt; v2 has no way to append to one message.
-          await client.session.synthetic({
-            sessionID,
-            text: buildGoalIntroText(goalInput.tokenBudget),
-            resume: false,
-          });
+          // admitted after the prompt, as its own message.
+          sendSyntheticMessage('goal reminder');
         }
       } catch (error) {
         throw markGoalPartial(error);
       }
       await recordKnowledge();
-      if (!landedMessageID) {
-        // v2 answers a prompt with the inbox item it recorded. No item id means
-        // nothing is queued, so the dispatch must not be claimed as done.
+      if (!accepted) {
+        // The runtime recorded the prompt without starting the agent, so the
+        // dispatch must not be claimed as done.
         return {
           model,
-          agent,
-          variant,
           promptDispatched: false,
           dispatchedAsCommand: false,
-          promptError: 'OpenCode accepted the prompt but returned no queued message',
+          promptError: 'OMP accepted the prompt but did not start the agent',
         };
       }
     }
 
-    return { model, agent, variant, promptDispatched: true, dispatchedAsCommand: Boolean(resolvedCommand) };
+    return { model, promptDispatched: true, dispatchedAsCommand: Boolean(resolvedCommand) };
   };
 
   const broadcastMetadata = (sessionID, metadata) => {
@@ -667,10 +630,10 @@ export const createOpenChamberSessionService = (dependencies) => {
   };
 
   /**
-   * Merge-patch a session's OpenChamber metadata on its OpenCode record: the
-   * per-session state of goal mode, session assist, obligatory context and
-   * pinned notes. The broadcast carries the full merged object, because a
-   * client that missed an earlier patch must not have to reconstruct it.
+   * Merge-patch a session's OpenChamber metadata: the per-session state of goal
+   * mode, session assist, obligatory context and pinned notes. The broadcast
+   * carries the full merged object, because a client that missed an earlier
+   * patch must not have to reconstruct it.
    */
   const writeMetadata = async (sessionID, patch, directory = '') => {
     if (typeof persistSessionMetadata === 'function') {
@@ -750,6 +713,8 @@ export const createOpenChamberSessionService = (dependencies) => {
     const model = resolveRequestedModel(payload);
     const agent = asNonEmptyString(payload.agent);
     const variant = asNonEmptyString(payload.variant);
+    // An agent or a variant OMP cannot apply is answered before any side effect.
+    rejectUnsupportedSelection({ agent, variant });
 
     const resolvedDirectory = await resolveRequestedDirectory({
       payload,
@@ -768,14 +733,10 @@ export const createOpenChamberSessionService = (dependencies) => {
       throw new OpenChamberControlError('worktree.name is required when worktree is provided', 400);
     }
 
-    if (typeof waitForOpenCodeReady === 'function') await waitForOpenCodeReady(10_000, 250);
-
     if (prompt) {
-      await validateRequestedSelection({
+      await validateRequestedModel({
         directory: resolvedDirectory.directory,
         requestedModel: model,
-        requestedAgent: agent,
-        requestedVariant: variant,
       });
     }
 
@@ -787,17 +748,14 @@ export const createOpenChamberSessionService = (dependencies) => {
 
     const baseUrl = openCodeBaseUrl();
     const authHeaders = getOpenCodeAuthHeaders();
-    const client = clientFor(sessionDirectory);
     const sessionID = await createSession({
-      client,
       directory: sessionDirectory,
       ...(title ? { title } : {}),
     });
 
-    let dispatch = { model, agent, variant, promptDispatched: false, dispatchedAsCommand: false };
+    let dispatch = { model, promptDispatched: false, dispatchedAsCommand: false };
     if (prompt) {
       dispatch = await dispatchPrompt({
-        client,
         baseUrl,
         authHeaders,
         sessionID,
@@ -806,8 +764,6 @@ export const createOpenChamberSessionService = (dependencies) => {
         prompt,
         goalInput,
         requestedModel: model,
-        requestedAgent: agent,
-        requestedVariant: variant,
       });
     }
 
@@ -818,8 +774,6 @@ export const createOpenChamberSessionService = (dependencies) => {
       ...(title ? { title } : {}),
       ...(worktree ? { worktree } : {}),
       ...(prompt && dispatch.model ? { model: dispatch.model } : {}),
-      ...(prompt && dispatch.agent ? { agent: dispatch.agent } : {}),
-      ...(prompt && dispatch.variant ? { variant: dispatch.variant } : {}),
       promptDispatched: dispatch.promptDispatched,
       ...(dispatch.promptError ? { promptError: dispatch.promptError } : {}),
       dispatchedAsCommand: dispatch.dispatchedAsCommand,
@@ -835,8 +789,6 @@ export const createOpenChamberSessionService = (dependencies) => {
         ...(title ? { title } : {}),
         ...(worktree ? { worktree } : {}),
         ...(prompt && dispatch.model ? { model: dispatch.model } : {}),
-        ...(prompt && dispatch.agent ? { agent: dispatch.agent } : {}),
-        ...(prompt && dispatch.variant ? { variant: dispatch.variant } : {}),
         promptDispatched: dispatch.promptDispatched,
         dispatchedAsCommand: dispatch.dispatchedAsCommand,
         ...(goalInput.enabled ? { goalEnabled: true } : {}),
@@ -857,6 +809,11 @@ export const createOpenChamberSessionService = (dependencies) => {
     const goalInput = resolveGoalInput(payload, prompt);
     if (!goalInput.ok) throw new OpenChamberControlError(goalInput.error, 400);
     const requestedModel = resolveRequestedModel(payload);
+    // An agent or a variant OMP cannot apply is answered before any side effect.
+    rejectUnsupportedSelection({
+      agent: asNonEmptyString(payload.agent),
+      variant: asNonEmptyString(payload.variant),
+    });
 
     let targetSessionID = sourceSessionID;
     let targetSession = null;
@@ -872,24 +829,16 @@ export const createOpenChamberSessionService = (dependencies) => {
         throw new OpenChamberControlError(resolvedDirectory.error, resolvedDirectory.status || 400);
       }
       directory = resolvedDirectory.directory;
-      if (typeof waitForOpenCodeReady === 'function') await waitForOpenCodeReady(10_000, 250);
 
-      await validateRequestedSelection({
+      await validateRequestedModel({
         directory,
         requestedModel,
-        requestedAgent: asNonEmptyString(payload.agent),
-        requestedVariant: asNonEmptyString(payload.variant),
       });
 
       const baseUrl = openCodeBaseUrl();
       const authHeaders = getOpenCodeAuthHeaders();
-      const client = clientFor(directory);
       if (action === 'fork') {
-        targetSession = await forkSession({
-          client,
-          sessionID: sourceSessionID,
-          messageID: asNonEmptyString(payload.messageId) || undefined,
-        });
+        targetSession = await forkSession();
         targetSessionID = targetSession.id;
         // Before the prompt goes out, so a goal armed by this dispatch writes
         // over the copied objective rather than the other way round.
@@ -903,12 +852,10 @@ export const createOpenChamberSessionService = (dependencies) => {
       }
 
       const baselineAssistantMessageId = await latestCompletedAssistantMessageID({
-        client,
         sessionID: targetSessionID,
       });
 
       const dispatch = await dispatchPrompt({
-        client,
         baseUrl,
         authHeaders,
         sessionID: targetSessionID,
@@ -917,8 +864,6 @@ export const createOpenChamberSessionService = (dependencies) => {
         prompt,
         goalInput,
         requestedModel,
-        requestedAgent: asNonEmptyString(payload.agent),
-        requestedVariant: asNonEmptyString(payload.variant),
         reuseSessionSelection: true,
       });
       const result = {
@@ -929,8 +874,6 @@ export const createOpenChamberSessionService = (dependencies) => {
         ...(targetSession?.title ? { title: targetSession.title } : {}),
         ...(baselineAssistantMessageId ? { baselineAssistantMessageId } : {}),
         model: dispatch.model,
-        ...(dispatch.agent ? { agent: dispatch.agent } : {}),
-        ...(dispatch.variant ? { variant: dispatch.variant } : {}),
         promptDispatched: dispatch.promptDispatched,
         ...(dispatch.promptError ? { promptError: dispatch.promptError } : {}),
         dispatchedAsCommand: dispatch.dispatchedAsCommand,
@@ -946,8 +889,6 @@ export const createOpenChamberSessionService = (dependencies) => {
             sourceSessionID,
             ...(targetSession?.title ? { title: targetSession.title } : {}),
             model: dispatch.model,
-            ...(dispatch.agent ? { agent: dispatch.agent } : {}),
-            ...(dispatch.variant ? { variant: dispatch.variant } : {}),
             promptDispatched: dispatch.promptDispatched,
             dispatchedAsCommand: dispatch.dispatchedAsCommand,
             ...(goalInput.enabled ? { goalEnabled: true } : {}),

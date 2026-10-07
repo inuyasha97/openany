@@ -26,37 +26,28 @@ other.
 
 ## Invariants
 
-- Session status and messages come from official directory-scoped OpenCode
-  APIs. Message output includes only ordered `text` parts.
-- Wait never treats an initial idle response as completion after dispatch. It
-  requires observed activity or a newly completed assistant message.
-- Timeout and cancellation are failures, never authoritative idle results.
-- Validation that protects side effects runs before session creation or
-  dispatch. An explicitly requested model, agent, or variant is checked against
-  the directory's own OpenCode agent and provider lists before any session,
-  worktree, or goal is created, because `prompt_async` accepts an unusable
-  selection and then fails only on the event stream. A failed or empty lookup
-  never turns a valid selection into a rejection.
-- `promptDispatched` reports an observed dispatch, never an accepted request.
-  After `prompt_async` the service confirms a new user message reached the
-  session; when it does not, the result reports `promptDispatched: false` with
-  `promptError` instead of claiming success.
-- Send and fork dispatches without an explicit model/agent/variant reuse the
-  target session's last user-message selection before falling back to the
-  configured defaults; only session creation resolves defaults directly.
-- Default agents resolve from the owning project before global settings and
-  OpenCode defaults. Directory-based requests identify the project before
-  creating a worktree; existing linked worktrees resolve through Git's primary
-  worktree root. Send/fork fallback uses that same owner. Configured model IDs
-  and effort preferences survive missing catalog entries rather than silently
-  dispatching with a different model.
+- Session reads come from the OMP runtime host
+  (`../agents/omp-host-access.js`): `session.list` lists the runtime's own
+  sessions filtered by their `cwd`, `session.status` reports one session's busy
+  flag as `busy`/`idle`, and `session.messages` reads that session's message
+  page. Message output includes only ordered `text` parts.
+- An unmounted runtime is a failure (503), never an empty session list, an idle
+  session, or a message-less session. A read that fails propagates instead of
+  reading as "no messages".
+- `session.create`, `session.send`, and `session.fork` need a create, prompt,
+  and fork the runtime seam does not expose, so they answer 501 naming the
+  action. The actions stay in the contract so a CLI or agent-tool caller learns
+  why they cannot run instead of waiting for work that never starts.
+- Wait never reports idle on a timeout: it polls the runtime's busy flag and
+  otherwise fails on the elapsed timeout or the caller's cancellation (499). A
+  session already idle when the wait begins is idle.
 - Usage errors name the missing or conflicting input so CLI and agent-tool
   callers can correct an invalid request without an upfront usage manual.
 - Explicit `projectId` or `directory` scope takes precedence over the managed
   tool's current-session directory fallback; the fallback never creates a
   conflicting second scope.
-- One failed directory status lookup produces `unknown` for only that
-  directory and does not erase other session results.
+- One session's failed status lookup produces `unknown` for that session and
+  does not erase the other session results.
 - Destructive session/worktree deletion and project-path registration are not
   part of the action contract.
 - `file.open` shows a file in the user's viewer. `file-open.js` resolves a

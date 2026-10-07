@@ -1,9 +1,24 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createRoutingRuntime, readOpenCodeKeys, requestTextOf } from './runtime.js';
 import { resolveEffectiveConfig } from './store.js';
 import { excerptHead, excerptHeadTail, turnsToHistory } from './history.js';
 import { createJevClient, decidePermission, decideRouting } from './jev.js';
 import { classifierEndpoint, normalizeCustomEndpointUrl, resolveClassifier } from './classifier.js';
+import { readSessionMessages, setSessionModel } from '../agents/omp-host-access.js';
+
+// The routing runtime reads history and switches the model through the OMP
+// host accessor. Mocked so the tests pin what routing asks the runtime for,
+// without a live OMP process.
+vi.mock('../agents/omp-host-access.js', () => ({
+  readSessionMessages: vi.fn(async () => null),
+  setSessionModel: vi.fn(async () => true),
+}));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  readSessionMessages.mockResolvedValue(null);
+  setSessionModel.mockResolvedValue(true);
+});
 
 const AUTO = { providerID: 'openchamber', id: 'auto' };
 const FALLBACK = { model: { providerID: 'anthropic', modelID: 'claude-sonnet-5' }, variant: 'medium' };
@@ -36,8 +51,6 @@ const makeRuntime = ({ config = readyConfig(), token = 'key', classifierSource =
   const jev = { ask: vi.fn(async () => { if (askError) throw askError; return { answers, ms: 12 }; }) };
   const runtime = createRoutingRuntime({
     dataDir: '/unused',
-    buildOpenCodeUrl: () => 'http://127.0.0.1:1/',
-    getOpenCodeAuthHeaders: () => ({}),
     broadcastGlobalUiEvent: (event) => events.push(event),
     store,
     jev,
@@ -279,6 +292,66 @@ describe('auto sessions', () => {
     expect(runtime.isAutoSession('s1')).toBe(true);
     expect(runtime.noteModelSelection('s1', { providerID: 'anthropic', id: 'claude-opus-5' }, '/repo')).toBe(false);
     expect(runtime.isAutoSession('s1')).toBe(false);
+  });
+});
+
+describe('sends through the OMP runtime', () => {
+  const selection = (extra = {}) => ({ model: { providerID: 'openai', id: 'gpt-6-astra', variant: 'high' }, agent: null, ...extra });
+
+  it('feeds the classifier the settled turns projected from the canonical session records', async () => {
+    readSessionMessages.mockResolvedValue({
+      items: [
+        { info: { id: 'm1', role: 'user', time: { created: 1 } }, parts: [{ type: 'text', text: 'why does it fail' }] },
+        { info: { id: 'm2', role: 'assistant', time: { created: 2, completed: 3 }, finish: 'stop' }, parts: [{ type: 'text', text: 'because X' }] },
+      ],
+      cursor: {},
+    });
+    const { runtime, jev } = makeRuntime({ answers: { category: { choice: 'trivial', confidence: 0.99 } } });
+    const resolved = await runtime.resolveAutoSelection({ sessionId: 's1', model: AUTO, requestText: 'fix typo' });
+    expect(resolved.decision.reason).toBe('routed');
+    expect(jev.ask.mock.calls[0][0].state.history).toEqual([
+      { role: 'user', text: 'why does it fail' },
+      { role: 'assistant', text: 'because X' },
+    ]);
+  });
+
+  it('routes on the request alone when the runtime cannot read the history', async () => {
+    const { runtime, jev } = makeRuntime({ answers: { category: { choice: 'trivial', confidence: 0.99 } } });
+    const resolved = await runtime.resolveAutoSelection({ sessionId: 's1', model: AUTO, requestText: 'fix typo' });
+    expect(resolved.decision.reason).toBe('routed');
+    expect(jev.ask.mock.calls[0][0].state.history).toEqual([]);
+  });
+
+  it('switches the session model through the runtime seam', async () => {
+    const { runtime } = makeRuntime({ answers: {} });
+    await runtime.applySessionSelection('s1', selection());
+    expect(setSessionModel).toHaveBeenCalledWith('s1', 'openai', 'gpt-6-astra');
+  });
+
+  it('answers unsupported for a category agent rather than running on the composer agent', async () => {
+    const { runtime } = makeRuntime({ answers: {} });
+    await expect(runtime.applySessionSelection('s1', selection({ agent: 'plan' })))
+      .rejects.toMatchObject({ status: 501 });
+    expect(setSessionModel).not.toHaveBeenCalled();
+  });
+
+  it('fails when the runtime is unavailable instead of forwarding an un-routed send', async () => {
+    setSessionModel.mockResolvedValueOnce(null);
+    const { runtime } = makeRuntime({ answers: {} });
+    await expect(runtime.applySessionSelection('s1', selection()))
+      .rejects.toMatchObject({ status: 503 });
+  });
+
+  it('routeSend applies the decision, and reports an unsupported agent to the caller', async () => {
+    const routed = makeRuntime({ answers: { category: { choice: 'trivial', confidence: 0.99 } } });
+    const decision = await routed.runtime.routeSend({ sessionId: 's1', body: { text: 'fix typo' } });
+    expect(decision).toMatchObject({ reason: 'routed', category: 'trivial' });
+    expect(setSessionModel).toHaveBeenCalledWith('s1', 'anthropic', 'claude-sonnet-5');
+
+    const agented = makeRuntime({ answers: { category: { choice: 'hard', confidence: 0.97 } } });
+    await expect(agented.runtime.routeSend({ sessionId: 's2', body: { text: 'refactor' } }))
+      .rejects.toMatchObject({ status: 501 });
+    expect(setSessionModel).toHaveBeenCalledTimes(1);
   });
 });
 

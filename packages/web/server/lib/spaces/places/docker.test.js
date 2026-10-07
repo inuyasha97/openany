@@ -19,7 +19,7 @@ const OUTER_NETWORK = `openchamber-space-${ID}-outer-network`;
 const WORK = `openchamber-space-${ID}-volume-work`;
 const HOME = `openchamber-space-${ID}-volume-home`;
 
-const SOURCE = createRegistryToolsSource({ webVersion: '1.24.2', openCodeVersion: '1.18.31' });
+const SOURCE = createRegistryToolsSource({ webVersion: '1.24.2', ompVersion: '18.1.11' });
 const KEY = toolsContentKey(SOURCE, SPACE_BASE_IMAGE);
 const TOOLS = `openchamber-tools-${OWNER}-${KEY}`;
 const NOW = new Date('2026-09-20T08:00:00.000Z');
@@ -1017,7 +1017,7 @@ describe('docker place: tools volume', () => {
       '--label', 'openchamber.space.role=tools',
       '--label', `openchamber.space.owner=${OWNER}`,
       '--label', `openchamber.space.tools.key=${KEY}`,
-      '--label', 'openchamber.space.tools.description=web 1.24.2, opencode 1.18.31',
+      '--label', 'openchamber.space.tools.description=web 1.24.2, omp 18.1.11',
       '--label', 'openchamber.space.created=2026-09-20T08:00:00.000Z',
       TOOLS,
     ]);
@@ -1125,7 +1125,7 @@ describe('docker place: tools volume', () => {
 
     const error = await makePlace(fake).create(SPEC).catch((caught) => caught);
     expect(error.code).toBe('tools_fill_failed');
-    expect(error.message).toMatch(/Installing web 1.24.2, opencode 1.18.31 failed: .*simulated failure/);
+    expect(error.message).toMatch(/Installing web 1.24.2, omp 18.1.11 failed: .*simulated failure/);
     expect(error.message).toMatch(/npm registry/);
     expect(error.details).toMatchObject({ uncertain: false, rollbackFailures: [] });
     expect(removals(fake)).toEqual([`volume rm ${TOOLS}`]);
@@ -1217,7 +1217,7 @@ describe('docker place: tools volume', () => {
 
       const error = await place.create({ ...SPEC, id: '111111111111' }).catch((caught) => caught);
       expect(error.code).toBe('tools_marker_mismatch');
-      expect(error.message).toMatch(/Apply or discard the work in the spaces that were made with web 1\.24\.2, opencode 1\.18\.31, remove those spaces, then try again/);
+      expect(error.message).toMatch(/Apply or discard the work in the spaces that were made with web 1\.24\.2, omp 18\.1\.11, remove those spaces, then try again/);
       // Nobody needs a terminal for this, so the message names no docker command.
       expect(error.message).not.toMatch(/docker |volume rm/);
       expect(fake.calls.some((call) => isRun('tools-fill')(call.args))).toBe(false);

@@ -13,7 +13,6 @@ const makeDataDir = () => {
   return dir;
 };
 
-
 afterEach(() => {
   while (tempDirs.length > 0) {
     fs.rmSync(tempDirs.pop(), { recursive: true, force: true });
@@ -51,106 +50,77 @@ describe('mergeMetadataPatch', () => {
   });
 });
 
-const legacyFile = (dataDir) => path.join(dataDir, 'sessions-metadata.json');
-const writeLegacy = (dataDir, content) => {
-  fs.writeFileSync(legacyFile(dataDir), typeof content === 'string' ? content : JSON.stringify(content));
+const metadataFile = (dataDir) => path.join(dataDir, 'sessions-metadata.json');
+const writeMetadataFile = (dataDir, content) => {
+  fs.writeFileSync(metadataFile(dataDir), typeof content === 'string' ? content : JSON.stringify(content));
 };
-
-const notFound = () => Object.assign(new Error('Session not found'), { _tag: 'SessionNotFoundError' });
-
-/**
- * OpenCode's side: records by session id. A `write` replaces the whole object,
- * which is what `PATCH /api/session/{id}` does with `metadata`.
- */
-const createFakeOpenCode = (records = {}) => {
-  const sessions = new Map(Object.entries(records));
-  const fake = {
-    sessions,
-    writes: [],
-    failRead: null,
-    failWrite: null,
-    read: vi.fn(async (id) => {
-      if (fake.failRead) throw fake.failRead;
-      return sessions.has(id) ? structuredClone(sessions.get(id)) : null;
-    }),
-    write: vi.fn(async (id, metadata) => {
-      // Yield first so concurrent writers really overlap.
-      await Promise.resolve();
-      if (fake.failWrite) throw fake.failWrite;
-      if (!sessions.has(id)) throw notFound();
-      fake.writes.push([id, metadata]);
-      sessions.set(id, structuredClone(metadata));
-    }),
-  };
-  return fake;
-};
-
-const makeStore = (openCode, dataDir = makeDataDir()) => ({
-  dataDir,
-  store: createSessionMetadataStore({ dataDir, openCode }),
-});
+const readMetadataFile = (dataDir) => JSON.parse(fs.readFileSync(metadataFile(dataDir), 'utf8'));
 
 describe('createSessionMetadataStore', () => {
-  it('reads metadata from OpenCode, and a session OpenCode does not know as empty', async () => {
-    const openCode = createFakeOpenCode({ ses_1: { openchamber: { goal: { id: 'g1' } } } });
-    const { store } = makeStore(openCode);
+  it('stores metadata in the data dir and reads back what it wrote, per session', async () => {
+    const dataDir = makeDataDir();
+    const store = createSessionMetadataStore({ dataDir });
 
+    await expect(store.get('ses_1')).resolves.toEqual({});
+    await store.setSessionMetadata('ses_1', { openchamber: { goal: { id: 'g1' } } });
+
+    expect(readMetadataFile(dataDir)).toEqual({ ses_1: { openchamber: { goal: { id: 'g1' } } } });
     await expect(store.get('ses_1')).resolves.toEqual({ openchamber: { goal: { id: 'g1' } } });
-    await expect(store.get('ses_missing')).resolves.toEqual({});
+    await expect(store.get('ses_2')).resolves.toEqual({});
   });
 
-  it('surfaces a failed read instead of answering empty', async () => {
-    const openCode = createFakeOpenCode({ ses_1: { a: 1 } });
-    openCode.failRead = new Error('connection refused');
-    const { store } = makeStore(openCode);
+  it('reads the file it is pointed at, so a fresh store sees what the last one wrote', async () => {
+    const dataDir = makeDataDir();
+    writeMetadataFile(dataDir, { ses_1: { openchamber: { kind: 'review' } } });
 
-    await expect(store.get('ses_1')).rejects.toThrow('connection refused');
+    await expect(createSessionMetadataStore({ dataDir }).get('ses_1'))
+      .resolves.toEqual({ openchamber: { kind: 'review' } });
   });
 
-  it('merges a patch onto the OpenCode record and writes the whole result back', async () => {
-    const openCode = createFakeOpenCode({
-      ses_1: { openchamber: { kind: 'review', assist: { recap: 'r' } } },
-    });
-    const { store } = makeStore(openCode);
+  it('merges a patch onto the stored record and writes the whole result back', async () => {
+    const dataDir = makeDataDir();
+    writeMetadataFile(dataDir, { ses_1: { openchamber: { kind: 'review', assist: { recap: 'r' } } } });
+    const store = createSessionMetadataStore({ dataDir });
 
     const merged = await store.setSessionMetadata('ses_1', { openchamber: { goal: { status: 'active' } } });
 
     expect(merged).toEqual({ openchamber: { kind: 'review', assist: { recap: 'r' }, goal: { status: 'active' } } });
-    expect(openCode.sessions.get('ses_1')).toEqual(merged);
+    expect(readMetadataFile(dataDir).ses_1).toEqual(merged);
     await store.setSessionMetadata('ses_1', { openchamber: { assist: null } });
-    expect(openCode.sessions.get('ses_1')).toEqual({ openchamber: { kind: 'review', goal: { status: 'active' } } });
+    expect(readMetadataFile(dataDir).ses_1).toEqual({ openchamber: { kind: 'review', goal: { status: 'active' } } });
   });
 
   it('keeps both of two concurrent patches to the same session', async () => {
-    const openCode = createFakeOpenCode({ ses_1: {} });
-    const { store } = makeStore(openCode);
+    const dataDir = makeDataDir();
+    const store = createSessionMetadataStore({ dataDir });
 
     await Promise.all([
       store.setSessionMetadata('ses_1', { openchamber: { goal: { status: 'active' } } }),
       store.setSessionMetadata('ses_1', { openchamber: { assist: { recap: 'r' } } }),
     ]);
 
-    expect(openCode.sessions.get('ses_1')).toEqual({
+    expect(readMetadataFile(dataDir).ses_1).toEqual({
       openchamber: { goal: { status: 'active' }, assist: { recap: 'r' } },
     });
   });
 
-  it('writes nothing when the current record cannot be read or the session is gone', async () => {
-    const openCode = createFakeOpenCode({ ses_1: { keep: true } });
-    const { store } = makeStore(openCode);
+  it('keeps concurrent writes to different sessions', async () => {
+    const dataDir = makeDataDir();
+    const store = createSessionMetadataStore({ dataDir });
 
-    openCode.failRead = new Error('timeout');
-    await expect(store.setSessionMetadata('ses_1', { a: 1 })).rejects.toThrow('timeout');
-    openCode.failRead = null;
-    await expect(store.setSessionMetadata('ses_missing', { a: 1 })).rejects.toThrow('not found');
+    await Promise.all([
+      store.setSessionMetadata('ses_1', { a: 1 }),
+      store.setSessionMetadata('ses_2', { b: 2 }),
+    ]);
 
-    expect(openCode.write).not.toHaveBeenCalled();
-    expect(openCode.sessions.get('ses_1')).toEqual({ keep: true });
+    // Whichever write landed last, the file holds both.
+    expect(readMetadataFile(dataDir)).toEqual({ ses_1: { a: 1 }, ses_2: { b: 2 } });
   });
 
   it('decides a conditional patch against the record as it is at write time', async () => {
-    const openCode = createFakeOpenCode({ ses_1: { openchamber: { work: { state: 'open' } } } });
-    const { store } = makeStore(openCode);
+    const dataDir = makeDataDir();
+    writeMetadataFile(dataDir, { ses_1: { openchamber: { work: { state: 'open' } } } });
+    const store = createSessionMetadataStore({ dataDir });
     const closeUnlessDone = (current) => (current.openchamber?.work?.state === 'done'
       ? null
       : { openchamber: { work: { state: 'done' } } });
@@ -163,115 +133,87 @@ describe('createSessionMetadataStore', () => {
 
     expect(first).toEqual({ metadata: { openchamber: { work: { state: 'done' } } }, changed: true });
     expect(second.changed).toBe(false);
-    expect(openCode.write).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects a missing id or a non-object patch', async () => {
-    const { store } = makeStore(createFakeOpenCode());
+  it('rejects a missing id or a non-object patch without writing', async () => {
+    const dataDir = makeDataDir();
+    const store = createSessionMetadataStore({ dataDir });
+
     await expect(store.setSessionMetadata('', { a: 1 })).rejects.toThrow();
     await expect(store.setSessionMetadata('ses_1', ['a'])).rejects.toThrow();
+    expect(fs.existsSync(metadataFile(dataDir))).toBe(false);
   });
 
-  describe('legacy sessions-metadata.json', () => {
-    it('serves a legacy entry over the OpenCode record until it is migrated', async () => {
-      const openCode = createFakeOpenCode({ ses_1: { openchamber: { kind: 'review' } } });
-      const dataDir = makeDataDir();
-      writeLegacy(dataDir, { ses_1: { openchamber: { kind: 'review', goal: { id: 'g1' } } } });
-      const { store } = makeStore(openCode, dataDir);
+  it('serves every entry it holds to the proxy overlay', async () => {
+    const dataDir = makeDataDir();
+    writeMetadataFile(dataDir, { ses_1: { a: 1 } });
+    const store = createSessionMetadataStore({ dataDir });
+    await store.setSessionMetadata('ses_2', { b: 2 });
 
-      await expect(store.get('ses_1')).resolves.toEqual({ openchamber: { kind: 'review', goal: { id: 'g1' } } });
-      await expect(store.listUnmigrated()).resolves.toEqual({
-        ses_1: { openchamber: { kind: 'review', goal: { id: 'g1' } } },
-      });
-      expect(openCode.read).not.toHaveBeenCalled();
+    await expect(store.listUnmigrated()).resolves.toEqual({ ses_1: { a: 1 }, ses_2: { b: 2 } });
+  });
+
+  it('has nothing to migrate: the file is the store', async () => {
+    const dataDir = makeDataDir();
+    writeMetadataFile(dataDir, { ses_1: { a: 1 } });
+    const store = createSessionMetadataStore({ dataDir });
+
+    await expect(store.migrateLegacy()).resolves.toBe(0);
+    expect(readMetadataFile(dataDir)).toEqual({ ses_1: { a: 1 } });
+    await expect(store.get('ses_1')).resolves.toEqual({ a: 1 });
+  });
+
+  it('moves a malformed file aside and starts empty', async () => {
+    const dataDir = makeDataDir();
+    writeMetadataFile(dataDir, '{ not json');
+    const store = createSessionMetadataStore({ dataDir });
+
+    await expect(store.get('ses_1')).resolves.toEqual({});
+    expect(fs.readdirSync(dataDir).some((name) => name.startsWith('sessions-metadata.json.corrupt-'))).toBe(true);
+  });
+
+  it('refuses to read or write while the file cannot be read, then recovers', async () => {
+    const dataDir = makeDataDir();
+    const readFile = vi.fn(async () => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    });
+    const store = createSessionMetadataStore({
+      dataDir,
+      fsPromises: { ...fs.promises, readFile },
     });
 
-    it('migrates a legacy entry on its first write, merged with the patch', async () => {
-      const openCode = createFakeOpenCode({ ses_1: { stale: true }, ses_2: {} });
-      const dataDir = makeDataDir();
-      writeLegacy(dataDir, { ses_1: { openchamber: { goal: { id: 'g1' } } }, ses_2: { notes: ['n'] } });
-      const { store } = makeStore(openCode, dataDir);
+    await expect(store.get('ses_1')).rejects.toThrow('permission denied');
+    await expect(store.setSessionMetadata('ses_1', { a: 1 })).rejects.toThrow('permission denied');
+    expect(fs.existsSync(metadataFile(dataDir))).toBe(false);
 
-      await store.setSessionMetadata('ses_1', { openchamber: { assist: { recap: 'r' } } });
+    readFile.mockImplementation(async () => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    });
+    await expect(store.setSessionMetadata('ses_1', { a: 1 })).resolves.toEqual({ a: 1 });
+    await expect(store.get('ses_1')).resolves.toEqual({ a: 1 });
+  });
 
-      // The legacy record is the newer one: it wins over what OpenCode held.
-      expect(openCode.sessions.get('ses_1')).toEqual({ openchamber: { goal: { id: 'g1' }, assist: { recap: 'r' } } });
-      expect(JSON.parse(fs.readFileSync(legacyFile(dataDir), 'utf8'))).toEqual({ ses_2: { notes: ['n'] } });
-      await expect(store.listUnmigrated()).resolves.toEqual({ ses_2: { notes: ['n'] } });
+  it('keeps the value the file holds when a write does not land', async () => {
+    const dataDir = makeDataDir();
+    writeMetadataFile(dataDir, { ses_1: { a: 1 } });
+    let failWrites = true;
+    const store = createSessionMetadataStore({
+      dataDir,
+      fsPromises: {
+        ...fs.promises,
+        writeFile: async (...args) => {
+          if (failWrites) throw new Error('disk full');
+          return fs.promises.writeFile(...args);
+        },
+      },
     });
 
-    it('pushes every entry, drops sessions OpenCode no longer has, and retires the file', async () => {
-      const openCode = createFakeOpenCode({ ses_1: { stale: true }, ses_2: { stale: true } });
-      const dataDir = makeDataDir();
-      // `{}` is a cleared record: it must clear OpenCode's copy too.
-      writeLegacy(dataDir, { ses_1: { openchamber: { goal: { id: 'g1' } } }, ses_2: {}, ses_gone: { a: 1 } });
-      const { store } = makeStore(openCode, dataDir);
+    await expect(store.setSessionMetadata('ses_1', { b: 2 })).rejects.toThrow('disk full');
+    // The in-memory record must not claim a value the file does not hold.
+    await expect(store.get('ses_1')).resolves.toEqual({ a: 1 });
 
-      await expect(store.migrateLegacy()).resolves.toBe(0);
-
-      expect(openCode.sessions.get('ses_1')).toEqual({ openchamber: { goal: { id: 'g1' } } });
-      expect(openCode.sessions.get('ses_2')).toEqual({});
-      expect(fs.existsSync(legacyFile(dataDir))).toBe(false);
-      expect(JSON.parse(fs.readFileSync(`${legacyFile(dataDir)}.migrated`, 'utf8'))).toMatchObject({ ses_gone: { a: 1 } });
-      await expect(store.get('ses_1')).resolves.toEqual({ openchamber: { goal: { id: 'g1' } } });
-    });
-
-    it('keeps an entry OpenCode could not take for the next sweep', async () => {
-      const openCode = createFakeOpenCode({ ses_1: {} });
-      const dataDir = makeDataDir();
-      writeLegacy(dataDir, { ses_1: { a: 1 } });
-      const { store } = makeStore(openCode, dataDir);
-
-      openCode.failWrite = new Error('connection refused');
-      await expect(store.migrateLegacy()).resolves.toBe(1);
-      expect(JSON.parse(fs.readFileSync(legacyFile(dataDir), 'utf8'))).toEqual({ ses_1: { a: 1 } });
-      await expect(store.get('ses_1')).resolves.toEqual({ a: 1 });
-
-      openCode.failWrite = null;
-      await expect(store.migrateLegacy()).resolves.toBe(0);
-      expect(openCode.sessions.get('ses_1')).toEqual({ a: 1 });
-    });
-
-    it('does not push a legacy entry over a write that migrated it first', async () => {
-      const openCode = createFakeOpenCode({ ses_1: {} });
-      const dataDir = makeDataDir();
-      writeLegacy(dataDir, { ses_1: { a: 1 } });
-      const { store } = makeStore(openCode, dataDir);
-
-      await Promise.all([store.setSessionMetadata('ses_1', { b: 2 }), store.migrateLegacy()]);
-
-      expect(openCode.sessions.get('ses_1')).toEqual({ a: 1, b: 2 });
-    });
-
-    it('moves a malformed file aside and has nothing to migrate', async () => {
-      const openCode = createFakeOpenCode({ ses_1: { a: 1 } });
-      const dataDir = makeDataDir();
-      writeLegacy(dataDir, '{ not json');
-      const { store } = makeStore(openCode, dataDir);
-
-      await expect(store.get('ses_1')).resolves.toEqual({ a: 1 });
-      expect(fs.readdirSync(dataDir).some((name) => name.startsWith('sessions-metadata.json.corrupt-'))).toBe(true);
-    });
-
-    it('refuses to write while the file cannot be read, then recovers', async () => {
-      const openCode = createFakeOpenCode({ ses_1: {} });
-      const dataDir = makeDataDir();
-      const readFile = vi.fn(async () => {
-        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
-      });
-      const store = createSessionMetadataStore({
-        dataDir,
-        openCode,
-        fsPromises: { ...fs.promises, readFile },
-      });
-
-      await expect(store.setSessionMetadata('ses_1', { a: 1 })).rejects.toThrow('permission denied');
-      expect(openCode.write).not.toHaveBeenCalled();
-
-      readFile.mockImplementation(async () => {
-        throw Object.assign(new Error('missing'), { code: 'ENOENT' });
-      });
-      await expect(store.setSessionMetadata('ses_1', { a: 1 })).resolves.toEqual({ a: 1 });
-    });
+    failWrites = false;
+    await expect(store.setSessionMetadata('ses_1', { b: 2 })).resolves.toEqual({ a: 1, b: 2 });
+    expect(readMetadataFile(dataDir).ses_1).toEqual({ a: 1, b: 2 });
   });
 });

@@ -16,8 +16,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { OpenCode } from '@opencode/client';
 import { z } from 'zod';
+import { readSessionMessages, readSessions } from '../agents/omp-host-access.js';
 import { readMergedSettingsSync } from '../openchamber/settings-files.js';
 import { loadAssistContext, loadSettledTurns } from '../session-assist/context.js';
 import { turnsToHistory, excerptHead, excerptHeadTail } from '../routing/history.js';
@@ -73,8 +73,6 @@ const busySchema = z.object({
 const reviewSessionSchema = z.object({ openchamber: z.object({ kind: z.literal('review') }) });
 
 export function createSessionWorkRuntime({
-  buildOpenCodeUrl,
-  getOpenCodeAuthHeaders,
   /** `{ enabled, autoOpen }` as currently saved. */
   getSettings = readSessionWorkSettings,
   /** The classification provider's endpoint, or null when there is no Jev. */
@@ -118,31 +116,28 @@ export function createSessionWorkRuntime({
     while (turnGenerations.size > SEEN_MESSAGES_LIMIT) turnGenerations.delete(turnGenerations.keys().next().value);
   };
 
-  const openCodeClient = (directory) => {
-    const headers = { ...getOpenCodeAuthHeaders() };
-    // v2 scopes by header and rejects non-ASCII header values.
-    if (directory) headers['x-opencode-directory'] = encodeURIComponent(directory);
-    return OpenCode.make({ baseUrl: buildOpenCodeUrl('/', '').replace(/\/$/, ''), headers });
-  };
-
-  const readPages = (client, sessionId, signal) => ({ limit, cursor }) => client.message.list(
-    { sessionID: sessionId, limit, ...(cursor ? { cursor } : { order: 'desc' }) },
-    { signal },
-  );
-
   /**
-   * The session record when it is one this feature serves: a top-level,
-   * unarchived project session that is not a review of another one. Chats
-   * are plain conversations and never in work. Null otherwise.
+   * The OpenChamber metadata of the session when it is one this feature
+   * serves: an unarchived project session that is not a review of another
+   * one. Chats are plain conversations and never in work. Null otherwise.
+   *
+   * OMP exposes only `{ id, cwd, title }`: a session has no parent, no revert
+   * boundary and no metadata bag of its own. The subsession guard therefore
+   * rests on `lineage` alone (learned from `session.created` events), and the
+   * review marker is read from OpenChamber's own metadata store.
    */
-  const eligibleSession = async (client, sessionId, signal) => {
-    const session = await client.session.get({ sessionID: sessionId }, { signal });
-    if (session?.id === sessionId) lineage?.remember(sessionId, session.parentID ?? null);
-    if (session?.id !== sessionId || session.parentID) return null;
-    if (isChatDirectory(session.location?.directory ?? session.directory)) return null;
-    if (reviewSessionSchema.safeParse(session.metadata).success) return null;
+  const eligibleMetadata = async (sessionId, directory) => {
+    const sessions = await readSessions();
+    if (!Array.isArray(sessions)) throw new Error('The OMP runtime is unavailable');
+    const session = sessions.find((entry) => entry?.id === sessionId);
+    if (!session) return null;
+    // OMP has no parent: every session it knows is top-level.
+    lineage?.remember(sessionId, null);
+    if (isChatDirectory(session.cwd)) return null;
     if (await isSessionArchived(sessionId)) return null;
-    return session;
+    const metadata = await readMetadata(sessionId, directory);
+    if (reviewSessionSchema.safeParse(metadata).success) return null;
+    return { metadata };
   };
 
   const markSuggested = (sessionId, directory) => {
@@ -161,12 +156,11 @@ export function createSessionWorkRuntime({
     const endpoint = await classifierEndpoint();
     if (!endpoint) return;
     const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
-    const client = openCodeClient(directory);
-    const session = await eligibleSession(client, sessionId, signal);
-    if (!session) return;
-    if (readWork(await readMetadata(sessionId, directory))?.state === 'open') return;
+    const eligible = await eligibleMetadata(sessionId, directory);
+    if (!eligible) return;
+    if (readWork(eligible.metadata)?.state === 'open') return;
 
-    const turns = await loadSettledTurns({ readPage: readPages(client, sessionId, signal), signal });
+    const turns = await loadSettledTurns({ readPage: () => readSessionMessages(sessionId), signal });
     const { answers } = await jev.ask(
       buildSendRequest({ history: turnsToHistory(turns), request: excerptHead(text.trim(), REQUEST_CHARS) }),
       endpoint,
@@ -224,17 +218,16 @@ export function createSessionWorkRuntime({
       const endpoint = await classifierEndpoint();
       if (!endpoint) return null;
       const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
-      const client = openCodeClient(directory);
-      const session = await eligibleSession(client, sessionId, signal);
-      if (!session || session.revert?.messageID) return null;
-      const work = settings.enabled ? readWork(await readMetadata(sessionId, directory)) : null;
+      const eligible = await eligibleMetadata(sessionId, directory);
+      if (!eligible) return null;
+      const work = settings.enabled ? readWork(eligible.metadata) : null;
       const ask = {
         open: settings.enabled && settings.autoOpen && work?.state !== 'open',
         wrapUp: settings.enabled && work?.state === 'open',
         recap: assist.recap,
         nextStep: assist.suggestion,
       };
-      const context = await loadAssistContext({ readPage: readPages(client, sessionId, signal), signal });
+      const context = await loadAssistContext({ readPage: () => readSessionMessages(sessionId), signal });
       if (!context) return null;
       const turn = context.turns.at(-1);
       const request = buildTurnEndRequest({

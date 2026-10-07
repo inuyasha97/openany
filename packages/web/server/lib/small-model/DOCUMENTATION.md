@@ -1,59 +1,90 @@
 # Small Model
 
 Background LLM calls for OpenChamber's own features — session titles, goal
-distillation, session assist, the changes walkthrough. Every call goes to the
-running OpenCode through `POST /api/experimental/generate`; OpenChamber never talks to a
-provider directly and never handles a provider credential.
+distillation, session assist, the changes walkthrough. The OMP runtime is the
+only agent runtime. It has no one-shot generate, so every call runs through a
+throwaway session that is opened for the call and always deleted after it.
 
 ## Security boundary
 
-The client sends a prompt. This server forwards it to OpenCode, which owns the
-credentials, the provider dispatch and the token refresh. Routes live under
+The client sends a prompt. This server forwards it to the runtime, which owns
+the credentials, the provider dispatch and the token refresh. Routes live under
 `/api/*` and are gated by the ui-auth middleware like every other runtime API.
+No credential is ever handled here.
 
 ## Files
 
-- `client.js` — the connection to the running OpenCode. `server/index.js` wires
-  it once with `buildOpenCodeUrl` and `getOpenCodeAuthHeaders`; the client is
-  built per call because the port and the server password both change across an
-  OpenCode restart. Scoping is the `x-opencode-directory` header, URI-encoded.
-  Also caches the model list for 30 seconds — a generation needs the model's
-  context and output limits, and a round trip per session title is the wrong
-  trade. An unreachable OpenCode keeps the previous answer rather than
-  retracting it.
+- `client.js` — the model catalog, read from the OMP runtime host
+  (`getOmpRuntimeHost()` in `../agents/omp-host-access.js`, wired globally from
+  `server/index.js`). OMP's `listModels()` already excludes providers it has no
+  credential for, and it reports neither a provider list nor a default model,
+  so `listProviderInfos`/`getDefaultModelInfo` have no counterpart and are gone.
+  `listModelInfos()` maps each OMP entry (`{ id, provider, contextWindow,
+  maxTokens, input, requestModelId, name }`) into the domain model shape and
+  caches it for 30 seconds; an unmounted runtime answers `null`, a failing one
+  keeps the previous answer rather than retracting it.
+  `configureOpenCodeRuntimeProviders` is a compatibility no-op (the host is
+  global); `resetOpenCodeRuntimeProviders` drops the cache on a runtime restart.
 - `index.js` — `generateSmallModelText()`, `describeSmallModel()`,
   `listAuthenticatedProviders()`.
 - `routes.js` — `GET /api/small-model` (resolution preview) and
   `POST /api/small-model/generate` (`{ prompt, system?, maxOutputTokens?,
   model?, directory? }` → `{ text, providerID, modelID, source }`).
-- `runtime-providers.js` — compatibility re-export so `server/index.js` keeps
-  resolving its import. Delete it once that import points at `client.js`.
 
-## Free tier and the session fallback
+## Generation
 
-OpenCode's free zen models are listed as enabled without a login, but
-`/api/experimental/generate` refuses them ("free tier can only be used in OpenCode") and
-`/api/model/default` answers nothing, so on a fresh install with no provider
-login `generateSmallModelText` throws `404`. What happens next is per feature:
+OpenChamber's background generation ran on OpenCode's one-shot
+`POST /api/experimental/generate`. OMP has no equivalent, so
+`generateSmallModelText` opens a session for the call:
 
-- Commit message and PR description (`packages/ui/src/lib/gitApi.ts`) fall back
-  to `POST /api/session/:id/generate`, which runs on the open session's own
-  model with the session as context and does not touch its history. Verified
-  on OpenCode 2.0.2: the reply comes back and the message count stays at zero.
-- Session renaming, the session goal and the walkthrough do NOT fall back —
-  feeding a whole session into a model to write a title or check a goal is the
-  wrong cost. Their entry points read `available` from `GET /api/small-model`
-  (`packages/ui/src/stores/useSmallModelStore.ts`) and show a disabled control
-  with the reason; the walkthrough uses its own readiness (`no-model`). A goal
-  is also allowed when Jev checks it instead (`../session-goal`).
-- Session assist is server-side and simply does nothing when
-  `describeSmallModel` answers null.
-- Notes summarization and spoken summaries keep the original text and silence
-  the 404.
+1. Resolve the model (below). No runtime or no model → `404`
+   `No small model available — …`.
+2. `createSession({ cwd })` with the caller's `directory`, or `os.tmpdir()`
+   when none is given.
+3. `setModel(session.id, provider, modelID)`.
+4. `prompt(session.id, text)` — the system instructions lead the prompt,
+   separated by a blank line.
+5. Poll `getMessages(session.id)` until the newest completed assistant turn
+   with text appears, then join its `type === 'text'` parts. The poll stops at
+   `timeoutMs` (default 60 s) with `504` `small-model-timeout`, or when the
+   caller's `signal` aborts.
+6. `deleteSession(session.id)` in a `finally` — the throwaway session never
+   outlives the call, even when the read or the prompt fails.
+
+`prompt` returns as soon as the runtime accepts the turn (events stream after),
+which is why the reply is polled rather than read once.
+
+Credentials stay inside the runtime; this server only sends a prompt.
+
+### Input clamp
+
+The prompt is measured against the resolved model's context minus an output
+reserve, at ~4 chars/token. A model the catalog does not list gets a
+conservative 64k default. `onOverflow` decides what an oversized prompt means:
+
+- `truncate` (default) clips the tail and reports `inputTruncated: true`.
+  Correct for callers that degrade gracefully (summaries, commit messages).
+- `error` throws a `413` with `code: 'context-too-small'` plus
+  `requiredChars`/`availableChars`. Correct for callers whose output would be
+  quietly wrong on a clipped input, so they can ask the user for a roomier
+  model instead of returning confident nonsense.
+
+`maxOutputTokens` is capped at the model's `limit.output`, and the **same
+number** is reserved from the input allowance. A session prompt takes no output
+budget of its own, so this number only shapes the reserve — but the two sides
+must stay equal or a caller that asks for a large answer overruns the context
+and the failure looks like a truncation bug.
+
+### Structured output
+
+The runtime has no structured-output mode, so a request that carries a
+`responseSchema` fails with `422` `structured-output-unsupported` before any
+session is opened. The module does not emulate a schema in the prompt and does
+not pretend a reply matched one.
 
 ## Model resolution
 
-Four things are decided here, in order:
+Three things are decided here, in order:
 
 1. An explicit `model` on the request (`provider/model`) — `source: 'request'`.
 2. OpenChamber's settings override (Settings → Sessions → Small Model): when
@@ -67,99 +98,32 @@ Four things are decided here, in order:
    `SMALL_MODEL_FAMILY_PRIORITY` (`gpt-luna`, `gemini-flash-lite`,
    `gemini-flash`, `claude-haiku`, then `gpt-nano`, `gpt-mini`) that the
    provider has. The first four are OpenCode's own list for its session
-   titles (`Catalog.model.small`), repeated here because OpenCode does not
-   expose it over HTTP; the last two are v1's additions so a provider with
-   only utility models (Copilot) still gets a cheap one. Families are
-   models.dev `family` values, not model ids (`gpt-luna` is the family of
-   `gpt-5.6-luna`); a model without one — a custom provider, a subscription
-   outside the catalog — gets its family read from its id (`familyOf`:
-   luna / flash-lite / flash / haiku / nano / mini). A caller that passes `restrictToPreferredProvider`
-   (session titles, the session goal, session assist, notes from a selection)
-   and finds none then takes the session's own model — `source:
-   'session-model'`: costlier than a small model elsewhere, but never another
-   provider's subscription.
-4. Otherwise `GET /api/model/default` — `source: 'default'`. This is
-   OpenCode's default chat model, not a small one; it is the last resort.
+   titles; the last two are v1's additions so a provider with only utility
+   models (Copilot) still gets a cheap one. Families are read from the id
+   (`familyOf`: luna / flash-lite / flash / haiku / nano / mini), because OMP's
+   catalog reports no model family. A model with no release time sorts in
+   catalog order — OMP exposes no release date — so "newest" falls back to
+   whatever order the runtime returns. A caller that passes
+   `restrictToPreferredProvider` (session titles, the session goal, session
+   assist, notes from a selection) and finds none then takes the session's own
+   model — `source: 'session-model'`: costlier than a small model elsewhere,
+   but never another provider's subscription.
+
+OpenCode's step 4 (`GET /api/model/default`) has no OMP equivalent — the
+runtime exposes no default-model lookup — so a caller with no explicit model,
+no settings override and no provider resolves to `null`.
 
 There is deliberately no step that takes a small model from whichever other
-provider is connected. Until 2026-09 one existed (`source: 'small'`, after
-step 3); it sent diffs and replies to a provider the user never chose for
-them, and the walkthrough and extensions reached it without even passing
-their provider. Content goes only to the provider the user works with, the
-model they picked, or the default they configured.
-
-Claude Code (`claude-code`, from the opencode-claude plugin) is a provider
-like any other: its generate path runs a clean one-shot turn with no tools and
-no session, so `claude-code/haiku` (family `claude-haiku`) is picked in the
-normal family order.
-
-## Prompt shape
-
-`/api/experimental/generate` takes one prompt and no system message, so `system` leads the
-prompt, separated by a blank line.
-
-Input clamp: the prompt is measured against the resolved model's `limit.context`
-as OpenCode reports it, minus an output reserve, at ~4 chars/token. A model
-OpenCode does not list gets a conservative 64k default. `onOverflow` decides
-what an oversized prompt means:
-
-- `truncate` (default) clips the tail and reports `inputTruncated: true`.
-  Correct for callers that degrade gracefully (summaries, commit messages).
-- `error` throws a `413` with `code: 'context-too-small'` plus
-  `requiredChars`/`availableChars`. Correct for callers whose output would be
-  quietly wrong on a clipped input, so they can ask the user for a roomier
-  model instead of returning confident nonsense.
-
-Output budget: `maxOutputTokens` is capped at the model's `limit.output`, and
-the **same number** is reserved from the input allowance. `/api/experimental/generate` takes
-no output budget of its own, so this number only shapes the reserve — but the
-two sides must stay equal or a caller that asks for a large answer overruns the
-context and the failure looks like a truncation bug.
-`describeSmallModel` takes `outputReserveTokens` so readiness checks agree with
-what generation will do. It may be a **function** of
-`{ contextTokens, outputTokenLimit }` for callers that want as much answer room
-as the resolved model allows — they cannot name a number before knowing which
-model they got. The resolved value comes back as `outputTokens`.
-
-`timeoutMs` overrides the 60s default; `signal` aborts a request that is no
-longer wanted. The timeout covers generation, retry waits and structured-output
-retries together.
-
-OpenCode 2 can reject an explicit model before its cold catalog finishes loading;
-plugin-provided models (Claude Code) stay unavailable for 20-40 s after OpenCode
-starts because plugins for the global location load lazily. An
-`InvalidRequestError` whose message exactly names the selected model as
-`Model unavailable: provider/model` is retried with exponential backoff (0.5, 1,
-2, 4, 8, 16 s, ~31 s in total), with the same model and prompt. The rejection
-precedes provider dispatch, so retries cost no tokens. Cancellation also stops the wait. Other errors are not retried.
-If the model remains unavailable, the route returns 503 with
-`code: 'small-model-unavailable'` and the model-specific reason. Commit and PR
-generation own their error toast and suppress the shared request toast.
-
-## Structured output
-
-`/api/experimental/generate` has no structured-output mode. `responseSchema` is therefore
-emulated: the schema is appended to the prompt as "Reply with JSON matching this
-schema and nothing else: …", and the reply is parsed here. A ```json fence is
-stripped. An unparseable reply is retried **once** — a model that ignored the
-shape often honours it on a second pass, and the alternative is failing a
-walkthrough over a stray sentence of preamble. A second failure throws with
-`code: 'structured-output-unsupported'` (`422`).
-
-`describeSmallModel` reports `structuredOutput: null`, never `false`. The
-capability is not knowable before the call, and callers must read `null` as
-"try it".
+provider is connected: content goes only to the provider the user works with,
+the model they picked, or the default they configured.
 
 ## Which providers the pickers may offer
 
 `listAuthenticatedProviders()` answers one question for the Small Model and
-Changes Walkthrough pickers: which providers OpenCode can call right now. A
-provider counts when it has at least one enabled model in `GET /api/model` —
-the same test OpenCode applies before letting a chat turn use it.
-
-`GET /api/provider` only contributes names. It comes back empty on setups where
-models are perfectly usable, so an empty provider list is never read as "no
-providers". Claude Code is removed from the result for the reason above.
+Changes Walkthrough pickers: which providers the runtime can call right now. A
+provider counts when the runtime lists at least one model for it — OMP's
+catalog is already credential-filtered, and it exposes no separate provider
+list.
 
 The field is served as `authenticatedProviders` on `GET /api/small-model`. The
 name predates this resolution; it now means "callable".
@@ -170,12 +134,17 @@ Reports which model would be used without calling it: `providerID`, `modelID`,
 `source`, plus `inputCharBudget`, `contextTokens`, `contextKnown`,
 `outputTokens`, `outputTokenLimit`, `structuredOutput` and `hasLogin`.
 
-`hasLogin` is `false` when OpenCode lists the model as disabled — a settings
-override can name a model there is no credential for, and the walkthrough
-refuses before the user pays for a failed request. A model OpenCode does not
-list at all is not evidence either way, so it counts as usable.
+`hasLogin` is `true` for every model the runtime lists, because OMP's catalog
+is already credential-filtered. `structuredOutput` is always `null`: the
+capability is not knowable before a call, and callers must read `null` as "try
+it".
 
-Returns `null` when OpenCode is not reachable.
+Returns `null` when the runtime is not mounted, or when nothing resolves.
+
+`outputReserveTokens` may be a **function** of `{ contextTokens,
+outputTokenLimit }` for callers that want as much answer room as the resolved
+model allows — they cannot name a number before knowing which model they got.
+The resolved value comes back as `outputTokens`.
 
 ## Registration
 

@@ -17,98 +17,76 @@ const getWorktreeBootstrapStatusMock = vi.fn(async () => ({
   error: null,
   updatedAt: Date.now(),
 }));
-// `@opencode/client` unwraps single-record responses, so these mocks return
-// the record itself; only the paged/list endpoints keep a `{ data }` envelope.
-const sessionCreateMock = vi.fn(async () => ({ id: 'ses_123' }));
-const sessionForkMock = vi.fn(async () => ({ id: 'ses_fork', title: 'Forked session' }));
-const sessionMessagesMock = vi.fn(async () => ({ data: [] }));
-const sessionGetMock = vi.fn(async ({ sessionID }) => ({ id: sessionID, location: { directory: '/repo/app' } }));
-const sessionUpdateMock = vi.fn(async () => undefined);
-const sessionPromptMock = vi.fn(async () => ({ id: 'msg_dispatched' }));
-const sessionSyntheticMock = vi.fn(async () => ({ id: 'msg_synthetic' }));
-const sessionSwitchModelMock = vi.fn(async () => undefined);
-const sessionSwitchAgentMock = vi.fn(async () => undefined);
-const modelListMock = vi.fn(async () => ({ data: [] }));
-const agentListMock = vi.fn(async () => ({ data: [] }));
-const configGetMock = vi.fn(async () => ([]));
 
-let existingSessionMessages = [];
-let dispatchedUserMessageSeq = 0;
+// The OMP runtime host, wired through the real seam (`omp-host-access.js`), so
+// the routes are exercised against the same mappers production uses: the model
+// catalogue, the session process calls, the message page and the prompt.
+const hostCreateSessionMock = vi.fn(async () => ({ id: 'ses_123' }));
+const hostRenameSessionMock = vi.fn(async () => undefined);
+const hostGetMessagesMock = vi.fn(async () => ({ items: [], cursor: null }));
+const hostPromptMock = vi.fn(async () => true);
+const hostSetModelMock = vi.fn(async () => undefined);
+const hostListModelsMock = vi.fn(async () => []);
+const hostListCommandsMock = vi.fn(async () => []);
 
-// The service confirms a prompt landed by watching for a new user message, so
-// the default mock behaves like OpenCode recording each dispatched prompt.
-const setSessionMessages = (messages) => {
-  existingSessionMessages = messages;
+const ompHost = {
+  listSessions: async () => [],
+  createSession: (...args) => hostCreateSessionMock(...args),
+  getSession: async (id) => {
+    throw new Error(`the host does not expose session records: ${id}`);
+  },
+  getMessages: (...args) => hostGetMessagesMock(...args),
+  prompt: (id, text) => hostPromptMock(id, text),
+  abort: async () => undefined,
+  renameSession: (...args) => hostRenameSessionMock(...args),
+  deleteSession: async () => false,
+  moveSession: async () => undefined,
+  setModel: (...args) => hostSetModelMock(...args),
+  getSessionStatus: async () => ({ busy: false }),
+  listModels: (...args) => hostListModelsMock(...args),
+  listCommands: (...args) => hostListCommandsMock(...args),
+  listMcpServers: async () => [],
+  setMcpEnabled: async () => undefined,
+  removeMcpServer: async () => undefined,
+  addMcpServer: async () => undefined,
+  listPermissions: async () => [],
+  replyPermission: async () => false,
+  disposeSessionsInDirectory: async () => 0,
 };
 
-const recordedSessionMessages = async () => {
-  dispatchedUserMessageSeq += 1;
-  return {
-    data: [
-      ...existingSessionMessages,
-      {
-        id: `msg_dispatched_${dispatchedUserMessageSeq}`,
-        type: 'user',
-        time: { created: 1000 + dispatchedUserMessageSeq },
-      },
-    ],
-  };
-};
-
-// v2 serves one flat model catalogue and a flat agent list through the client,
-// so the selection inputs are stubbed on the client mocks rather than on fetch.
+// The runtime's model catalogue arrives in OMP's shape (`{ provider, id }`);
+// only the list calls envelope their answer.
 const CATALOG_MODELS = [
-  { id: 'gpt-5.5', modelID: 'gpt-5.5', providerID: 'openai', variants: [{ id: 'high' }] },
-  { id: 'claude-sonnet-5', modelID: 'claude-sonnet-5', providerID: 'anthropic', variants: [{ id: 'high' }] },
+  { provider: 'openai', id: 'gpt-5.5' },
+  { provider: 'anthropic', id: 'claude-sonnet-5' },
 ];
-const CATALOG_AGENTS = [
-  { id: 'build', name: 'Build', mode: 'primary', hidden: false },
-  { id: 'plan', name: 'plan', mode: 'primary', hidden: false },
-];
-const useCatalog = ({ models = CATALOG_MODELS, agents = CATALOG_AGENTS, config = [] } = {}) => {
-  modelListMock.mockImplementation(async () => ({ data: models }));
-  agentListMock.mockImplementation(async () => ({ data: agents }));
-  configGetMock.mockImplementation(async () => config);
+const useCatalog = ({ models = CATALOG_MODELS, commands = [] } = {}) => {
+  hostListModelsMock.mockImplementation(async () => models);
+  hostListCommandsMock.mockImplementation(async () => commands);
 };
 
-const sessionCommandMock = vi.fn(async () => undefined);
-const commandListMock = vi.fn(async () => ({ data: [] }));
+let sessionItems = [];
+
+const setSessionMessages = (items) => {
+  sessionItems = items;
+};
+
+/** One canonical assistant message (`{ info, parts }`), as the seam serves it. */
+const assistantMessage = (id, created, completed, extra = {}) => ({
+  info: {
+    id,
+    role: 'assistant',
+    time: { created, ...(completed === undefined ? {} : { completed }) },
+    ...extra,
+  },
+  parts: [],
+});
+
 globalThis.__openchamberCreateWorktreeMock = createWorktreeMock;
 globalThis.__openchamberGetWorktreeBootstrapStatusMock = getWorktreeBootstrapStatusMock;
 
 let registerOpenChamberSessionRoutes;
 let createSessionMetadataStore;
-let createOpenCodeSessionMetadata;
-
-// Every `OpenCode.make` call is recorded so tests can assert on the scoping
-// headers the routes build.
-const clientOptions = [];
-
-vi.mock('@opencode/client', () => ({
-  OpenCode: {
-    make: (options) => {
-      clientOptions.push(options);
-      return {
-        session: {
-          create: sessionCreateMock,
-          fork: sessionForkMock,
-          get: sessionGetMock,
-          update: sessionUpdateMock,
-          command: sessionCommandMock,
-          prompt: sessionPromptMock,
-          synthetic: sessionSyntheticMock,
-          switchModel: sessionSwitchModelMock,
-          switchAgent: sessionSwitchAgentMock,
-        },
-        message: { list: sessionMessagesMock },
-        command: { list: commandListMock },
-        model: { list: modelListMock },
-        agent: { list: agentListMock },
-        config: { get: configGetMock },
-      };
-    },
-  },
-}));
 
 vi.mock('../git/index.js', () => ({
   createWorktree: (...args) => globalThis.__openchamberCreateWorktreeMock(...args),
@@ -117,9 +95,9 @@ vi.mock('../git/index.js', () => ({
 }));
 
 /**
- * Archive state is OpenChamber's own now, so the routes take a store rather
- * than talking to OpenCode. The tests use an in-memory one with the same
- * contract as `archive-store.js`.
+ * Session metadata is OpenChamber's own state now, so the routes take a store
+ * rather than talking to the runtime. The tests use an in-memory one with the
+ * same contract as `session-metadata-store.js`.
  */
 const createMemorySessionMetadataStore = () => {
   const entries = new Map();
@@ -134,10 +112,7 @@ const createMemorySessionMetadataStore = () => {
   };
   return {
     entries,
-    failFor: null,
     get: async (id) => entries.get(id) ?? {},
-    has: async (id) => entries.has(id),
-    getAll: async () => Object.fromEntries(entries),
     setSessionMetadata: async (id, patch) => {
       const merged = merge(entries.get(id), patch);
       if (Object.keys(merged).length === 0) entries.delete(id);
@@ -186,7 +161,6 @@ const createApp = (overrides = {}, options = {}) => {
   if (options.globalJson !== false) {
     app.use(express.json());
   }
-  const calls = [];
   const archiveStore = overrides.archiveStore ?? createMemoryArchiveStore();
   const sessionMetadataStore = overrides.sessionMetadataStore ?? createMemorySessionMetadataStore();
   const broadcastGlobalUiEvent = overrides.broadcastGlobalUiEvent ?? vi.fn();
@@ -199,16 +173,17 @@ const createApp = (overrides = {}, options = {}) => {
     validateDirectoryPath: async (directory) => ({ ok: true, directory }),
     buildOpenCodeUrl: (route) => `http://opencode.test${route}`,
     getOpenCodeAuthHeaders: () => ({ Authorization: 'Bearer test' }),
-    waitForOpenCodeReady: vi.fn(async () => undefined),
     ...overrides,
   });
-  return { app, calls, archiveStore, sessionMetadataStore, broadcastGlobalUiEvent };
+  return { app, archiveStore, sessionMetadataStore, broadcastGlobalUiEvent };
 };
 
 describe('openchamber session routes', () => {
   beforeAll(async () => {
     ({ registerOpenChamberSessionRoutes } = await import('./routes.js'));
-    ({ createSessionMetadataStore, createOpenCodeSessionMetadata } = await import('./session-metadata-store.js'));
+    ({ createSessionMetadataStore } = await import('./session-metadata-store.js'));
+    const { configureOmpRuntimeHost } = await import('../agents/omp-host-access.js');
+    configureOmpRuntimeHost(() => ompHost);
   });
 
   beforeEach(() => {
@@ -220,33 +195,17 @@ describe('openchamber session routes', () => {
       error: null,
       updatedAt: Date.now(),
     }));
-    sessionCreateMock.mockClear();
-    sessionUpdateMock.mockClear();
-    sessionForkMock.mockClear();
-    existingSessionMessages = [];
-    dispatchedUserMessageSeq = 0;
-    sessionMessagesMock.mockReset();
-    sessionMessagesMock.mockImplementation(recordedSessionMessages);
-    sessionCommandMock.mockReset();
-    sessionCommandMock.mockResolvedValue({ data: {} });
-    clientOptions.length = 0;
-    commandListMock.mockReset();
-    commandListMock.mockResolvedValue({ data: [] });
-    sessionGetMock.mockReset();
-    sessionGetMock.mockImplementation(async ({ sessionID }) => ({ id: sessionID, location: { directory: '/repo/app' } }));
-    sessionPromptMock.mockReset();
-    sessionPromptMock.mockImplementation(async () => ({ id: 'msg_dispatched' }));
-    sessionSyntheticMock.mockReset();
-    sessionSyntheticMock.mockImplementation(async () => ({ id: 'msg_synthetic' }));
-    sessionSwitchModelMock.mockReset();
-    sessionSwitchModelMock.mockImplementation(async () => undefined);
-    sessionSwitchAgentMock.mockReset();
-    sessionSwitchAgentMock.mockImplementation(async () => undefined);
-    modelListMock.mockReset();
-    modelListMock.mockImplementation(async () => ({ data: [] }));
-    agentListMock.mockReset();
-    agentListMock.mockImplementation(async () => ({ data: [] }));
-    configGetMock.mockReset();
+    hostCreateSessionMock.mockClear();
+    hostCreateSessionMock.mockImplementation(async () => ({ id: 'ses_123' }));
+    hostRenameSessionMock.mockClear();
+    hostPromptMock.mockReset();
+    hostPromptMock.mockImplementation(async () => true);
+    hostSetModelMock.mockClear();
+    hostListModelsMock.mockReset();
+    hostListCommandsMock.mockReset();
+    sessionItems = [];
+    hostGetMessagesMock.mockReset();
+    hostGetMessagesMock.mockImplementation(async () => ({ items: sessionItems, cursor: null }));
     useCatalog();
   });
 
@@ -340,36 +299,7 @@ describe('openchamber session routes', () => {
   });
 
   describe('session metadata OpenChamber owns', () => {
-    it('merges a patch onto the OpenCode record and writes it back with PATCH', async () => {
-      sessionGetMock.mockImplementationOnce(async ({ sessionID }) => ({
-        id: sessionID,
-        location: { directory: '/repo/app' },
-        metadata: { openchamber: { kind: 'review', assist: { recap: 'from v1' } } },
-      }));
-      // The real store over the same mocked client the routes use.
-      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-routes-metadata-'));
-      const { app } = createApp({
-        sessionMetadataStore: createSessionMetadataStore({
-          dataDir,
-          openCode: createOpenCodeSessionMetadata({
-            buildOpenCodeUrl: (route) => `http://opencode.test${route}`,
-            getOpenCodeAuthHeaders: () => ({ Authorization: 'Bearer test' }),
-          }),
-        }),
-      });
-
-      const response = await request(app)
-        .post('/api/openchamber/sessions/ses_v1/metadata')
-        .send({ patch: { openchamber: { goal: { status: 'active' } } } })
-        .expect(200);
-
-      const merged = { openchamber: { kind: 'review', assist: { recap: 'from v1' }, goal: { status: 'active' } } };
-      expect(response.body.metadata).toEqual(merged);
-      expect(sessionUpdateMock).toHaveBeenCalledWith({ sessionID: 'ses_v1', metadata: merged });
-      fs.rmSync(dataDir, { recursive: true, force: true });
-    });
-
-    it('merge-patches metadata, returns the merged object, and announces it', async () => {
+    it('merge-patches metadata through the store, returns the merged object, and announces it', async () => {
       const { app, sessionMetadataStore, broadcastGlobalUiEvent } = createApp();
 
       await request(app)
@@ -382,8 +312,7 @@ describe('openchamber session routes', () => {
         .send({ patch: { openchamber: { goal: { status: 'active' } } } })
         .expect(200);
 
-      // The second write must not erase the first: OpenCode's PATCH merged, so
-      // this does too.
+      // The second write must not erase the first: the store merges key by key.
       expect(response.body).toEqual({
         metadata: { openchamber: { assist: { recap: 'first' }, goal: { status: 'active' } } },
       });
@@ -392,6 +321,22 @@ describe('openchamber session routes', () => {
         type: 'openchamber:session-metadata',
         properties: { sessionID: 'ses_a', metadata: response.body.metadata },
       });
+    });
+
+    it('keeps the state in the data dir when the real store is used', async () => {
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-routes-metadata-'));
+      const { app } = createApp({ sessionMetadataStore: createSessionMetadataStore({ dataDir }) });
+
+      const response = await request(app)
+        .post('/api/openchamber/sessions/ses_v1/metadata')
+        .send({ patch: { openchamber: { goal: { status: 'active' } } } })
+        .expect(200);
+
+      const merged = { openchamber: { goal: { status: 'active' } } };
+      expect(response.body.metadata).toEqual(merged);
+      expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'sessions-metadata.json'), 'utf8')))
+        .toEqual({ ses_v1: merged });
+      fs.rmSync(dataDir, { recursive: true, force: true });
     });
 
     it('deletes a key when the patch value is null', async () => {
@@ -449,7 +394,7 @@ describe('openchamber session routes', () => {
     });
   });
 
-  it('creates a session for a directory', async () => {
+  it('creates a session for a directory and names it', async () => {
     const { app } = createApp();
     const response = await request(app)
       .post('/api/openchamber/sessions')
@@ -459,21 +404,19 @@ describe('openchamber session routes', () => {
     expect(response.body.sessionId).toBe('ses_123');
     expect(response.body.directory).toBe('/repo/app');
     expect(response.body.promptDispatched).toBe(false);
-    expect(sessionCreateMock).toHaveBeenCalledWith({
-      location: { directory: '/repo/app' },
-      title: 'Side task',
-    });
+    expect(hostCreateSessionMock).toHaveBeenCalledWith({ cwd: '/repo/app' });
+    // OMP opens the session on a directory and names it afterwards.
+    expect(hostRenameSessionMock).toHaveBeenCalledWith('ses_123', 'Side task');
   });
 
-  it('percent-encodes the directory header for non-ASCII checkout paths', async () => {
+  it('hands a non-ASCII checkout path to the runtime unchanged', async () => {
     const { app } = createApp();
     await request(app)
       .post('/api/openchamber/sessions')
       .send({ directory: '/home/user/Masaüstü/projeler', title: 'Side task' })
       .expect(200);
 
-    expect(clientOptions.at(-1)?.headers['x-opencode-directory'])
-      .toBe(encodeURIComponent('/home/user/Masaüstü/projeler'));
+    expect(hostCreateSessionMock).toHaveBeenCalledWith({ cwd: '/home/user/Masaüstü/projeler' });
   });
 
   it('parses JSON body without global middleware', async () => {
@@ -504,24 +447,37 @@ describe('openchamber session routes', () => {
     }));
   });
 
-  it('resolves a default agent stored by v1 under its display name', async () => {
-    useCatalog({ agents: [{ id: 'build', name: 'Build', mode: 'primary' }, { id: 'plan', name: 'Plan', mode: 'primary' }] });
-    const { app } = createApp({
-      readSettingsFromDiskMigrated: async () => ({
-        defaultAgent: 'Plan',
-        projects: [{ id: 'proj_1', path: '/repo/app' }],
-      }),
-    });
-
+  it('answers a requested agent as unsupported before creating a session or worktree', async () => {
+    const { app } = createApp();
     const response = await request(app)
       .post('/api/openchamber/sessions')
-      .send({ directory: '/repo/app', prompt: 'Run this' })
-      .expect(200);
+      .send({
+        directory: '/repo/app',
+        prompt: 'Run this',
+        agent: 'plan',
+        worktree: { name: 'side-task' },
+      })
+      .expect(501);
 
-    expect(response.body.agent).toBe('plan');
+    expect(response.body.error).toMatch(/plan/);
+    expect(createWorktreeMock).not.toHaveBeenCalled();
+    expect(hostCreateSessionMock).not.toHaveBeenCalled();
+    expect(hostPromptMock).not.toHaveBeenCalled();
   });
 
-  it('resolves default model and agent when prompt omits them', async () => {
+  it('answers a requested model variant as unsupported before creating a session', async () => {
+    const { app } = createApp();
+    const response = await request(app)
+      .post('/api/openchamber/sessions')
+      .send({ directory: '/repo/app', prompt: 'Run this', model: 'openai/gpt-5.5', variant: 'high' })
+      .expect(501);
+
+    expect(response.body.error).toMatch(/variant/);
+    expect(hostCreateSessionMock).not.toHaveBeenCalled();
+    expect(hostSetModelMock).not.toHaveBeenCalled();
+  });
+
+  it('resolves the default model when the prompt omits one', async () => {
     const { app } = createApp({
       readSettingsFromDiskMigrated: async () => ({
         defaultModel: 'openai/gpt-5.5',
@@ -535,26 +491,21 @@ describe('openchamber session routes', () => {
       .expect(200);
 
     expect(response.body.model).toEqual({ providerID: 'openai', modelID: 'gpt-5.5' });
-    expect(response.body.agent).toBe('build');
-    expect(modelListMock).toHaveBeenCalled();
-    expect(sessionSwitchModelMock).toHaveBeenCalledWith({
-      sessionID: 'ses_123',
-      model: { id: 'gpt-5.5', providerID: 'openai' },
-    });
-    expect(sessionSwitchAgentMock).toHaveBeenCalledWith({ sessionID: 'ses_123', agent: 'build' });
+    // OMP serves no agent catalogue, so no default agent is resolved or applied.
+    expect(response.body.agent).toBeUndefined();
+    expect(hostListModelsMock).toHaveBeenCalled();
+    expect(hostSetModelMock).toHaveBeenCalledWith('ses_123', 'openai', 'gpt-5.5');
   });
 
   it('resolves an Auto default through the routing hook before switching the session', async () => {
-    useCatalog();
     const resolveAutoSelection = vi.fn(async () => ({
-      model: { providerID: 'openai', id: 'gpt-5.5', variant: 'high' },
-      agent: 'plan',
+      model: { providerID: 'openai', id: 'gpt-5.5' },
+      agent: null,
       decision: {},
     }));
     const { app } = createApp({
       readSettingsFromDiskMigrated: async () => ({
         defaultModel: 'openchamber/auto',
-        defaultAgent: 'build',
         projects: [{ id: 'proj_1', path: '/repo/app' }],
       }),
       resolveAutoSelection,
@@ -568,20 +519,37 @@ describe('openchamber session routes', () => {
       sessionId: 'ses_123',
       directory: '/repo/app',
       model: { providerID: 'openchamber', id: 'auto' },
-      agent: 'build',
+      agent: null,
       requestText: 'Run this',
     });
     expect(response.body.model).toEqual({ providerID: 'openai', modelID: 'gpt-5.5' });
-    expect(response.body.agent).toBe('plan');
-    expect(sessionSwitchModelMock).toHaveBeenCalledWith({
-      sessionID: 'ses_123',
-      model: { id: 'gpt-5.5', providerID: 'openai', variant: 'high' },
+    expect(hostSetModelMock).toHaveBeenCalledWith('ses_123', 'openai', 'gpt-5.5');
+  });
+
+  it('answers a routed category agent as unsupported instead of running on another one', async () => {
+    const resolveAutoSelection = vi.fn(async () => ({
+      model: { providerID: 'openai', id: 'gpt-5.5' },
+      agent: 'plan',
+      decision: {},
+    }));
+    const { app } = createApp({
+      readSettingsFromDiskMigrated: async () => ({
+        defaultModel: 'openchamber/auto',
+        projects: [{ id: 'proj_1', path: '/repo/app' }],
+      }),
+      resolveAutoSelection,
     });
-    expect(sessionSwitchAgentMock).toHaveBeenCalledWith({ sessionID: 'ses_123', agent: 'plan' });
+    const response = await request(app)
+      .post('/api/openchamber/sessions')
+      .send({ directory: '/repo/app', prompt: 'Run this' })
+      .expect(501);
+
+    expect(response.body.error).toMatch(/plan/);
+    expect(hostSetModelMock).not.toHaveBeenCalled();
+    expect(hostPromptMock).not.toHaveBeenCalled();
   });
 
   it('refuses an Auto default when routing is not wired in', async () => {
-    useCatalog();
     const { app } = createApp({
       readSettingsFromDiskMigrated: async () => ({
         defaultModel: 'openchamber/auto',
@@ -593,7 +561,7 @@ describe('openchamber session routes', () => {
       .send({ directory: '/repo/app', prompt: 'Run this' });
     expect(response.status).toBe(400);
     expect(response.body.error).toMatch(/not available/);
-    expect(sessionSwitchModelMock).not.toHaveBeenCalled();
+    expect(hostSetModelMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -601,14 +569,11 @@ describe('openchamber session routes', () => {
     ['', { directory: '/repo/app', worktree: { name: 'side-task' } }],
     ['', { directory: '/repo/worktrees/side-task' }],
     ['/ses_existing/send', { directory: '/repo/worktrees/side-task' }],
-    ['/ses_existing/fork', { directory: '/repo/worktrees/side-task' }],
   ])('prefers project defaults for %s with %j', async (endpoint, scope) => {
-    useCatalog();
     const { app } = createApp({
       readSettingsFromDiskMigrated: async () => ({
         defaultModel: 'openai/gpt-5.5',
-        defaultAgent: 'build',
-        projects: [{ id: 'proj_1', path: '/repo/app', defaultAgent: 'plan' }],
+        projects: [{ id: 'proj_1', path: '/repo/app', defaultModel: 'anthropic/claude-sonnet-5' }],
       }),
     });
 
@@ -617,9 +582,8 @@ describe('openchamber session routes', () => {
       .send({ ...scope, prompt: 'Run this' })
       .expect(200);
 
-    expect(response.body.agent).toBe('plan');
-    // v2 puts the agent on the session, not in the prompt body.
-    expect(sessionSwitchAgentMock).toHaveBeenCalledWith(expect.objectContaining({ agent: 'plan' }));
+    expect(response.body.model).toEqual({ providerID: 'anthropic', modelID: 'claude-sonnet-5' });
+    expect(hostSetModelMock).toHaveBeenCalledWith(expect.any(String), 'anthropic', 'claude-sonnet-5');
   });
 
   it('dispatches an initial prompt when model is provided', async () => {
@@ -631,10 +595,10 @@ describe('openchamber session routes', () => {
 
     expect(response.body.sessionId).toBe('ses_123');
     expect(response.body.promptDispatched).toBe(true);
-    expect(sessionPromptMock).toHaveBeenCalledWith({ sessionID: 'ses_123', text: 'Run this' });
+    expect(hostPromptMock).toHaveBeenCalledWith('ses_123', 'Run this');
   });
 
-  it('creates goal metadata before dispatching the initial goal prompt', async () => {
+  it('creates goal metadata, then answers the goal reminder as unsupported', async () => {
     const createSessionGoal = vi.fn(async () => undefined);
     const { app } = createApp({ createSessionGoal });
     const response = await request(app)
@@ -646,7 +610,7 @@ describe('openchamber session routes', () => {
         goal: true,
         goalTokenBudget: 200000,
       })
-      .expect(200);
+      .expect(501);
 
     expect(createSessionGoal).toHaveBeenCalledWith(expect.objectContaining({
       sessionID: 'ses_123',
@@ -657,14 +621,10 @@ describe('openchamber session routes', () => {
       modelID: 'gpt-5.5',
     }));
     expect(createSessionGoal.mock.invocationCallOrder[0])
-      .toBeLessThan(sessionPromptMock.mock.invocationCallOrder[0]);
-    // v2 cannot append to a message, so the goal reminder follows the prompt as
-    // its own synthetic message.
-    expect(sessionPromptMock).toHaveBeenCalledWith({ sessionID: 'ses_123', text: 'Finish and verify the migration' });
-    expect(sessionSyntheticMock).toHaveBeenCalledWith(expect.objectContaining({ sessionID: 'ses_123', resume: false }));
-    expect(sessionPromptMock.mock.invocationCallOrder[0])
-      .toBeLessThan(sessionSyntheticMock.mock.invocationCallOrder[0]);
-    expect(response.body).toMatchObject({ goalEnabled: true, goalTokenBudget: 200000, promptDispatched: true });
+      .toBeLessThan(hostPromptMock.mock.invocationCallOrder[0]);
+    // The reminder is a message that must not start a run; OMP has no such call,
+    // so the dispatch says so instead of dropping it. The goal already exists.
+    expect(response.body.error).toMatch(/the goal reminder without starting a run/);
   });
 
   it('rejects invalid goal requests before creating a session', async () => {
@@ -682,7 +642,7 @@ describe('openchamber session routes', () => {
       .send({ directory: '/repo/app', prompt: 'Run', goal: true, goalTokenBudget: 999 })
       .expect(400, { error: 'goalTokenBudget must be an integer from 1000 to 100000000' });
 
-    expect(sessionCreateMock).not.toHaveBeenCalled();
+    expect(hostCreateSessionMock).not.toHaveBeenCalled();
   });
 
   it('creates a worktree before creating a session', async () => {
@@ -707,10 +667,8 @@ describe('openchamber session routes', () => {
     });
     expect(response.body.directory).toBe('/repo/worktrees/side-task');
     expect(response.body.worktree.path).toBe('/repo/worktrees/side-task');
-    expect(sessionCreateMock).toHaveBeenCalledWith(expect.objectContaining({
-      location: { directory: '/repo/worktrees/side-task' },
-    }));
-    expect(sessionPromptMock).toHaveBeenCalledWith({ sessionID: 'ses_123', text: 'Run this' });
+    expect(hostCreateSessionMock).toHaveBeenCalledWith({ cwd: '/repo/worktrees/side-task' });
+    expect(hostPromptMock).toHaveBeenCalledWith('ses_123', 'Run this');
   });
 
   it('waits for the worktree bootstrap to complete before creating the session', async () => {
@@ -735,9 +693,9 @@ describe('openchamber session routes', () => {
     expect(response.body.promptDispatched).toBe(true);
     expect(getWorktreeBootstrapStatusMock).toHaveBeenCalled();
     expect(getWorktreeBootstrapStatusMock.mock.invocationCallOrder[0])
-      .toBeLessThan(sessionCreateMock.mock.invocationCallOrder[0]);
-    expect(sessionCreateMock.mock.invocationCallOrder[0])
-      .toBeLessThan(sessionPromptMock.mock.invocationCallOrder[0]);
+      .toBeLessThan(hostCreateSessionMock.mock.invocationCallOrder[0]);
+    expect(hostCreateSessionMock.mock.invocationCallOrder[0])
+      .toBeLessThan(hostPromptMock.mock.invocationCallOrder[0]);
   });
 
   it('fails the create when the worktree bootstrap failed', async () => {
@@ -759,24 +717,21 @@ describe('openchamber session routes', () => {
       })
       .expect(500, { error: 'Worktree bootstrap failed: branch already exists' });
 
-    expect(sessionPromptMock).not.toHaveBeenCalled();
+    expect(hostPromptMock).not.toHaveBeenCalled();
   });
 
-  it('sends a goal prompt to an existing session after creating goal metadata', async () => {
-    const createSessionGoal = vi.fn(async () => undefined);
-    setSessionMessages([{ id: 'msg_before', type: 'assistant', time: { created: 10, completed: 20 } }]);
+  it('sends to an existing session and reports the assistant baseline', async () => {
+    setSessionMessages([
+      assistantMessage('msg_before', 10, 20, { providerID: 'anthropic', modelID: 'claude-sonnet-5' }),
+    ]);
 
-    const { app } = createApp({ createSessionGoal });
+    const { app } = createApp();
     const response = await request(app)
       .post('/api/openchamber/sessions/ses_source/send')
       .send({
         directory: '/repo/app',
         prompt: 'Apply and verify the review feedback',
         model: 'openai/gpt-5.5',
-        agent: 'build',
-        variant: 'high',
-        goal: true,
-        goalTokenBudget: 200000,
       })
       .expect(200);
 
@@ -784,89 +739,25 @@ describe('openchamber session routes', () => {
       action: 'send',
       sessionId: 'ses_source',
       directory: '/repo/app',
+      model: { providerID: 'openai', modelID: 'gpt-5.5' },
       promptDispatched: true,
-      goalEnabled: true,
       baselineAssistantMessageId: 'msg_before',
     });
-    expect(createSessionGoal).toHaveBeenCalledWith(expect.objectContaining({
-      sessionID: 'ses_source',
-      directory: '/repo/app',
-      objective: 'Apply and verify the review feedback',
-    }));
-    expect(sessionPromptMock).toHaveBeenCalledWith({
-      sessionID: 'ses_source',
-      text: 'Apply and verify the review feedback',
+    expect(hostPromptMock).toHaveBeenCalledWith('ses_source', 'Apply and verify the review feedback');
+  });
+
+  it('reuses the session model the runtime last ran when send omits one', async () => {
+    setSessionMessages([
+      assistantMessage('msg_before', 10, 20, { providerID: 'anthropic', modelID: 'claude-sonnet-5' }),
+      { info: { id: 'msg_user', role: 'user', time: { created: 30 } }, parts: [] },
+    ]);
+
+    const { app } = createApp({
+      readSettingsFromDiskMigrated: async () => ({
+        defaultModel: 'openai/gpt-5.5',
+        projects: [{ id: 'proj_1', path: '/repo/app' }],
+      }),
     });
-    expect(createSessionGoal.mock.invocationCallOrder[0])
-      .toBeLessThan(sessionPromptMock.mock.invocationCallOrder[0]);
-  });
-
-  it('dispatches a slash command and keeps the typed prompt as the goal objective', async () => {
-    // v2 no longer publishes a command's template (`CommandInfo` is just name
-    // and description), so the objective is what the user typed.
-    const createSessionGoal = vi.fn(async () => undefined);
-    commandListMock.mockResolvedValue({ data: [{ name: 'issue--to-pr', description: 'Issue to PR' }] });
-
-    const { app } = createApp({ createSessionGoal });
-    const response = await request(app)
-      .post('/api/openchamber/sessions/ses_source/send')
-      .send({
-        directory: '/repo/app',
-        prompt: '/issue--to-pr LIN-123',
-        model: 'openai/gpt-5.5',
-        agent: 'build',
-        goal: true,
-      })
-      .expect(200);
-
-    expect(createSessionGoal).toHaveBeenCalledWith(expect.objectContaining({
-      objective: '/issue--to-pr LIN-123',
-    }));
-    expect(sessionCommandMock).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'issue--to-pr',
-      text: 'LIN-123',
-    }));
-    expect(createSessionGoal.mock.invocationCallOrder[0])
-      .toBeLessThan(sessionCommandMock.mock.invocationCallOrder[0]);
-    expect(response.body).toMatchObject({ goalEnabled: true, dispatchedAsCommand: true });
-    expect(sessionPromptMock).not.toHaveBeenCalled();
-  });
-
-  it('admits standing project context ahead of a dispatched slash command', async () => {
-    commandListMock.mockResolvedValue({ data: [{ name: 'review', description: 'Review' }] });
-    const recordDelivered = vi.fn(async () => undefined);
-    const sessionKnowledgeRuntime = {
-      resolvePendingForSession: vi.fn(async () => ({ text: 'Memory guidance', signature: 'sig_1' })),
-      recordDelivered,
-    };
-
-    const { app } = createApp({ sessionKnowledgeRuntime });
-    await request(app)
-      .post('/api/openchamber/sessions/ses_source/send')
-      .send({ directory: '/repo/app', prompt: '/review', model: 'openai/gpt-5.5', agent: 'build' })
-      .expect(200);
-
-    expect(sessionSyntheticMock).toHaveBeenCalledWith(expect.objectContaining({
-      text: 'Memory guidance',
-      resume: false,
-    }));
-    expect(sessionSyntheticMock.mock.invocationCallOrder[0])
-      .toBeLessThan(sessionCommandMock.mock.invocationCallOrder[0]);
-    expect(recordDelivered).toHaveBeenCalledWith('ses_source', '/repo/app', 'sig_1');
-  });
-
-  it('reuses the previous session selection when send omits model, agent, and variant', async () => {
-    // v2 keeps the selection on the session record, so the history is no longer
-    // walked for it.
-    sessionGetMock.mockImplementation(async ({ sessionID }) => ({
-      id: sessionID,
-      agent: 'plan',
-      model: { providerID: 'anthropic', id: 'claude-sonnet-5', variant: 'high' },
-      location: { directory: '/repo/app' },
-    }));
-    setSessionMessages([{ id: 'msg_before', type: 'assistant', time: { created: 10, completed: 20 } }]);
-
-    const { app } = createApp();
     const response = await request(app)
       .post('/api/openchamber/sessions/ses_source/send')
       .send({ directory: '/repo/app', prompt: 'Continue where you left off' })
@@ -876,69 +767,131 @@ describe('openchamber session routes', () => {
       action: 'send',
       sessionId: 'ses_source',
       model: { providerID: 'anthropic', modelID: 'claude-sonnet-5' },
-      agent: 'plan',
-      variant: 'high',
       promptDispatched: true,
     });
     // The default-selection catalogue must not be consulted.
-    expect(modelListMock).not.toHaveBeenCalled();
-    expect(agentListMock).not.toHaveBeenCalled();
+    expect(hostListModelsMock).not.toHaveBeenCalled();
+    expect(hostSetModelMock).toHaveBeenCalledWith('ses_source', 'anthropic', 'claude-sonnet-5');
   });
 
-  it('forks from a message, dispatches the prompt, and emits the new session', async () => {
+  it('fails the send when the session read fails instead of moving it onto the default', async () => {
+    hostGetMessagesMock.mockRejectedValue(new Error('session process is gone'));
+
+    const { app } = createApp({
+      readSettingsFromDiskMigrated: async () => ({
+        defaultModel: 'openai/gpt-5.5',
+        projects: [{ id: 'proj_1', path: '/repo/app' }],
+      }),
+    });
+    const response = await request(app)
+      .post('/api/openchamber/sessions/ses_source/send')
+      .send({ directory: '/repo/app', prompt: 'Continue where you left off' })
+      .expect(500);
+
+    expect(response.body.error).toMatch(/session process is gone/);
+    // The model must not be switched onto a default the caller never asked for.
+    expect(hostSetModelMock).not.toHaveBeenCalled();
+    expect(hostPromptMock).not.toHaveBeenCalled();
+  });
+
+  it('creates the goal record and then answers the goal reminder as unsupported for an existing session', async () => {
+    const createSessionGoal = vi.fn(async () => undefined);
+    setSessionMessages([assistantMessage('msg_before', 10, 20)]);
+
+    const { app } = createApp({ createSessionGoal });
+    const response = await request(app)
+      .post('/api/openchamber/sessions/ses_source/send')
+      .send({
+        directory: '/repo/app',
+        prompt: 'Apply and verify the review feedback',
+        model: 'openai/gpt-5.5',
+        goal: true,
+        goalTokenBudget: 200000,
+      })
+      .expect(501);
+
+    expect(createSessionGoal).toHaveBeenCalledWith(expect.objectContaining({
+      sessionID: 'ses_source',
+      directory: '/repo/app',
+      objective: 'Apply and verify the review feedback',
+    }));
+    expect(response.body).toMatchObject({
+      partial: true,
+      partialAction: 'goal-configured',
+      sessionId: 'ses_source',
+    });
+  });
+
+  it('answers a catalogue command as unsupported instead of dispatching it', async () => {
+    const { app } = createApp();
+    useCatalog({ commands: [{ name: 'issue--to-pr', description: 'Issue to PR' }] });
+
+    const response = await request(app)
+      .post('/api/openchamber/sessions/ses_source/send')
+      .send({ directory: '/repo/app', prompt: '/issue--to-pr LIN-123', model: 'openai/gpt-5.5' })
+      .expect(501);
+
+    expect(hostListCommandsMock).toHaveBeenCalled();
+    expect(response.body.error).toMatch(/issue--to-pr/);
+    expect(hostPromptMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the typed prompt as the goal objective of a slash command', async () => {
+    const createSessionGoal = vi.fn(async () => undefined);
+    useCatalog({ commands: [{ name: 'issue--to-pr', description: 'Issue to PR' }] });
+
+    const { app } = createApp({ createSessionGoal });
+    const response = await request(app)
+      .post('/api/openchamber/sessions/ses_source/send')
+      .send({ directory: '/repo/app', prompt: '/issue--to-pr LIN-123', model: 'openai/gpt-5.5', goal: true })
+      .expect(501);
+
+    // The runtime publishes no command template, so the objective is what the
+    // user typed. The goal was recorded before the command was answered.
+    expect(createSessionGoal).toHaveBeenCalledWith(expect.objectContaining({
+      objective: '/issue--to-pr LIN-123',
+    }));
+    expect(response.body).toMatchObject({
+      partial: true,
+      partialAction: 'goal-configured',
+      sessionId: 'ses_source',
+    });
+  });
+
+  it('answers pending standing context as unsupported rather than dropping it', async () => {
+    const recordDelivered = vi.fn(async () => undefined);
+    const sessionKnowledgeRuntime = {
+      resolvePendingForSession: vi.fn(async () => ({ text: 'Memory guidance', signature: 'sig_1' })),
+      recordDelivered,
+    };
+
+    const { app } = createApp({ sessionKnowledgeRuntime });
+    const response = await request(app)
+      .post('/api/openchamber/sessions/ses_source/send')
+      .send({ directory: '/repo/app', prompt: 'Run this', model: 'openai/gpt-5.5' })
+      .expect(501);
+
+    expect(response.body.error).toMatch(/without starting a run/);
+    expect(hostPromptMock).not.toHaveBeenCalled();
+    // Nothing was delivered, so the cursor must not move.
+    expect(recordDelivered).not.toHaveBeenCalled();
+  });
+
+  it('answers a fork as unsupported without creating a session', async () => {
     const emitSessionCreatedEvent = vi.fn();
     const { app } = createApp({ emitSessionCreatedEvent });
     const response = await request(app)
       .post('/api/openchamber/sessions/ses_source/fork')
-      .send({
-        directory: '/repo/app',
-        messageId: 'msg_branch_point',
-        prompt: 'Try the alternative implementation',
-        model: 'openai/gpt-5.5',
-        agent: 'build',
-        variant: 'high',
-      })
-      .expect(200);
+      .send({ directory: '/repo/app', messageId: 'msg_branch_point', prompt: 'Try the alternative' })
+      .expect(501);
 
-    expect(sessionForkMock).toHaveBeenCalledWith({
-      sessionID: 'ses_source',
-      before: 'msg_branch_point',
-    });
-    expect(response.body).toMatchObject({
-      action: 'fork',
-      sourceSessionId: 'ses_source',
-      sessionId: 'ses_fork',
-      directory: '/repo/app',
-      promptDispatched: true,
-    });
-    expect(sessionPromptMock).toHaveBeenCalledWith({ sessionID: 'ses_fork', text: 'Try the alternative implementation' });
-    expect(emitSessionCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({
-      sessionID: 'ses_fork',
-      sourceSessionID: 'ses_source',
-      directory: '/repo/app',
-      promptDispatched: true,
-    }));
+    expect(response.body.error).toMatch(/Forking a session/);
+    expect(hostCreateSessionMock).not.toHaveBeenCalled();
+    expect(hostPromptMock).not.toHaveBeenCalled();
+    expect(emitSessionCreatedEvent).not.toHaveBeenCalled();
   });
 
-  it('strips source-owned links from a fork before dispatching', async () => {
-    sessionForkMock.mockImplementationOnce(async () => ({
-      id: 'ses_fork',
-      title: 'Forked session',
-      metadata: { openchamber: { btwSessionID: 'ses_btw', reviewSessionID: 'ses_review', assist: { recap: 'kept' } } },
-    }));
-    const { app, sessionMetadataStore } = createApp();
-    sessionMetadataStore.entries.set('ses_fork', {
-      openchamber: { btwSessionID: 'ses_btw', reviewSessionID: 'ses_review', assist: { recap: 'kept' } },
-    });
-    await request(app)
-      .post('/api/openchamber/sessions/ses_source/fork')
-      .send({ directory: '/repo/app', prompt: 'Carry on', model: 'openai/gpt-5.5', agent: 'build' })
-      .expect(200);
-
-    expect(sessionMetadataStore.entries.get('ses_fork')).toEqual({ openchamber: { assist: { recap: 'kept' } } });
-  });
-
-  it('rejects send and fork requests without a prompt before calling OpenCode', async () => {
+  it('rejects send and fork requests without a prompt before reaching the runtime', async () => {
     const { app } = createApp();
     await request(app)
       .post('/api/openchamber/sessions/ses_source/send')
@@ -949,93 +902,22 @@ describe('openchamber session routes', () => {
       .send({ directory: '/repo/app' })
       .expect(400, { error: 'prompt is required' });
 
-    expect(sessionForkMock).not.toHaveBeenCalled();
-    expect(sessionPromptMock).not.toHaveBeenCalled();
+    expect(hostCreateSessionMock).not.toHaveBeenCalled();
+    expect(hostPromptMock).not.toHaveBeenCalled();
   });
 
-  it('reports the forked session when prompt dispatch fails', async () => {
-    sessionPromptMock.mockRejectedValue(new Error('dispatch failed'));
-
-    const { app } = createApp();
-    const response = await request(app)
-      .post('/api/openchamber/sessions/ses_source/fork')
-      .send({
-        directory: '/repo/app',
-        prompt: 'Try another approach',
-        model: 'openai/gpt-5.5',
-        agent: 'build',
-        variant: 'high',
-      })
-      .expect(500);
-
-    expect(response.body).toMatchObject({
-      partial: true,
-      partialAction: 'fork-created',
-      sessionId: 'ses_fork',
-      directory: '/repo/app',
-    });
-  });
-
-  it('does not apply a default variant to an explicitly requested model', async () => {
-    useCatalog({
-      models: [
-        { id: 'requested', modelID: 'requested', providerID: 'openai', variants: [] },
-        { id: 'default', modelID: 'default', providerID: 'openai', variants: [{ id: 'high' }] },
-      ],
-    });
-    const { app } = createApp({
-      readSettingsFromDiskMigrated: async () => ({
-        defaultModel: 'openai/default',
-        defaultVariant: 'high',
-        projects: [{ id: 'proj_1', path: '/repo/app' }],
-      }),
-    });
-    await request(app)
-      .post('/api/openchamber/sessions/ses_source/send')
-      .send({ directory: '/repo/app', prompt: 'Continue', model: 'openai/requested', agent: 'build' })
-      .expect(200);
-
-    expect(sessionSwitchModelMock).toHaveBeenCalledWith({
-      sessionID: 'ses_source',
-      model: { id: 'requested', providerID: 'openai' },
-    });
-  });
-
-  it('rejects an unknown agent before creating a session or worktree', async () => {
-    const { app } = createApp();
-    await request(app)
-      .post('/api/openchamber/sessions')
-      .send({
-        directory: '/repo/app',
-        prompt: 'Run this',
-        agent: 'not-an-agent',
-        worktree: { name: 'side-task' },
-      })
-      .expect(400, { error: "Unknown agent 'not-an-agent' for /repo/app" });
-
-    expect(createWorktreeMock).not.toHaveBeenCalled();
-    expect(sessionCreateMock).not.toHaveBeenCalled();
-    expect(sessionPromptMock).not.toHaveBeenCalled();
-  });
-
-  it('rejects an unknown model and an unknown variant before dispatching', async () => {
+  it('rejects an unknown model before dispatching', async () => {
     const { app } = createApp();
     await request(app)
       .post('/api/openchamber/sessions')
       .send({ directory: '/repo/app', prompt: 'Run this', model: 'openai/gpt-nope' })
       .expect(400, { error: "Unknown model 'openai/gpt-nope' for /repo/app" });
-    await request(app)
-      .post('/api/openchamber/sessions')
-      .send({ directory: '/repo/app', prompt: 'Run this', model: 'openai/gpt-5.5', variant: 'ultra' })
-      .expect(400, { error: "Unknown variant 'ultra' for model 'openai/gpt-5.5'" });
 
-    expect(sessionPromptMock).not.toHaveBeenCalled();
+    expect(hostPromptMock).not.toHaveBeenCalled();
   });
 
-  it('reports promptDispatched false when the accepted prompt returns no queued message', async () => {
-    // v2 answers a prompt with the inbox item it recorded; no id means nothing
-    // is queued, so the dispatch must not be reported as done.
-    sessionPromptMock.mockResolvedValue({});
+  it('reports promptDispatched false when the runtime records the prompt without starting the agent', async () => {
+    hostPromptMock.mockResolvedValue(false);
 
     const { app } = createApp();
     const response = await request(app)
@@ -1046,25 +928,5 @@ describe('openchamber session routes', () => {
     expect(response.body.sessionId).toBe('ses_123');
     expect(response.body.promptDispatched).toBe(false);
     expect(response.body.promptError).toBeTruthy();
-  }, 20_000);
-
-  it('does not retry a failed slash command as a normal prompt', async () => {
-    commandListMock.mockResolvedValue({ data: [{ name: 'review' }] });
-    sessionCommandMock.mockRejectedValue(new Error('command response failed'));
-
-    const { app } = createApp();
-    await request(app)
-      .post('/api/openchamber/sessions/ses_source/send')
-      .send({
-        directory: '/repo/app',
-        prompt: '/review fix this',
-        model: 'openai/gpt-5.5',
-        agent: 'build',
-        variant: 'high',
-      })
-      .expect(500);
-
-    expect(sessionCommandMock).toHaveBeenCalledTimes(1);
-    expect(sessionPromptMock).not.toHaveBeenCalled();
   });
 });

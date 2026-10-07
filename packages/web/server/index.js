@@ -67,6 +67,7 @@ import { createThemeRuntime } from './lib/openchamber/theme-runtime.js';
 import { createFeatureRoutesRuntime } from './lib/opencode/feature-routes-runtime.js';
 // Fork-owned OMP agent runtime; the only runtime in this fork.
 import { installAcpAgentRuntime, installOmpAgentRuntime } from './lib/agents/index.js';
+import { configureOmpRuntimeHost } from './lib/agents/omp-host-access.js';
 import { parseServeCliOptions } from './lib/openchamber/cli-options.js';
 import {
   registerAuthAndAccessRoutes,
@@ -137,7 +138,7 @@ import { createDevTunnelRuntime } from './lib/dev-tunnel/runtime.js';
 import { registerBrowserControlRoutes } from './lib/browser-control/routes.js';
 import { createManagedConfigRuntime } from './lib/openchamber/managed-config-file.js';
 import { createOpenChamberSessionService } from './lib/openchamber-sessions/routes.js';
-import { createSessionMetadataStore, createOpenCodeSessionMetadata } from './lib/openchamber-sessions/session-metadata-store.js';
+import { createSessionMetadataStore } from './lib/openchamber-sessions/session-metadata-store.js';
 import { createScheduledTaskService } from './lib/scheduled-tasks/service.js';
 import { createOpenChamberControlService } from './lib/openchamber-control/service.js';
 import { createPluginNotificationEmitter } from './lib/notifications/emit-route.js';
@@ -525,12 +526,6 @@ const broadcastOpenChamberUiEvent = createGlobalUiEventBroadcaster({
  */
 const sessionMetadataStore = createSessionMetadataStore({
   dataDir: OPENCHAMBER_DATA_DIR,
-  // Called, not captured: the OpenCode URL and auth helpers are declared
-  // further down and only ever used once a request arrives.
-  openCode: {
-    read: (...args) => createOpenCodeSessionMetadata({ buildOpenCodeUrl, getOpenCodeAuthHeaders }).read(...args),
-    write: (...args) => createOpenCodeSessionMetadata({ buildOpenCodeUrl, getOpenCodeAuthHeaders }).write(...args),
-  },
 });
 
 const readStoredSessionMetadata = (sessionID) => sessionMetadataStore.get(sessionID);
@@ -2330,6 +2325,8 @@ async function main(options = {}) {
     app,
     broadcast: broadcastOpenChamberUiEvent,
   });
+  // Fork: let the server features that used OpenCode reach the OMP host.
+  configureOmpRuntimeHost(() => ompAgentRuntime);
   acpAgentRuntime = await installAcpAgentRuntime({
     app,
     broadcast: broadcastOpenChamberUiEvent,

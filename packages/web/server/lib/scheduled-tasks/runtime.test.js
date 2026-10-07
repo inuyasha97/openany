@@ -10,6 +10,7 @@ import {
   createScheduledTasksRuntime,
 } from './runtime.js';
 import { createProjectConfigRuntime } from '../projects/project-config.js';
+import { configureOmpRuntimeHost } from '../agents/omp-host-access.js';
 
 describe('scheduled-tasks runtime helpers', () => {
   it.each([
@@ -276,52 +277,106 @@ Run daily.
 
 describe('scheduled-tasks runtime prompt dispatch', () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    configureOmpRuntimeHost(null);
   });
 
-  it('parks the briefing with resume: false so execution starts on the task prompt', async () => {
-    const posts = [];
-    vi.stubGlobal('fetch', vi.fn(async (input, init = {}) => {
-      const { pathname } = new URL(String(input));
-      if (init.method === 'POST') posts.push({ pathname, body: JSON.parse(init.body) });
-      const data = pathname === '/api/session' ? { id: 'ses_run' } : pathname === '/api/command' ? [] : {};
-      return new Response(JSON.stringify({ location: { directory: '/repo' }, data }), { status: 200, headers: { 'content-type': 'application/json' } });
-    }));
-    const task = {
-      id: 'task-1',
-      name: 'Nightly',
-      enabled: true,
-      schedule: { kind: 'daily', times: ['03:00'], timezone: 'UTC' },
-      execution: { prompt: 'Review open issues', providerID: 'openai', modelID: 'gpt-5', goalEnabled: true, goalTokenBudget: 50_000 },
-      state: { createdAt: 1, updatedAt: 1 },
-    };
-    const runtime = createScheduledTasksRuntime({
-      projectConfigRuntime: {
-        listScheduledTasks: async () => [task],
-        reconcileLoopTasks: async () => [task],
-        updateScheduledTaskState: async () => ({ task, updated: true }),
-        updateScheduledTaskStateIf: async () => ({ task, updated: true }),
+  const createHost = () => ({
+    createSession: vi.fn(async () => ({ id: 'ses_run' })),
+    renameSession: vi.fn(async () => undefined),
+    setModel: vi.fn(async () => undefined),
+    prompt: vi.fn(async () => true),
+    listCommands: vi.fn(async () => []),
+  });
+
+  const createTask = (execution, prompt = 'Review open issues') => ({
+    id: 'task-1',
+    name: 'Nightly',
+    enabled: true,
+    schedule: { kind: 'daily', times: ['03:00'], timezone: 'UTC' },
+    execution: { prompt, providerID: 'openai', modelID: 'gpt-5', ...execution },
+    state: { createdAt: 1, updatedAt: 1 },
+  });
+
+  const createRuntime = (task, overrides = {}) => createScheduledTasksRuntime({
+    projectConfigRuntime: {
+      listScheduledTasks: async () => [task],
+      reconcileLoopTasks: async () => [task],
+      updateScheduledTaskState: async () => ({ task, updated: true }),
+      updateScheduledTaskStateIf: async () => ({ task, updated: true }),
+    },
+    listProjects: async () => [{ id: 'proj', path: '/repo' }],
+    persistSessionGoal: async () => undefined,
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    ...overrides,
+  });
+
+  it('sends the standing briefing and the goal intro with the task prompt', async () => {
+    const host = createHost();
+    configureOmpRuntimeHost(() => host);
+    const recordDelivered = vi.fn(async () => undefined);
+    const runtime = createRuntime(
+      createTask({ goalEnabled: true, goalTokenBudget: 50_000 }),
+      {
+        sessionKnowledgeRuntime: {
+          resolvePendingForSession: async () => ({ text: 'Project background', signature: 'sig' }),
+          recordDelivered,
+        },
       },
-      listProjects: async () => [{ id: 'proj', path: '/repo' }],
-      buildOpenCodeUrl: () => 'http://127.0.0.1:1/',
-      getOpenCodeAuthHeaders: () => ({}),
-      waitForOpenCodeReady: async () => {},
-      persistSessionGoal: async () => undefined,
-      sessionKnowledgeRuntime: {
-        resolvePendingForSession: async () => ({ text: 'Project background', signature: 'sig' }),
-        recordDelivered: async () => undefined,
-      },
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
-    });
+    );
+
     await runtime.start();
-    await runtime.runNow('proj', 'task-1');
+    const result = await runtime.runNow('proj', 'task-1');
     runtime.stop();
 
-    const dispatch = posts.filter((post) => post.pathname.startsWith('/api/session/ses_run/'));
-    expect(dispatch.map((post) => post.pathname.split('/').at(-1))).toEqual(['synthetic', 'synthetic', 'prompt']);
-    expect(dispatch[0].body).toMatchObject({ text: 'Project background', resume: false });
-    expect(dispatch[1].body.resume).toBe(false);
-    expect(dispatch[2].body).toMatchObject({ text: 'Review open issues' });
-    expect(dispatch[2].body.resume).toBeUndefined();
+    expect(host.createSession).toHaveBeenCalledWith({ cwd: '/repo' });
+    // OMP takes only the directory at create, so the title the run formats goes
+    // on the session right after it exists.
+    expect(host.renameSession).toHaveBeenCalledWith('ses_run', expect.stringMatching(/^Nightly \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/));
+    expect(host.setModel).toHaveBeenCalledWith('ses_run', 'openai', 'gpt-5');
+
+    // One authored turn, with the context that used to precede it as parked
+    // synthetic messages carried in front of the prompt instead.
+    expect(host.prompt).toHaveBeenCalledTimes(1);
+    const [promptSessionID, text] = host.prompt.mock.calls[0];
+    expect(promptSessionID).toBe('ses_run');
+    expect(text).toContain('Project background');
+    expect(text).toContain('Goal mode is active for this session.');
+    expect(text).toContain('Review open issues');
+    expect(text.indexOf('Project background')).toBeLessThan(text.indexOf('Goal mode is active'));
+    expect(text.indexOf('Goal mode is active')).toBeLessThan(text.indexOf('Review open issues'));
+    expect(recordDelivered).toHaveBeenCalledWith('ses_run', '/repo', 'sig');
+    expect(result).toMatchObject({ ok: true, status: 'success', sessionID: 'ses_run' });
+  });
+
+  it('fails a slash-command task instead of sending the raw command text', async () => {
+    const host = createHost();
+    host.listCommands = vi.fn(async () => [{ name: 'review' }]);
+    configureOmpRuntimeHost(() => host);
+    const runtime = createRuntime(createTask({}, '/review src/components'));
+
+    await runtime.start();
+    const result = await runtime.runNow('proj', 'task-1');
+    runtime.stop();
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe('error');
+    expect(result.error).toMatch(/cannot use the "\/review" command: the OMP runtime has no equivalent/);
+    expect(host.prompt).not.toHaveBeenCalled();
+  });
+
+  it('fails a task pinned to an agent or a model variant the runtime cannot apply', async () => {
+    const host = createHost();
+    configureOmpRuntimeHost(() => host);
+    const runtime = createRuntime(createTask({ agent: 'plan', variant: 'high' }));
+
+    await runtime.start();
+    const result = await runtime.runNow('proj', 'task-1');
+    runtime.stop();
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe('error');
+    expect(result.error).toMatch(/cannot use the "plan" agent: the OMP runtime has no equivalent/);
+    // Nothing was dispatched: the session is not opened for a run it cannot honor.
+    expect(host.createSession).not.toHaveBeenCalled();
   });
 });

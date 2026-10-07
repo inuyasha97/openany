@@ -4,7 +4,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { OpenCode } from '@opencode/client';
+import { readSessionMessages, readSessions } from '../agents/omp-host-access.js';
 import { readMergedSettingsSync } from '../openchamber/settings-files.js';
 import { loadAssistContext, newestContentId } from './context.js';
 import { buildAssistPrompt, buildAssistSystemPrompt } from './prompt.js';
@@ -27,10 +27,7 @@ const getSessionAssistTargets = () => {
 const IDLE_QUIET_MS = 60_000;
 const RECAP_CHAR_LIMIT = 320;
 const SUGGESTION_CHAR_LIMIT = 500;
-const FETCH_TIMEOUT_MS = 5_000;
 const GENERATION_TIMEOUT_MS = 120_000;
-// Enough records to look past the idle marker and a couple of switches.
-const TAIL_RECHECK_LIMIT = 8;
 const QUIET_FAILURE_CODES = new Set(['context-too-small', 'output-exhausted']);
 
 const extractJsonObject = (value) => {
@@ -87,8 +84,6 @@ const extractUserMessage = (payload) => {
  * seam the runtime stays inert rather than generating text it cannot save.
  */
 export const createSessionAssistRuntime = ({
-  buildOpenCodeUrl,
-  getOpenCodeAuthHeaders,
   getSmallModelService,
   getTargets = getSessionAssistTargets,
   quietMs = IDLE_QUIET_MS,
@@ -145,34 +140,23 @@ export const createSessionAssistRuntime = ({
       suggestion: enabledTargets.suggestion && allowed.suggestion,
     };
     if (!targets.recap && !targets.suggestion) return;
-    const baseUrl = buildOpenCodeUrl('/', '').replace(/\/$/, '');
-    const client = OpenCode.make({
-      baseUrl,
-      headers: {
-        ...getOpenCodeAuthHeaders(),
-        // v2 scopes by header and rejects non-ASCII header values.
-        ...(directory ? { 'x-opencode-directory': encodeURIComponent(directory) } : {}),
-      },
-    });
-    const requestOptions = () => ({ signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]) });
-    const checkCurrent = () => {
-      signal.throwIfAborted();
-      if (buildOpenCodeUrl('/', '').replace(/\/$/, '') !== baseUrl) throw new Error('Session assist runtime changed');
-    };
-    const session = await client.session.get({ sessionID: sessionId }, requestOptions());
+    // The OMP runtime carries no transport identity to re-check, so the abort
+    // signal is what "this run is still current" means here.
+    const checkCurrent = () => signal.throwIfAborted();
+    // A session OMP still knows about is a root conversation: it has no parent
+    // and no revert boundary. A session (or a whole runtime) that is gone is
+    // the one thing left to guard on.
+    const sessions = await readSessions();
     checkCurrent();
-    // Reverted history is not the active conversation. A new prompt clears
-    // the revert boundary before its next idle event.
-    if (session?.id === sessionId) lineage?.remember(sessionId, session.parentID ?? null);
-    if (session?.id !== sessionId || session.parentID || session.revert?.messageID) return;
+    if (!sessions) return;
+    const session = sessions.find((entry) => entry.id === sessionId);
+    if (!session) return;
+    lineage?.remember(sessionId, null);
     // An archived session is put away: no recap or suggestion is generated for it.
     if (await isSessionArchived(sessionId)) return;
     const context = await loadAssistContext({
       signal,
-      readPage: ({ limit, cursor }) => client.message.list(
-        { sessionID: sessionId, limit, ...(cursor ? { cursor } : { order: 'desc' }) },
-        requestOptions(),
-      ),
+      readPage: () => readSessionMessages(sessionId),
     });
     checkCurrent();
     if (!context) return;
@@ -212,17 +196,17 @@ export const createSessionAssistRuntime = ({
     if (recap && scriptMismatch(recap)) recap = '';
     if (suggestion && scriptMismatch(suggestion)) suggestion = '';
     if (!recap && !suggestion) return;
-    // v2 lists newest first. The answer is followed by its `idle` marker and
-    // possibly a model or agent switch, so read a short tail and compare the
-    // newest content record rather than the newest record.
-    const latestPage = await client.message.list({ sessionID: sessionId, limit: TAIL_RECHECK_LIMIT, order: 'desc' }, requestOptions());
+    // Re-read the history and compare the newest content record rather than
+    // assuming the read above is still the tail.
+    const latestPage = await readSessionMessages(sessionId);
     checkCurrent();
-    if (newestContentId(latestPage?.data) !== last.id) return;
-    // Never fall back to the pre-generation metadata snapshot after a failed
-    // fresh read: doing so overwrites dismissals and unrelated metadata.
-    const freshSession = await client.session.get({ sessionID: sessionId }, requestOptions());
+    if (newestContentId(latestPage?.items) !== last.id) return;
+    // Never fall back to the pre-generation snapshot after a failed fresh read:
+    // doing so overwrites dismissals and unrelated metadata.
+    const freshSessions = await readSessions();
     checkCurrent();
-    if (freshSession?.id !== sessionId || freshSession.revert?.messageID || freshSession.location?.directory !== session.location?.directory) return;
+    const freshSession = freshSessions?.find((entry) => entry.id === sessionId);
+    if (!freshSession || freshSession.cwd !== session.cwd) return;
     if (await isSessionArchived(sessionId)) return;
     const enabled = getTargets();
     if (!enabled.recap || !allowed.recap) recap = '';

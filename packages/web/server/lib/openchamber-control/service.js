@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { OpenCode } from '@opencode/client';
+import { readSessionMessages, readSessionStatus, readSessions } from '../agents/omp-host-access.js';
 import { OpenChamberControlError, asControlError } from './error.js';
 import { OPENCHAMBER_ALL_ACTIONS } from './actions.js';
 import { writeScreenshot } from './screenshots.js';
@@ -21,6 +21,16 @@ const asNonEmptyString = (value) => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
+// A configured project path and a session's recorded working directory can
+// differ only in shape (a trailing separator, a symlinked or otherwise
+// unnormalized path), and a scoped list must not come back empty over that.
+const sameDirectory = (left, right) => {
+  const a = asNonEmptyString(left);
+  const b = asNonEmptyString(right);
+  if (!a || !b) return false;
+  return a === b || path.resolve(a) === path.resolve(b);
+};
+
 const positiveInteger = (value, fallback, field) => {
   if (value === undefined || value === null) return fallback;
   const number = Number(value);
@@ -38,32 +48,30 @@ const normalizeWaitTimeoutMs = (value) => {
   return seconds * 1000;
 };
 
-// v2 messages are not { info, parts }: the record itself is the message, a
-// user message carries `text`, and an assistant message carries `content[]`
-// whose text items are the visible answer.
-const messageText = (record) => {
-  if (record.type === 'user') return typeof record.text === 'string' ? record.text.trim() : '';
-  return (Array.isArray(record.content) ? record.content : [])
-    .filter((item) => item?.type === 'text' && typeof item.text === 'string')
-    .map((item) => item.text)
+// A message page carries `{ info, parts }`: what a caller can read as text is
+// the message's text parts, joined in the order they arrived.
+const messageText = (parts) =>
+  (Array.isArray(parts) ? parts : [])
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
     .join('')
     .trim();
-};
 
-const extractTextMessages = (messages, role = 'all') => {
+const extractTextMessages = (items, role = 'all') => {
   const result = [];
-  for (const record of Array.isArray(messages) ? messages : []) {
-    const messageRole = record?.type;
+  for (const item of Array.isArray(items) ? items : []) {
+    const info = item?.info;
+    const messageRole = info?.role;
     if ((messageRole !== 'user' && messageRole !== 'assistant') || (role !== 'all' && role !== messageRole)) continue;
-    const text = messageText(record);
+    const text = messageText(item?.parts);
     if (!text) continue;
-    const providerID = asNonEmptyString(record.model?.providerID);
-    const modelID = asNonEmptyString(record.model?.id);
+    const providerID = asNonEmptyString(info.providerID);
+    const modelID = asNonEmptyString(info.modelID);
     result.push({
-      id: asNonEmptyString(record.id) || '',
+      id: asNonEmptyString(info.id) || '',
       role: messageRole,
-      createdAt: Number.isFinite(record?.time?.created) ? record.time.created : null,
-      completedAt: Number.isFinite(record?.time?.completed) ? record.time.completed : null,
+      createdAt: Number.isFinite(info?.time?.created) ? info.time.created : null,
+      completedAt: Number.isFinite(info?.time?.completed) ? info.time.completed : null,
       model: providerID && modelID ? `${providerID}/${modelID}` : null,
       text,
     });
@@ -147,19 +155,15 @@ export const createOpenChamberControlService = (dependencies) => {
   const {
     readSettingsFromDiskMigrated,
     sanitizeProjects,
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders,
-    waitForOpenCodeReady,
-    sessionService,
     scheduledTaskService,
     browserControl = null,
     fileOpen = null,
     notifyUser = null,
     agentMemoryActions = null,
-    // Archive lives in OpenChamber's own store now — v2 has no route that sets
-    // Session.time.archived — so an unwired store simply means nothing is archived.
+    // Archive lives in OpenChamber's own store now — the runtime has no route
+    // that sets a session's archived time — so an unwired store simply means
+    // nothing is archived.
     archiveStore = null,
-    createClient = OpenCode.make,
     sleep = (duration) => new Promise((resolve) => setTimeout(resolve, duration)),
     now = Date.now,
   } = dependencies;
@@ -180,20 +184,6 @@ export const createOpenChamberControlService = (dependencies) => {
         signal.removeEventListener('abort', onAbort);
         reject(error);
       });
-    });
-  };
-
-  // Every v2 route lives under /api and the client appends it, so it only
-  // wants the origin. Per-directory scoping is a request header.
-  const getClient = async (directory = '') => {
-    if (typeof waitForOpenCodeReady === 'function') await waitForOpenCodeReady(10_000, 250);
-    return createClient({
-      baseUrl: new URL(buildOpenCodeUrl('/api/info', '')).origin,
-      headers: {
-        ...getOpenCodeAuthHeaders(),
-        ...(directory ? { 'x-opencode-directory': encodeURIComponent(directory) } : {}),
-      },
-      fetch,
     });
   };
 
@@ -222,55 +212,35 @@ export const createOpenChamberControlService = (dependencies) => {
     };
   };
 
-  // /api/session/active is global in v2 and reports only `{ type: 'running' }`.
-  // The action contract stays busy/idle, so running is reported as busy.
-  const activeSessions = async (client) => {
-    const statuses = await client.session.active();
-    if (!statuses || typeof statuses !== 'object' || Array.isArray(statuses)) {
-      throw new OpenChamberControlError('Invalid session status response', 500);
-    }
-    return statuses;
+  // The action contract stays busy/idle; the runtime answers one boolean per
+  // session, and an unavailable runtime is a failure, never an idle session.
+  const asPublicStatus = (busy) => (busy ? { type: 'busy' } : { type: 'idle' });
+
+  const sessionStatus = async (sessionID) => {
+    const status = await readSessionStatus(sessionID);
+    if (!status) throw new OpenChamberControlError('The OMP runtime is not available', 503);
+    return asPublicStatus(status.busy === true);
   };
 
-  const asPublicStatus = (active) => (active ? { type: 'busy' } : { type: 'idle' });
-
-  const sessionStatus = async (client, sessionID) => {
-    const statuses = await activeSessions(client);
-    return asPublicStatus(statuses[sessionID]);
-  };
-
-  // `order: 'desc'` puts the newest messages in the limited page;
-  // extractTextMessages re-sorts them oldest-first for the caller.
-  const sessionMessages = async (client, sessionID, role, limit) => {
-    const fetchLimit = limit === undefined ? undefined : Math.max(100, limit * 4);
-    let response = await client.message.list({ sessionID, ...(fetchLimit ? { limit: fetchLimit, order: 'desc' } : {}) });
-    let raw = Array.isArray(response?.data) ? response.data : [];
-    let messages = extractTextMessages(raw, role);
-    if (limit !== undefined && messages.length < limit && raw.length >= fetchLimit) {
-      response = await client.message.list({ sessionID });
-      raw = Array.isArray(response?.data) ? response.data : [];
-      messages = extractTextMessages(raw, role);
-    }
+  // The runtime hands back the session's message page; a caller's limit is the
+  // newest text messages, which extractTextMessages has already ordered
+  // oldest-first. A page that cannot be read is a failure, never no messages.
+  const sessionMessages = async (sessionID, role, limit) => {
+    const page = await readSessionMessages(sessionID);
+    if (!page) throw new OpenChamberControlError('The OMP runtime is not available', 503);
+    const messages = extractTextMessages(page.items, role);
     return limit === undefined ? messages : messages.slice(-limit);
   };
 
-  const waitForIdle = async ({ client, sessionID, directory, timeoutMs, requireActivity, baselineMessageID, startedAt, signal }) => {
+  // A wait polls the runtime's own busy flag: busy is activity, and the first
+  // non-busy answer after it is the session going idle. Timeout and
+  // cancellation are failures, never authoritative idle results.
+  const waitForIdle = async ({ sessionID, timeoutMs, signal }) => {
     const deadline = now() + timeoutMs;
-    let observedActivity = false;
     while (true) {
       if (signal?.aborted) throw new OpenChamberControlError('OpenChamber action was cancelled', 499);
-      const status = await sessionStatus(client, sessionID);
-      if (status.type === 'busy') {
-        observedActivity = true;
-      } else if (!requireActivity || observedActivity) {
-        return status;
-      } else {
-        const messages = await sessionMessages(client, sessionID, 'assistant', 1);
-        const message = messages[0];
-        if (message?.completedAt && (baselineMessageID ? message.id !== baselineMessageID : message.completedAt >= startedAt)) {
-          return status;
-        }
-      }
+      const status = await sessionStatus(sessionID);
+      if (status.type !== 'busy') return status;
       const remaining = deadline - now();
       if (remaining <= 0) {
         throw new OpenChamberControlError(`Session did not become idle within ${Math.ceil(timeoutMs / 1000)} seconds`, 500);
@@ -279,84 +249,17 @@ export const createOpenChamberControlService = (dependencies) => {
     }
   };
 
-  // session.send/fork default the directory to the caller's context directory,
-  // which is wrong for sessions living in other worktrees: the prompt then
-  // targets an instance that does not hold the session and the run dies with
-  // UnknownError. Resolve the target session's directory from the global
-  // session list when the caller did not scope explicitly.
+  // The managed agent-tool plugin cannot report the session's directory (the
+  // tool call carries only the session id), so it sends the id and the
+  // directory is resolved here, from the runtime's own session index.
   const resolveSessionDirectory = async (sessionID) => {
     try {
-      const client = await getClient();
-      const response = await client.session.list({});
-      const sessions = Array.isArray(response?.data) ? response.data : [];
-      const session = sessions.find((item) => item?.id === sessionID);
-      return asNonEmptyString(session?.location?.directory) || null;
+      const sessions = await readSessions();
+      const session = Array.isArray(sessions) ? sessions.find((item) => item?.id === sessionID) : null;
+      return asNonEmptyString(session?.cwd) || null;
     } catch {
       return null;
     }
-  };
-
-  const executeSessionAction = async (action, input, contextDirectory, signal) => {
-    if (input.timeout !== undefined && input.wait !== true) throw new OpenChamberControlError('timeout requires wait', 400);
-    if (input.lastAssistant === true && input.wait !== true) throw new OpenChamberControlError('lastAssistant requires wait', 400);
-    const sessionID = asNonEmptyString(input.sessionId);
-    let directory = asNonEmptyString(input.directory) || (!input.projectId ? asNonEmptyString(contextDirectory) : null);
-    if (sessionID && action !== 'session.create' && !asNonEmptyString(input.directory) && !input.projectId) {
-      const resolvedSessionDirectory = await resolveSessionDirectory(sessionID);
-      if (resolvedSessionDirectory) directory = resolvedSessionDirectory;
-    }
-    const payload = {
-      ...(directory ? { directory } : {}),
-      ...(asNonEmptyString(input.projectId) ? { projectId: input.projectId.trim() } : {}),
-      ...(asNonEmptyString(input.title) ? { title: input.title.trim() } : {}),
-      ...(asNonEmptyString(input.prompt) ? { prompt: input.prompt.trim() } : {}),
-      ...(asNonEmptyString(input.model) ? { model: input.model.trim() } : {}),
-      ...(asNonEmptyString(input.agent) ? { agent: input.agent.trim() } : {}),
-      ...(asNonEmptyString(input.variant) ? { variant: input.variant.trim() } : {}),
-      ...(input.goal === true ? { goal: true } : {}),
-      ...(input.goalTokenBudget !== undefined ? { goalTokenBudget: input.goalTokenBudget } : {}),
-      ...(asNonEmptyString(input.worktree) ? { worktree: {
-        name: input.worktree.trim(),
-        ...(asNonEmptyString(input.branch) ? { branchName: input.branch.trim() } : {}),
-        ...(asNonEmptyString(input.startRef) ? { startRef: input.startRef.trim() } : {}),
-      } } : {}),
-      ...(typeof input.setUpstream === 'boolean' ? { setUpstream: input.setUpstream } : {}),
-      ...(asNonEmptyString(input.messageId) ? { messageId: input.messageId.trim() } : {}),
-    };
-    const startedAt = now();
-    let result;
-    if (action === 'session.create') {
-      result = await sessionService.create(payload);
-    } else {
-      if (!sessionID) throw new OpenChamberControlError('sessionId is required', 400);
-      if (action === 'session.send') {
-        result = await sessionService.send(sessionID, payload);
-      } else {
-        result = await sessionService.fork(sessionID, payload);
-      }
-    }
-    if (input.wait !== true) {
-      const publicResult = { ...result };
-      delete publicResult.baselineAssistantMessageId;
-      return publicResult;
-    }
-    const client = await getClient(result.directory);
-    const status = await waitForIdle({
-      client,
-      sessionID: result.sessionId,
-      directory: result.directory,
-      timeoutMs: normalizeWaitTimeoutMs(input.timeout),
-      requireActivity: result.promptDispatched === true,
-      baselineMessageID: result.baselineAssistantMessageId,
-      startedAt,
-      signal,
-    });
-    const publicResult = { ...result, sessionStatus: status };
-    delete publicResult.baselineAssistantMessageId;
-    if (input.lastAssistant === true) {
-      publicResult.lastAssistantMessage = (await sessionMessages(client, result.sessionId, 'assistant', 1))[0] || null;
-    }
-    return publicResult;
   };
 
   /**
@@ -582,29 +485,42 @@ export const createOpenChamberControlService = (dependencies) => {
         }
       }
       if (action === 'session.create' || action === 'session.send' || action === 'session.fork') {
-        return executeSessionAction(action, input, contextDirectory, options.signal);
+        // OMP runs a session where it lives and this seam exposes no create,
+        // prompt or fork, so the action answers with the reason instead of
+        // pretending a session was created, prompted, or forked.
+        throw new OpenChamberControlError(`${action} is not supported on the OMP runtime`, 501);
       }
       if (action.startsWith('session.')) {
         const directory = asNonEmptyString(input.directory) || asNonEmptyString(contextDirectory);
         const sessionID = asNonEmptyString(input.sessionId);
-        const client = await getClient(directory);
         if (action === 'session.list') {
           const limit = positiveInteger(input.limit, 10, 'limit');
-          const response = await client.session.list(directory ? { directory } : {});
-          // Archive is OpenChamber state; overlay it so callers keep reading
-          // it off the session the way OpenCode used to report it.
-          let sessions = (Array.isArray(response?.data) ? response.data : []).map((session) => {
-            const archived = archivedAt(session?.id);
-            return archived ? { ...session, time: { ...session.time, archived } } : session;
-          });
+          const known = await readSessions();
+          if (!known) throw new OpenChamberControlError('The OMP runtime is not available', 503);
+          // Archive is OpenChamber state; overlay it on the runtime's session
+          // the way a caller used to read it off the session itself.
+          let sessions = (Array.isArray(known) ? known : [])
+            .filter((session) => !directory || sameDirectory(session?.cwd, directory))
+            .map((session) => {
+              const archived = archivedAt(session?.id);
+              const listed = {
+                id: asNonEmptyString(session?.id) || '',
+                directory: asNonEmptyString(session?.cwd) || null,
+                title: asNonEmptyString(session?.title) || '',
+              };
+              return archived ? { ...listed, time: { archived } } : listed;
+            });
           if (input.all !== true) sessions = sessions.filter((session) => !session?.time?.archived);
           sessions = sessions.slice(0, limit);
           if (input.withStatus === true) {
-            // One global call now: v2 reports active sessions across directories.
-            const statuses = await activeSessions(client).catch(() => null);
-            sessions = sessions.map((session) => ({
-              ...session,
-              status: statuses ? asPublicStatus(statuses[session.id]) : { type: 'unknown' },
+            // The runtime reports busy one session at a time; a session whose
+            // status cannot be read is unknown, never idle.
+            sessions = await Promise.all(sessions.map(async (session) => {
+              const status = await readSessionStatus(session.id).catch(() => null);
+              return {
+                ...session,
+                status: status ? asPublicStatus(status.busy === true) : { type: 'unknown' },
+              };
             }));
           }
           return { sessions, limit, directory, archived: input.all === true ? 'included' : 'excluded' };
@@ -612,7 +528,7 @@ export const createOpenChamberControlService = (dependencies) => {
         if (!sessionID) throw new OpenChamberControlError('sessionId is required', 400);
         if (!directory) throw new OpenChamberControlError('directory is required', 400);
         if (action === 'session.status') {
-          return { sessionId: sessionID, directory, sessionStatus: await sessionStatus(client, sessionID) };
+          return { sessionId: sessionID, directory, sessionStatus: await sessionStatus(sessionID) };
         }
         if (action === 'session.messages') {
           if (input.timeout !== undefined && input.wait !== true) throw new OpenChamberControlError('timeout requires wait', 400);
@@ -622,10 +538,10 @@ export const createOpenChamberControlService = (dependencies) => {
           if (input.all === true && (last || input.limit !== undefined)) throw new OpenChamberControlError('all cannot be combined with last or limit', 400);
           if (last && input.limit !== undefined) throw new OpenChamberControlError('last cannot be combined with limit', 400);
           const currentStatus = input.wait === true
-            ? await waitForIdle({ client, sessionID, directory, timeoutMs: normalizeWaitTimeoutMs(input.timeout), requireActivity: false, startedAt: now(), signal: options.signal })
-            : await sessionStatus(client, sessionID);
+            ? await waitForIdle({ sessionID, timeoutMs: normalizeWaitTimeoutMs(input.timeout), signal: options.signal })
+            : await sessionStatus(sessionID);
           const limit = input.all === true ? undefined : (last ? 1 : positiveInteger(input.limit, 10, 'limit'));
-          return { sessionId: sessionID, directory, role, sessionStatus: currentStatus, messages: await sessionMessages(client, sessionID, role, limit) };
+          return { sessionId: sessionID, directory, role, sessionStatus: currentStatus, messages: await sessionMessages(sessionID, role, limit) };
         }
       }
       throw new OpenChamberControlError(`Unsupported OpenChamber action: ${action || 'missing'}`, 400);
@@ -634,8 +550,8 @@ export const createOpenChamberControlService = (dependencies) => {
     }
   };
 
-  // The managed agent-tool plugin can no longer report the session's directory
-  // (v2 dropped `context.directory` from a tool call), so it sends the session
-  // id and the directory is resolved here, where it is authoritative.
+  // The managed agent-tool plugin cannot report the session's directory (a tool
+  // call carries no directory), so it sends the session id and the directory is
+  // resolved here, where it is authoritative.
   return { execute, resolveSessionDirectory };
 };

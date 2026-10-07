@@ -51,7 +51,9 @@ also exists in VS Code.
   `chatRoots` the server passes in) are plain conversations and never in work.
 - A known subsession costs nothing: `../session-lineage.js` remembers which
   sessions have a parent (from `session.created` events and from any record
-  read anyway), and a known one is skipped before any read or Jev call.
+  read anyway), and a known one is skipped before any read or Jev call. OMP
+  exposes no parent on a session, so a session read anyway is recorded as
+  top-level.
 - Every failure (no classification provider, Jev error or timeout, an
   unreadable session) leaves state unchanged and returns an unknown gate, so
   session assist runs exactly as it did without Jev.

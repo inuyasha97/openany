@@ -1,105 +1,78 @@
-import { OpenCode } from '@opencode/client';
+/**
+ * The model catalog for the small-model service, read from the OMP runtime.
+ *
+ * The OMP runtime host is wired globally (`configureOmpRuntimeHost` in
+ * `../agents/omp-host-access.js`), so this module holds no connection of its
+ * own: it reads the host per call and maps its catalog into the domain model
+ * shape the resolver works with. OMP exposes no provider catalog and no
+ * default-model lookup, so those answer "nothing" rather than guessing.
+ */
 
-// The running OpenCode instance is the only transport this module has. It is
-// wired once from `server/index.js`, and re-read on every call because the
-// port and the server password both move across an OpenCode restart.
-let connection = null;
+import { getOmpRuntimeHost } from '../agents/omp-host-access.js';
 
 /**
- * Wires this module to the running OpenCode instance. Pass `null` to detach.
- * Until it is wired, every lookup answers "no client", which the callers
- * report as "no small model available" rather than guessing.
+ * Compatibility no-op. The transport is the globally wired OMP host, so there
+ * is no per-module connection to configure any more. Kept only because
+ * `server/index.js` still imports it.
  */
-export function configureOpenCodeRuntimeProviders(next) {
-  connection = next ?? null;
-}
+export function configureOpenCodeRuntimeProviders() {}
 
-/**
- * Drops anything cached about the running instance. An OpenCode restart can
- * change the port, the password and the model list.
- */
+/** Drops the cached catalog. An OMP restart can change the model list. */
 export function resetOpenCodeRuntimeProviders() {
   modelCache = null;
-  modelCacheKey = '';
   modelCacheAt = 0;
-}
-
-const stripTrailingSlash = (value) => value.replace(/\/+$/, '');
-
-/**
- * A `@opencode/client` bound to the running instance and scoped to
- * `directory`, or `null` when OpenCode is not reachable yet.
- *
- * Built per call on purpose: `OpenCode.make` only closes over a base URL and
- * headers, and both change when OpenCode restarts.
- */
-export function getSmallModelClient(directory) {
-  if (!connection) return null;
-  let baseUrl;
-  try {
-    baseUrl = stripTrailingSlash(connection.buildOpenCodeUrl('', ''));
-  } catch {
-    // The port is not known yet — OpenCode has not finished starting.
-    return null;
-  }
-  const headers = { ...connection.getOpenCodeAuthHeaders() };
-  if (typeof directory === 'string' && directory.trim()) {
-    headers['x-opencode-directory'] = encodeURIComponent(directory.trim());
-  }
-  return OpenCode.make({ baseUrl, headers });
 }
 
 const MODEL_CACHE_TTL_MS = 30_000;
 let modelCache = null;
-let modelCacheKey = '';
 let modelCacheAt = 0;
 
-const unwrap = (payload) => (Array.isArray(payload?.data) ? payload.data : []);
-
 /**
- * Every model the running OpenCode knows about for `directory`.
+ * Maps one OMP catalog model to the domain model the resolver reads.
  *
- * Cached briefly: a generation needs the model's context and output limits,
- * and paying a round trip for them on every title or summary would be the
- * wrong trade. An empty array means "asked and got nothing", so callers fall
- * back to conservative defaults rather than refusing.
+ * OMP already filters its catalog to models it has a credential for, so every
+ * entry counts as enabled. It reports no model family, so `familyOf` reads the
+ * family from the id. A model with no context or output limit is reported
+ * without one, and the resolver falls back to its conservative default.
  */
-export async function listModelInfos(client, directory) {
-  const key = typeof directory === 'string' ? directory : '';
-  if (modelCache && modelCacheKey === key && Date.now() - modelCacheAt < MODEL_CACHE_TTL_MS) {
-    return modelCache;
-  }
-  try {
-    const models = unwrap(await client.model.list());
-    modelCache = models;
-    modelCacheKey = key;
-    modelCacheAt = Date.now();
-    return models;
-  } catch {
-    // Keep the previous answer for this directory when there is one: a
-    // momentarily unreachable OpenCode must not retract model limits.
-    return modelCacheKey === key && modelCache ? modelCache : [];
-  }
-}
-
-export async function listProviderInfos(client) {
-  try {
-    return unwrap(await client.provider.list());
-  } catch {
-    return [];
-  }
-}
+const toModelInfo = (model) => {
+  if (!model || typeof model.id !== 'string' || typeof model.provider !== 'string') return null;
+  const context = Number(model.contextWindow);
+  const output = Number(model.maxTokens);
+  const input = Array.isArray(model.input) && model.input.length > 0 ? model.input : ['text'];
+  return {
+    id: model.id,
+    modelID: typeof model.requestModelId === 'string' && model.requestModelId ? model.requestModelId : model.id,
+    providerID: model.provider,
+    name: typeof model.name === 'string' ? model.name : model.id,
+    capabilities: { input, output: ['text'] },
+    ...(context > 0 || output > 0
+      ? { limit: { ...(context > 0 ? { context } : {}), ...(output > 0 ? { output } : {}) } }
+      : {}),
+  };
+};
 
 /**
- * The model OpenCode would pick on its own, or `null` when it cannot say.
+ * Every model the running OMP can call, in the domain shape, or `null` when
+ * the runtime is not mounted. An empty array means "asked and got nothing", so
+ * callers fall back to conservative defaults rather than refusing.
+ *
+ * Cached briefly: a resolution needs the model's context and output limits, and
+ * paying a round trip for them on every title or summary would be the wrong
+ * trade. A momentarily failing runtime keeps the previous answer rather than
+ * retracting it.
  */
-export async function getDefaultModelInfo(client) {
+export async function listModelInfos() {
+  const host = await getOmpRuntimeHost();
+  if (!host) return null;
+  if (modelCache && Date.now() - modelCacheAt < MODEL_CACHE_TTL_MS) return modelCache;
   try {
-    const payload = await client.model.default();
-    const info = payload?.data ?? payload;
-    return info && typeof info === 'object' && typeof info.id === 'string' ? info : null;
+    const models = await host.listModels();
+    modelCache = (Array.isArray(models) ? models : []).map(toModelInfo).filter(Boolean);
+    modelCacheAt = Date.now();
+    return modelCache;
   } catch {
-    return null;
+    return modelCache ?? [];
   }
 }
 

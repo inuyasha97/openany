@@ -1,6 +1,4 @@
 const TURN_LIMIT = 3;
-const PAGE_SIZE = 50;
-const MAX_PAGES = 8;
 const USER_CHAR_LIMIT = 8_000;
 const ANSWER_CHAR_LIMIT = 16_000;
 
@@ -23,8 +21,22 @@ export function excerpt(text, limit) {
   return text.slice(0, head) + marker + (tail > 0 ? text.slice(-tail) : '');
 }
 
-function attachedText(message) {
-  const context = message.metadata?.openchamberContext;
+/**
+ * The message text a canonical record carries: its `text` parts, joined with a
+ * blank line between them. Tool, reasoning, and file parts contribute nothing —
+ * tool payloads never enter this view.
+ */
+function messageText(parts) {
+  return (Array.isArray(parts) ? parts : [])
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('\n\n');
+}
+
+// `text` is the message's own text, read from its parts: a linked item carries
+// no body of its own and passes that text through.
+function attachedText(info, text) {
+  const context = info?.metadata?.openchamberContext;
   if (QUOTE_FIELDS.has(context?.kind)) {
     const source = (context[QUOTE_FIELDS.get(context.kind)] ?? '').trim();
     const authored = (context.text ?? '').trim();
@@ -33,8 +45,8 @@ function attachedText(message) {
     const quote = excerpt(source, 4_000).split('\n').map((line) => `> ${line}`).join('\n');
     return { text: `Attached ${context.kind}${label ? ` (${label}${location})` : ''}:\n${quote}\n\nUser comment:\n${excerpt(authored, USER_CHAR_LIMIT)}`, authored };
   }
-  if (LINK_KINDS.has(context?.kind)) return { text: excerpt(message.text ?? '', USER_CHAR_LIMIT), authored: '' };
-  const comment = message.metadata?.opencodeComment;
+  if (LINK_KINDS.has(context?.kind)) return { text: excerpt(text ?? '', USER_CHAR_LIMIT), authored: '' };
+  const comment = info?.metadata?.opencodeComment;
   if (comment) {
     const authored = comment.comment.trim();
     const source = (comment.preview ?? '').trim();
@@ -44,92 +56,95 @@ function attachedText(message) {
   return null;
 }
 
-// Records OpenCode appends around a turn that carry no conversation content:
-// the `idle` marker that closes every turn and the agent/model/location
-// switches. They are invisible to turn boundaries and to "what is the newest
-// message". An `idle` whose outcome is not `succeeded` is not transparent: it
-// is the evidence that the turn failed or was interrupted.
-const TRANSPARENT_TYPES = new Set(['agent-switched', 'model-switched', 'location-switched']);
+// Records that carry no conversation content: the switches the runtime may
+// append around a turn, and the `idle` marker that closes it. They are
+// invisible to turn boundaries and to "what is the newest message". An `idle`
+// whose outcome is not `succeeded` is not transparent: it is the evidence that
+// the turn failed or was interrupted.
+const TRANSPARENT_ROLES = new Set(['agent-switched', 'model-switched', 'location-switched']);
 
-function isTransparent(record) {
-  if (record?.type === 'idle') return record.outcome === 'succeeded';
-  return TRANSPARENT_TYPES.has(record?.type);
+function isTransparent(info) {
+  if (info?.role === 'idle') return info.outcome === 'succeeded';
+  return TRANSPARENT_ROLES.has(info?.role);
 }
 
 /**
- * The id of the newest record that is conversation content, given a page in
- * v2's newest-first order; null when the page holds only service records.
- * Both the assist reader and the pre-write re-check use it so they agree on
- * what "the last message" is.
+ * The id of the newest canonical record that is conversation content, given a
+ * page in its oldest-first order; null when the page holds only service
+ * records. Both the assist reader and the pre-write re-check use it so they
+ * agree on what "the last message" is.
  */
 export function newestContentId(records) {
-  for (const record of Array.isArray(records) ? records : []) {
-    if (!record?.id || isTransparent(record)) continue;
-    return record.id;
+  const items = Array.isArray(records) ? records : [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const info = items[index]?.info;
+    if (!info?.id || isTransparent(info)) continue;
+    return info.id;
   }
   return null;
 }
 
 /**
- * v2 message records are flat: an assistant message carries `content[]`, a user
- * message a single `text` plus its attachments, and context items that used to
- * ride along as `synthetic` text parts are their own `synthetic` messages now.
- * Tool payloads never enter this view.
+ * One canonical `{ info, parts }` record as this module reads it. Text lives in
+ * the parts; a user message's attachments ride on `info.metadata`, and context
+ * items the transport keeps as their own `synthetic` message are folded into
+ * the user message that follows. Tool payloads never enter this view.
  */
-function readMessage(message) {
-  const role = message.type;
+function readMessage(record) {
+  const info = record?.info ?? {};
+  const parts = Array.isArray(record?.parts) ? record.parts : [];
+  const role = info.role;
+  const ownText = messageText(parts);
   const blocks = [];
   const authored = [];
 
   if (role === 'user') {
-    const attached = attachedText(message);
+    const attached = attachedText(info, ownText);
     if (attached) {
       blocks.push(attached.text);
       authored.push(attached.authored);
-    } else if (typeof message.text === 'string') {
-      blocks.push(message.text);
+    } else if (ownText) {
+      blocks.push(ownText);
       // Legacy terminal selections are source material, not a language sample.
-      authored.push(message.text.replace(/\n*<terminal_context>\n[\s\S]*?\n<\/terminal_context>\s*$/, ''));
+      authored.push(ownText.replace(/\n*<terminal_context>\n[\s\S]*?\n<\/terminal_context>\s*$/, ''));
     }
   } else if (role === 'assistant') {
-    for (const part of Array.isArray(message.content) ? message.content : []) {
-      if (part?.type === 'text' && typeof part.text === 'string') blocks.push(part.text);
-    }
+    if (ownText) blocks.push(ownText);
   } else if (role === 'synthetic') {
     // Context the user attached to the message that follows: in v1 it was a
     // `synthetic` text part inside the user message, in v2 it is its own turn.
-    const attached = attachedText(message);
+    const attached = attachedText(info, info.text ?? '');
     if (attached) {
       blocks.push(attached.text);
       authored.push(attached.authored);
-    } else if (typeof message.text === 'string') {
-      blocks.push(message.text);
+    } else if (typeof info.text === 'string') {
+      blocks.push(info.text);
     }
   }
 
   return {
-    id: message.id,
+    id: info.id,
     role,
-    created: Number.isFinite(message.time?.created) ? message.time.created : null,
-    transparent: isTransparent(message),
-    // v2 has no `parentID` on a message: a turn is the run of messages between
-    // one user message and the assistant reply that follows it, which is what
+    created: Number.isFinite(info.time?.created) ? info.time.created : null,
+    transparent: isTransparent(info),
+    // A turn is the run of records between one user message and the assistant
+    // reply that follows it; only the assistant carries a model, which is what
     // `collectTurns` walks.
-    providerID: message.model?.providerID,
-    modelID: message.model?.id,
+    providerID: role === 'assistant' ? info.providerID : undefined,
+    modelID: role === 'assistant' ? info.modelID : undefined,
     complete: role === 'assistant'
-      && message.finish === 'stop'
-      && Boolean(message.time?.completed)
-      && !message.error,
+      && info.finish === 'stop'
+      && Boolean(info.time?.completed)
+      && !info.error,
     text: excerpt(blocks.join('\n\n').trim(), role === 'user' ? USER_CHAR_LIMIT : ANSWER_CHAR_LIMIT),
     authored: excerpt(authored.filter(Boolean).join('\n\n').trim(), USER_CHAR_LIMIT),
   };
 }
 
 /**
- * A turn is one user message and the assistant reply that closes it. v2 dropped
- * `parentID`, so the boundary is positional: everything between two user
- * messages belongs to the turn the earlier one opened.
+ * A turn is one user message and the assistant reply that closes it. The
+ * boundary is positional: everything between two user messages belongs to the
+ * turn the earlier one opened.
  *
  * Synthetic messages are the context the user attached to the message they are
  * about to send — v1 carried them as parts of that user message — so they are
@@ -167,6 +182,28 @@ const settledTurns = (messages) => collectTurns(messages, Infinity)
   .slice(-TURN_LIMIT);
 
 /**
+ * The session's records as this module reads them, oldest first. The OMP
+ * runtime serves the whole history in one page (`{ items }`), so a single read
+ * covers every turn the callers below can need. `null` or an `items` that is
+ * not an array is a failed read: it is thrown rather than read as "no history".
+ */
+async function readHistory({ readPage, signal }) {
+  signal.throwIfAborted();
+  const page = await readPage();
+  signal.throwIfAborted();
+  if (!Array.isArray(page?.items)) throw new Error('Session message page is unavailable');
+  const seen = new Set();
+  const messages = [];
+  for (const record of page.items) {
+    const id = record?.info?.id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    messages.push(readMessage(record));
+  }
+  return messages;
+}
+
+/**
  * The settled turns before a message that was just sent, oldest first: what a
  * classifier reads next to the new request. The newest records may already
  * hold that message (and nothing after it); a turn without a completed answer
@@ -174,70 +211,17 @@ const settledTurns = (messages) => collectTurns(messages, Infinity)
  * session has no settled turn yet.
  */
 export async function loadSettledTurns({ readPage, signal }) {
-  let messages = [];
-  let cursor;
-  const cursors = new Set();
-  const ids = new Set();
-  for (let pageNumber = 0; pageNumber < MAX_PAGES; pageNumber++) {
-    signal.throwIfAborted();
-    const page = await readPage({ limit: PAGE_SIZE, cursor });
-    signal.throwIfAborted();
-    if (!Array.isArray(page?.data)) throw new Error('Session message page is unavailable');
-    const older = [];
-    for (const record of page.data) {
-      if (!record?.id || ids.has(record.id)) continue;
-      ids.add(record.id);
-      older.push(readMessage(record));
-    }
-    older.reverse();
-    messages = older.concat(messages);
-    const settled = settledTurns(messages);
-    const next = typeof page.cursor?.next === 'string' ? page.cursor.next : null;
-    if (settled.length === TURN_LIMIT || !next) return settled;
-    if (cursors.has(next)) throw new Error('Session message pagination made no progress');
-    cursors.add(next);
-    cursor = next;
-  }
-  return settledTurns(messages);
+  return settledTurns(await readHistory({ readPage, signal }));
 }
 
-/** Failure is thrown; null means no eligible final answer within bounded history. */
+/** Failure is thrown; null means no eligible final answer within the history. */
 export async function loadAssistContext({ readPage, signal }) {
-  let messages = [];
-  let cursor;
-  const cursors = new Set();
-  const ids = new Set();
-  for (let pageNumber = 0; pageNumber < MAX_PAGES; pageNumber++) {
-    signal.throwIfAborted();
-    // v2 pages messages newest first and returns `{ data, cursor }`.
-    const page = await readPage({ limit: PAGE_SIZE, cursor });
-    signal.throwIfAborted();
-    if (!Array.isArray(page?.data)) throw new Error('Session message page is unavailable');
-    const older = [];
-    for (const record of page.data) {
-      if (!record?.id || ids.has(record.id)) continue;
-      ids.add(record.id);
-      older.push(readMessage(record));
-    }
-    older.reverse();
-    messages = older.concat(messages);
-    const next = typeof page.cursor?.next === 'string' ? page.cursor.next : null;
-    // A successful turn ends with an `idle` marker after the answer; look past
-    // it and its siblings to the newest content record.
-    const last = messages.findLast((message) => !message.transparent);
-    if (!last) {
-      if (!next || pageNumber === MAX_PAGES - 1) return null;
-    } else {
-      if (!last.complete || !last.text) return null;
-      const turns = collectTurns(messages);
-      if (turns.length === TURN_LIMIT || !next || pageNumber === MAX_PAGES - 1) {
-        if (!turns.at(-1)?.complete || turns.at(-1).assistant.id !== last.id) return null;
-        return { turns, last };
-      }
-    }
-    if (cursors.has(next)) throw new Error('Session message pagination made no progress');
-    cursors.add(next);
-    cursor = next;
-  }
-  return null;
+  const messages = await readHistory({ readPage, signal });
+  // The newest record that is conversation content: the runtime keeps no
+  // service records, so it is normally the last one.
+  const last = messages.findLast((message) => !message.transparent);
+  if (!last || !last.complete || !last.text) return null;
+  const turns = collectTurns(messages);
+  if (!turns.at(-1)?.complete || turns.at(-1).assistant.id !== last.id) return null;
+  return { turns, last };
 }

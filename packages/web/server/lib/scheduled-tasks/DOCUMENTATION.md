@@ -9,6 +9,32 @@ Server-owned scheduled task runtime and routes for OpenChamber-only automation.
 - Runtime orchestration and execution is owned by `packages/web/server/lib/scheduled-tasks/runtime.js`.
 - This module is OpenChamber feature logic; it is intentionally separate from OpenCode proxy/runtime internals.
 
+## Dispatch on the OMP runtime
+
+A scheduled run drives OMP through the runtime-host seam
+(`packages/web/server/lib/agents/omp-host-access.js`): it creates the session
+with the task's project directory, then applies the title and the task's model
+to it, then sends the prompt. There is no OpenCode HTTP client, origin, auth
+header or readiness wait involved.
+
+OMP differs from OpenCode in ways a scheduled run has to answer for rather than
+paper over:
+
+- **Synthetic messages do not exist.** The standing project context and the goal
+  briefing used to be parked ahead of the prompt as synthetic messages; OMP
+  sends one authored text per turn, so both now ride in front of the task
+  prompt, in the same order, inside the single message.
+- **A session has no agent and no model variant**, so a task whose execution
+  pins either one fails with `OMP_UNSUPPORTED` (`status: 501`) instead of running
+  on whatever the runtime would pick.
+- **There is no command route.** A task authored as a slash command is resolved
+  against `listCommands()` and then fails with `OMP_UNSUPPORTED` — its raw text is
+  never sent as a prompt in its place. A command list that cannot be read is
+  treated as "not a command", exactly as a failed OpenCode lookup was, and the
+  prompt goes out as authored.
+- **A prompt the runtime did not take** answers `false` and fails the run rather
+  than being recorded as delivered.
+
 ## Cross-instance occurrence claiming
 
 Multiple OpenChamber server processes can share the same on-disk project config
@@ -79,7 +105,7 @@ dispatches still skip disabled tasks, and completion never re-arms a paused task
   - Next-run computation (daily/weekly/cron compatibility)
   - Timer scheduling and queueing
   - Concurrency controls
-  - Session create + prompt_async execution
+  - Session create + prompt dispatch on the OMP runtime host
   - Emits OpenChamber task-run events
 
 - `packages/web/server/lib/scheduled-tasks/loops.js`

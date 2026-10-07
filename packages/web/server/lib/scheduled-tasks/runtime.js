@@ -1,6 +1,6 @@
-import { OpenCode } from '@opencode/client';
 import { DateTime } from 'luxon';
 import { CronExpressionParser } from 'cron-parser';
+import { getOmpRuntimeHost, promptSession } from '../agents/omp-host-access.js';
 import { expandSnippets } from '../opencode/snippets.js';
 import { buildGoalIntroText, createSessionGoal } from '../session-goal/create.js';
 import { discoverLoops } from './loops.js';
@@ -71,6 +71,16 @@ const safeErrorMessage = (error, maxLength = 2_000) => {
   }
   return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
 };
+
+/**
+ * Something a scheduled run asked OpenCode for that OMP has no counterpart of.
+ * Thrown rather than dropped or substituted: a task configured with one has to
+ * fail visibly, not run as a different task.
+ */
+export const unsupportedOnOmp = (what) => Object.assign(
+  new Error(`Scheduled task runs cannot use ${what}: the OMP runtime has no equivalent`),
+  { name: 'OmpUnsupportedError', code: 'OMP_UNSUPPORTED', status: 501 },
+);
 
 export const parseScheduledCommandPrompt = (prompt) => {
   if (typeof prompt !== 'string') {
@@ -246,12 +256,13 @@ export const formatScheduledSessionTitle = (task, nowMs = Date.now()) => {
 };
 
 export const createScheduledTasksRuntime = (deps) => {
+  // `buildOpenCodeUrl`, `getOpenCodeAuthHeaders` and `waitForOpenCodeReady` are
+  // still passed by the route wiring but no longer read: OMP is reached through
+  // the runtime host, which is either mounted or not — there is no HTTP origin,
+  // no auth header, and nothing to wait for.
   const {
     projectConfigRuntime,
     listProjects,
-    buildOpenCodeUrl,
-    getOpenCodeAuthHeaders,
-    waitForOpenCodeReady,
     emitTaskRunEvent,
     setSessionAutoAccept,
     sessionKnowledgeRuntime = null,
@@ -263,18 +274,6 @@ export const createScheduledTasksRuntime = (deps) => {
     maxProjectConcurrency = DEFAULT_PROJECT_CONCURRENCY,
     maxRunDurationMs = DEFAULT_MAX_RUN_MS,
   } = deps;
-
-  // Every OpenCode route lives under /api in v2 and the client appends it, so
-  // the client only wants the origin. Directory scoping is a request header.
-  const openCodeOrigin = () => new URL(buildOpenCodeUrl('/api/info', '')).origin;
-  const createScopedClient = (directory) => OpenCode.make({
-    baseUrl: openCodeOrigin(),
-    headers: {
-      ...getOpenCodeAuthHeaders(),
-      ...(directory ? { 'x-opencode-directory': encodeURIComponent(directory) } : {}),
-    },
-    fetch,
-  });
 
   let started = false;
   const tasksByProject = new Map();
@@ -492,30 +491,36 @@ export const createScheduledTasksRuntime = (deps) => {
     }
   };
 
-  const runPrompt = async ({ client, sessionID, projectPath, task }) => {
+  const runPrompt = async ({ sessionID, projectPath, task }) => {
     const knowledge = await resolveKnowledge(sessionID, projectPath);
 
-    // A v2 prompt carries a single authored text. Standing project context and
-    // the goal briefing therefore travel as synthetic messages sent first, so
-    // the model still reads the prompt against them exactly as before. A
-    // synthetic message schedules execution unless `resume: false`: without
-    // it the model would start on the briefing alone, before the task arrived.
+    // OMP sends one authored text per turn and has no synthetic message, so the
+    // standing project context and the goal briefing ride in front of the task
+    // prompt instead of being parked ahead of it as separate messages: the model
+    // still reads the prompt against them, and no extra turn starts.
+    const blocks = [];
     if (knowledge.text) {
-      await client.session.synthetic({ sessionID, text: knowledge.text, resume: false });
+      blocks.push(knowledge.text);
     }
     if (task.execution.goalEnabled) {
-      await client.session.synthetic({ sessionID, text: buildGoalIntroText(task.execution.goalTokenBudget), resume: false });
+      blocks.push(buildGoalIntroText(task.execution.goalTokenBudget));
     }
+    blocks.push(expandSnippets(task.execution.prompt, projectPath));
 
-    await client.session.prompt({
-      sessionID,
-      text: expandSnippets(task.execution.prompt, projectPath),
-    });
+    const accepted = await promptSession(sessionID, blocks.join('\n\n'));
+    if (accepted !== true) {
+      // The runtime answered that it did not take the prompt, so nothing was
+      // dispatched: the run must not be recorded as delivered, and the context
+      // has to be carried again on the next one.
+      throw new Error(accepted === null
+        ? 'the OMP runtime went away before it could take the scheduled prompt'
+        : 'the OMP runtime did not take the scheduled prompt');
+    }
 
     await recordKnowledge(sessionID, projectPath, knowledge);
   };
 
-  const resolveScheduledCommand = async ({ client, projectPath, task }) => {
+  const resolveScheduledCommand = async ({ host, projectPath, task }) => {
     const parsed = parseScheduledCommandPrompt(task?.execution?.prompt);
     if (!parsed) {
       return null;
@@ -523,35 +528,19 @@ export const createScheduledTasksRuntime = (deps) => {
 
     let commands = [];
     try {
-      const response = await client.command.list({ location: { directory: projectPath } });
-      commands = Array.isArray(response?.data) ? response.data : [];
+      const listed = await host.listCommands();
+      commands = Array.isArray(listed) ? listed : [];
     } catch {
+      // The command list is unavailable, so the slash prompt is not claimed to
+      // be one and goes out as authored — the same as any failed lookup.
       return null;
     }
 
-    // v2 CommandInfo carries no template, so a goal objective distilled from
-    // the command body is no longer available; the goal falls back to the
-    // prompt text, which expandCommandGoalObjective already handles.
+    // OMP publishes a command's name and description only, so a goal objective
+    // distilled from the command body is unavailable; the goal falls back to
+    // the prompt text, which expandCommandGoalObjective already handles.
     const command = commands.find((candidate) => candidate?.name === parsed.command);
     return command ? { ...parsed, template: command.template } : null;
-  };
-
-  const runScheduledCommand = async ({ client, sessionID, projectPath, command }) => {
-    // The command route takes no extra parts, so standing context goes in
-    // first as a synthetic message that does not start execution.
-    const knowledge = await resolveKnowledge(sessionID, projectPath);
-    if (knowledge.text) {
-      await client.session.synthetic({ sessionID, text: knowledge.text, resume: false });
-    }
-    // Agent, model and variant are session properties in v2 and were already
-    // set when the run created the session; the command body only carries text.
-    await client.session.command({
-      sessionID,
-      // OpenCode 2.0.8 renamed the command body field `command` to `name`.
-      name: command.command,
-      text: command.arguments,
-    });
-    await recordKnowledge(sessionID, projectPath, knowledge);
   };
 
   const runTaskWithWatchdog = async (projectID, task, reason) => {
@@ -562,30 +551,30 @@ export const createScheduledTasksRuntime = (deps) => {
       throw new Error('project path is unavailable');
     }
 
-    if (typeof waitForOpenCodeReady === 'function') {
-      await waitForOpenCodeReady(10_000, 250);
+    // OpenCode fixed the agent and the model variant on the session at create
+    // time; an OMP session has neither, so a task that pins one fails here
+    // rather than running on whatever the runtime would pick.
+    if (task.execution.agent) {
+      throw unsupportedOnOmp(`the "${task.execution.agent}" agent`);
+    }
+    if (task.execution.variant) {
+      throw unsupportedOnOmp(`the "${task.execution.variant}" model variant`);
     }
 
-    const baseUrl = openCodeOrigin();
-    const authHeaders = getOpenCodeAuthHeaders();
-    const client = createScopedClient(projectPath);
+    const host = await getOmpRuntimeHost();
+    if (!host) {
+      throw Object.assign(new Error('the OMP runtime is not available'), { status: 503 });
+    }
 
-    // Agent, model and variant belong to the session in v2: a scheduled run
-    // fixes them here instead of repeating them on every prompt.
-    const session = await client.session.create({
-      title,
-      location: { directory: projectPath },
-      model: {
-        providerID: task.execution.providerID,
-        id: task.execution.modelID,
-        ...(task.execution.variant ? { variant: task.execution.variant } : {}),
-      },
-      ...(task.execution.agent ? { agent: task.execution.agent } : {}),
-    });
-    const sessionID = session?.id;
+    // OMP takes the directory — and nothing else — when a session is created,
+    // so the title and the model the run fixes are applied to it right after.
+    const created = await host.createSession({ cwd: projectPath });
+    const sessionID = created?.id;
     if (!sessionID) {
       throw new Error('failed to create session');
     }
+    await host.renameSession(sessionID, title);
+    await host.setModel(sessionID, task.execution.providerID, task.execution.modelID);
 
     try {
       emitTaskRunEvent?.({
@@ -609,15 +598,13 @@ export const createScheduledTasksRuntime = (deps) => {
       }
     }
 
-    const scheduledCommand = await resolveScheduledCommand({ client, projectPath, task });
+    const scheduledCommand = await resolveScheduledCommand({ host, projectPath, task });
 
     if (task.execution.goalEnabled) {
       const commandObjective = scheduledCommand
         ? expandCommandGoalObjective(scheduledCommand.template, scheduledCommand.arguments)
         : null;
       await createSessionGoal({
-        baseUrl,
-        authHeaders,
         persistSessionGoal,
         sessionID,
         directory: projectPath,
@@ -630,10 +617,12 @@ export const createScheduledTasksRuntime = (deps) => {
     }
 
     if (scheduledCommand) {
-      await runScheduledCommand({ client, sessionID, projectPath, command: scheduledCommand });
-    } else {
-      await runPrompt({ client, sessionID, projectPath, task });
+      // A slash command used to be dispatched through OpenCode's own command
+      // route; OMP's prompt carries one authored text and has no command route,
+      // so the command cannot be run and its raw text must not be sent instead.
+      throw unsupportedOnOmp(`the "/${scheduledCommand.command}" command`);
     }
+    await runPrompt({ sessionID, projectPath, task });
 
     const finishedAt = Date.now();
     return {

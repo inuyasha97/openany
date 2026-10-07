@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import os from 'node:os';
 import path from 'node:path';
@@ -6,21 +6,21 @@ import fs from 'node:fs/promises';
 
 import { createOpenChamberControlService } from './service.js';
 
+// The service reads sessions through the OMP runtime seam; a test drives the
+// runtime by answering these instead of standing up a server.
+const omp = vi.hoisted(() => ({
+  readSessions: vi.fn(),
+  readSessionStatus: vi.fn(),
+  readSessionMessages: vi.fn(),
+}));
+
+vi.mock('../agents/omp-host-access.js', () => ({
+  readSessions: omp.readSessions,
+  readSessionStatus: omp.readSessionStatus,
+  readSessionMessages: omp.readSessionMessages,
+}));
+
 const createService = (overrides = {}) => {
-  const client = {
-    session: {
-      list: vi.fn(async () => ({ data: [] })),
-      active: vi.fn(async () => ({})),
-    },
-    message: {
-      list: vi.fn(async () => ({ data: [] })),
-    },
-  };
-  const sessionService = {
-    create: vi.fn(async () => ({ sessionId: 'ses_1', directory: '/repo', promptDispatched: false })),
-    send: vi.fn(),
-    fork: vi.fn(),
-  };
   const scheduledTaskService = {
     status: vi.fn(async () => ({ enabledScheduledTasksCount: 0 })),
     resolveProjectID: vi.fn(async () => 'project-1'),
@@ -38,16 +38,17 @@ const createService = (overrides = {}) => {
       recentModels: [],
     })),
     sanitizeProjects: (projects) => projects,
-    buildOpenCodeUrl: () => 'http://127.0.0.1:4096/',
-    getOpenCodeAuthHeaders: () => ({ authorization: 'Basic test' }),
-    waitForOpenCodeReady: vi.fn(),
-    createClient: vi.fn(() => client),
-    sessionService,
     scheduledTaskService,
     ...overrides,
   });
-  return { service, client, sessionService, scheduledTaskService };
+  return { service, scheduledTaskService };
 };
+
+beforeEach(() => {
+  omp.readSessions.mockReset().mockResolvedValue([]);
+  omp.readSessionStatus.mockReset().mockResolvedValue({ busy: false });
+  omp.readSessionMessages.mockReset().mockResolvedValue({ items: [], cursor: {} });
+});
 
 describe('OpenChamber control service', () => {
   it('serves project and model projections without an HTTP or CLI round trip', async () => {
@@ -114,100 +115,106 @@ describe('OpenChamber control service', () => {
     expect(scheduledTaskService.run).not.toHaveBeenCalled();
   });
 
-  it('validates wait modifiers before creating a session', async () => {
-    const { service, sessionService } = createService();
-    await expect(service.execute('session.create', { directory: '/repo', timeout: 30 })).rejects.toThrow('timeout requires wait');
-    expect(sessionService.create).not.toHaveBeenCalled();
-  });
-
-  it('uses the tool context directory for session actions', async () => {
-    const { service, sessionService } = createService();
-    await service.execute('session.create', { title: 'From tool' }, '/repo');
-    expect(sessionService.create).toHaveBeenCalledWith({ directory: '/repo', title: 'From tool' });
-  });
-
   it.each([
-    ['session.send', 'send'],
-    ['session.fork', 'fork'],
-  ])('delegates %s directly to the session service', async (action, method) => {
-    const { service, sessionService } = createService();
-    sessionService[method].mockResolvedValue({ sessionId: 'ses_1', directory: '/repo' });
-
-    await service.execute(action, { sessionId: 'ses_1', directory: '/repo', prompt: 'Continue' });
-
-    expect(sessionService[method]).toHaveBeenCalledWith('ses_1', { directory: '/repo', prompt: 'Continue' });
+    'session.create',
+    'session.send',
+    'session.fork',
+  ])('answers %s as unsupported on the OMP runtime', async (action) => {
+    const { service } = createService();
+    await expect(service.execute(action, { sessionId: 'ses_1', directory: '/repo', prompt: 'Continue' }))
+      .rejects.toMatchObject({ statusCode: 501, message: `${action} is not supported on the OMP runtime` });
   });
 
-  it('resolves the target session directory from the global session list when send omits it', async () => {
-    const { service, sessionService, client } = createService();
-    client.session.list.mockResolvedValue({
-      data: [
-        { id: 'ses_other', location: { directory: '/repo/worktrees/other' } },
-        { id: 'ses_target', location: { directory: '/repo/worktrees/target' } },
-      ],
-    });
-    sessionService.send.mockResolvedValue({ sessionId: 'ses_target', directory: '/repo/worktrees/target', promptDispatched: true });
+  it('resolves a session directory from the runtime session index', async () => {
+    const { service } = createService();
+    omp.readSessions.mockResolvedValue([
+      { id: 'ses_other', sessionPath: '/s/other.jsonl', cwd: '/repo/worktrees/other', title: 'Other' },
+      { id: 'ses_target', sessionPath: '/s/target.jsonl', cwd: '/repo/worktrees/target', title: 'Target' },
+    ]);
 
-    await service.execute('session.send', { sessionId: 'ses_target', prompt: 'Continue' }, '/repo');
-
-    expect(sessionService.send).toHaveBeenCalledWith('ses_target', { directory: '/repo/worktrees/target', prompt: 'Continue' });
+    await expect(service.resolveSessionDirectory('ses_target')).resolves.toBe('/repo/worktrees/target');
   });
 
-  it('falls back to the context directory when the session is not in the global list', async () => {
-    const { service, sessionService } = createService();
-    sessionService.send.mockResolvedValue({ sessionId: 'ses_unknown', directory: '/repo', promptDispatched: true });
-
-    await service.execute('session.send', { sessionId: 'ses_unknown', prompt: 'Continue' }, '/repo');
-
-    expect(sessionService.send).toHaveBeenCalledWith('ses_unknown', { directory: '/repo', prompt: 'Continue' });
+  it('answers no directory when the session is unknown or the runtime cannot list sessions', async () => {
+    const { service } = createService();
+    await expect(service.resolveSessionDirectory('ses_missing')).resolves.toBe(null);
+    omp.readSessions.mockRejectedValue(new Error('store unavailable'));
+    await expect(service.resolveSessionDirectory('ses_target')).resolves.toBe(null);
   });
 
-  it('waits past initial idle until a completed assistant result appears', async () => {
-    let timestamp = 1000;
-    const { service, client, sessionService } = createService({
-      now: () => timestamp,
-      sleep: async (duration) => { timestamp += duration; },
-    });
-    sessionService.create.mockResolvedValue({
-      sessionId: 'ses_1',
-      directory: '/repo',
-      promptDispatched: true,
-      baselineAssistantMessageId: 'msg_old',
-    });
-    client.session.active.mockResolvedValue({});
-    client.message.list
-      .mockResolvedValueOnce({ data: [{ id: 'msg_old', type: 'assistant', time: { completed: 900 }, content: [{ type: 'text', text: 'old' }] }] })
-      .mockResolvedValueOnce({ data: [{ id: 'msg_new', type: 'assistant', time: { completed: 1500 }, content: [{ type: 'text', text: 'done' }] }] })
-      .mockResolvedValueOnce({ data: [{ id: 'msg_new', type: 'assistant', time: { completed: 1500 }, content: [{ type: 'text', text: 'done' }] }] });
-
-    await expect(service.execute('session.create', {
-      directory: '/repo',
-      prompt: 'work',
-      wait: true,
-      lastAssistant: true,
-      timeout: 2,
-    })).resolves.toEqual(expect.objectContaining({
-      sessionStatus: { type: 'idle' },
-      lastAssistantMessage: expect.objectContaining({ id: 'msg_new', text: 'done' }),
-    }));
-    expect(client.session.active).toHaveBeenCalledTimes(2);
-  });
-
-  it('filters sessions archived in OpenChamber state and adds global statuses', async () => {
-    const { service, client } = createService({
+  it('lists runtime sessions scoped to the requested directory and hides archived ones', async () => {
+    const { service } = createService({
       archiveStore: { isArchived: (id) => (id === 'ses_archived' ? 100 : null) },
     });
-    client.session.list.mockResolvedValue({ data: [
-      { id: 'ses_active', location: { directory: '/repo' }, time: {} },
-      { id: 'ses_archived', location: { directory: '/repo' }, time: {} },
-      { id: 'ses_other', location: { directory: '/other' }, time: {} },
-    ] });
-    client.session.active.mockResolvedValue({ ses_active: { type: 'running' } });
+    omp.readSessions.mockResolvedValue([
+      { id: 'ses_active', sessionPath: '/s/a.jsonl', cwd: '/repo', title: 'Active' },
+      { id: 'ses_archived', sessionPath: '/s/b.jsonl', cwd: '/repo', title: 'Archived' },
+      { id: 'ses_other', sessionPath: '/s/c.jsonl', cwd: '/other', title: 'Other' },
+    ]);
+
+    await expect(service.execute('session.list', { directory: '/repo', limit: 10 })).resolves.toEqual({
+      sessions: [{ id: 'ses_active', directory: '/repo', title: 'Active' }],
+      limit: 10,
+      directory: '/repo',
+      archived: 'excluded',
+    });
+  });
+
+  it('includes archived sessions and their archive time when all is asked for', async () => {
+    const { service } = createService({
+      archiveStore: { isArchived: (id) => (id === 'ses_archived' ? 100 : null) },
+    });
+    omp.readSessions.mockResolvedValue([
+      { id: 'ses_archived', sessionPath: '/s/b.jsonl', cwd: '/repo', title: 'Archived' },
+      { id: 'ses_active', sessionPath: '/s/a.jsonl', cwd: '/repo', title: 'Active' },
+    ]);
+
+    await expect(service.execute('session.list', { directory: '/repo', all: true })).resolves.toEqual({
+      sessions: [
+        { id: 'ses_archived', directory: '/repo', title: 'Archived', time: { archived: 100 } },
+        { id: 'ses_active', directory: '/repo', title: 'Active' },
+      ],
+      limit: 10,
+      directory: '/repo',
+      archived: 'included',
+    });
+  });
+
+  it('applies the requested limit to the listed sessions', async () => {
+    const { service } = createService();
+    omp.readSessions.mockResolvedValue([
+      { id: 'ses_1', sessionPath: '/s/1.jsonl', cwd: '/repo', title: 'One' },
+      { id: 'ses_2', sessionPath: '/s/2.jsonl', cwd: '/repo', title: 'Two' },
+      { id: 'ses_3', sessionPath: '/s/3.jsonl', cwd: '/repo', title: 'Three' },
+    ]);
+
+    const result = await service.execute('session.list', { limit: 2 });
+
+    expect(result.sessions.map((session) => session.id)).toEqual(['ses_1', 'ses_2']);
+    expect(result.limit).toBe(2);
+  });
+
+  it('matches a session directory that differs only in path shape', async () => {
+    const { service } = createService();
+    omp.readSessions.mockResolvedValue([{ id: 'ses_1', sessionPath: '/s/1.jsonl', cwd: '/repo/', title: 'One' }]);
+
+    const result = await service.execute('session.list', { directory: '/repo' });
+
+    expect(result.sessions.map((session) => session.id)).toEqual(['ses_1']);
+  });
+
+  it('adds a per-session status when withStatus is asked for', async () => {
+    const { service } = createService();
+    omp.readSessions.mockResolvedValue([
+      { id: 'ses_busy', sessionPath: '/s/a.jsonl', cwd: '/repo', title: 'Busy' },
+      { id: 'ses_idle', sessionPath: '/s/b.jsonl', cwd: '/repo', title: 'Idle' },
+    ]);
+    omp.readSessionStatus.mockImplementation(async (id) => ({ busy: id === 'ses_busy' }));
 
     await expect(service.execute('session.list', { limit: 10, withStatus: true })).resolves.toEqual({
       sessions: [
-        { id: 'ses_active', location: { directory: '/repo' }, time: {}, status: { type: 'busy' } },
-        { id: 'ses_other', location: { directory: '/other' }, time: {}, status: { type: 'idle' } },
+        { id: 'ses_busy', directory: '/repo', title: 'Busy', status: { type: 'busy' } },
+        { id: 'ses_idle', directory: '/repo', title: 'Idle', status: { type: 'idle' } },
       ],
       limit: 10,
       directory: null,
@@ -215,13 +222,13 @@ describe('OpenChamber control service', () => {
     });
   });
 
-  it('reports unknown status when the active-session read fails', async () => {
-    const { service, client } = createService();
-    client.session.list.mockResolvedValue({ data: [{ id: 'ses_active', location: { directory: '/repo' }, time: {} }] });
-    client.session.active.mockRejectedValue(new Error('unavailable'));
+  it('reports unknown status for a session whose status read fails', async () => {
+    const { service } = createService();
+    omp.readSessions.mockResolvedValue([{ id: 'ses_active', sessionPath: '/s/a.jsonl', cwd: '/repo', title: 'Active' }]);
+    omp.readSessionStatus.mockRejectedValue(new Error('unavailable'));
 
     await expect(service.execute('session.list', { limit: 10, withStatus: true })).resolves.toEqual({
-      sessions: [{ id: 'ses_active', location: { directory: '/repo' }, time: {}, status: { type: 'unknown' } }],
+      sessions: [{ id: 'ses_active', directory: '/repo', title: 'Active', status: { type: 'unknown' } }],
       limit: 10,
       directory: null,
       archived: 'excluded',
@@ -229,20 +236,54 @@ describe('OpenChamber control service', () => {
   });
 
   it('names limit in positive-integer validation errors', async () => {
-    const { service, client } = createService();
+    const { service } = createService();
     await expect(service.execute('session.list', { limit: 0 })).rejects.toThrow('limit must be a positive integer');
-    expect(client.session.list).not.toHaveBeenCalled();
+    expect(omp.readSessions).not.toHaveBeenCalled();
+  });
+
+  it('reports one session status in the busy/idle contract', async () => {
+    const { service } = createService();
+    omp.readSessionStatus.mockResolvedValue({ busy: true });
+
+    await expect(service.execute('session.status', { sessionId: 'ses_1', directory: '/repo' })).resolves.toEqual({
+      sessionId: 'ses_1',
+      directory: '/repo',
+      sessionStatus: { type: 'busy' },
+    });
+    expect(omp.readSessionStatus).toHaveBeenCalledWith('ses_1');
+  });
+
+  it('answers 503 when the runtime is not mounted', async () => {
+    const { service } = createService();
+    omp.readSessions.mockResolvedValue(null);
+    omp.readSessionStatus.mockResolvedValue(null);
+    omp.readSessionMessages.mockResolvedValue(null);
+
+    await expect(service.execute('session.list', {})).rejects.toMatchObject({ statusCode: 503 });
+    await expect(service.execute('session.status', { sessionId: 'ses_1', directory: '/repo' }))
+      .rejects.toMatchObject({ statusCode: 503 });
+    await expect(service.execute('session.messages', { sessionId: 'ses_1', directory: '/repo' }))
+      .rejects.toMatchObject({ statusCode: 503 });
   });
 
   it('projects only ordered text content from session messages', async () => {
-    const { service, client } = createService();
-    client.message.list.mockResolvedValue({ data: [
+    const { service } = createService();
+    omp.readSessionMessages.mockResolvedValue({ items: [
       {
-        id: 'msg_assistant', type: 'assistant', model: { providerID: 'openai', id: 'gpt-5.4-mini' }, time: { created: 20, completed: 30 },
-        content: [{ type: 'reasoning', text: 'hidden' }, { type: 'text', text: 'First ' }, { type: 'tool' }, { type: 'text', text: 'answer' }],
+        info: {
+          id: 'msg_assistant', sessionID: 'ses_1', role: 'assistant', providerID: 'openai', modelID: 'gpt-5.4-mini',
+          time: { created: 20, completed: 30 },
+        },
+        parts: [
+          { id: 'part_1', type: 'reasoning', text: 'hidden' },
+          { id: 'part_2', type: 'text', text: 'First ' },
+          { id: 'part_3', type: 'tool', state: { status: 'completed', input: {}, output: 'ignored' } },
+          { id: 'part_4', type: 'text', text: 'answer' },
+        ],
       },
-      { id: 'msg_user', type: 'user', time: { created: 10 }, text: 'Question' },
-      { id: 'msg_tool', type: 'assistant', time: { created: 15 }, content: [{ type: 'tool' }] },
+      { info: { id: 'msg_user', sessionID: 'ses_1', role: 'user', time: { created: 10 } }, parts: [{ id: 'part_5', type: 'text', text: 'Question' }] },
+      { info: { id: 'msg_tool', sessionID: 'ses_1', role: 'assistant', providerID: '', modelID: '', time: { created: 15 } }, parts: [{ id: 'part_6', type: 'tool', state: { status: 'pending', input: {}, raw: '{}' } }] },
+      { info: { id: 'msg_shell', sessionID: 'ses_1', role: 'shell', time: { created: 5 } }, parts: [{ id: 'part_7', type: 'text', text: 'not the conversation' }] },
     ] });
 
     await expect(service.execute('session.messages', {
@@ -260,6 +301,58 @@ describe('OpenChamber control service', () => {
         { id: 'msg_assistant', role: 'assistant', createdAt: 20, completedAt: 30, model: 'openai/gpt-5.4-mini', text: 'First answer' },
       ],
     });
+    expect(omp.readSessionMessages).toHaveBeenCalledWith('ses_1');
+  });
+
+  it('returns only the newest text messages when a limit is given', async () => {
+    const { service } = createService();
+    const text = (id, created) => ({
+      info: { id, sessionID: 'ses_1', role: 'assistant', time: { created } },
+      parts: [{ id: `${id}_text`, type: 'text', text: id }],
+    });
+    omp.readSessionMessages.mockResolvedValue({ items: [text('msg_1', 1), text('msg_2', 2), text('msg_3', 3)] });
+
+    const result = await service.execute('session.messages', { sessionId: 'ses_1', directory: '/repo', limit: 2 });
+
+    expect(result.messages.map((message) => message.id)).toEqual(['msg_2', 'msg_3']);
+  });
+
+  it('validates wait modifiers before reading the runtime', async () => {
+    const { service } = createService();
+    await expect(service.execute('session.messages', { sessionId: 'ses_1', directory: '/repo', timeout: 30 }))
+      .rejects.toThrow('timeout requires wait');
+    expect(omp.readSessionMessages).not.toHaveBeenCalled();
+  });
+
+  it('waits through a busy turn until the session goes idle', async () => {
+    const { service } = createService({ sleep: async () => {} });
+    omp.readSessionStatus.mockResolvedValueOnce({ busy: true }).mockResolvedValue({ busy: false });
+
+    const result = await service.execute('session.messages', {
+      sessionId: 'ses_1',
+      directory: '/repo',
+      wait: true,
+      timeout: 2,
+    });
+
+    expect(result.sessionStatus).toEqual({ type: 'idle' });
+    expect(omp.readSessionStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails a wait that outruns its timeout instead of reporting idle', async () => {
+    let timestamp = 1000;
+    const { service } = createService({
+      now: () => timestamp,
+      sleep: async (duration) => { timestamp += duration; },
+    });
+    omp.readSessionStatus.mockResolvedValue({ busy: true });
+
+    await expect(service.execute('session.messages', {
+      sessionId: 'ses_1',
+      directory: '/repo',
+      wait: true,
+      timeout: 2,
+    })).rejects.toThrow('Session did not become idle within 2 seconds');
   });
 
   it('rejects actions outside the fixed contract', async () => {

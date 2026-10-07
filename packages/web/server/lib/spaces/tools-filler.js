@@ -21,8 +21,10 @@ const PACKAGE_JSON_NAME = 'package.json';
 // flushed before and after the rename. A marker on disk without the content it vouches for would
 // be a broken volume that nothing repairs. A Docker machine that crashes right after a fill can
 // still lose the marker or leave it empty, and the place then removes the volume and fills again.
-// @opencode/cli is the one package whose install script runs: it links the OpenCode binary
-// for this CPU and C library to the path its launcher starts. Without it `opencode` only prints an error.
+// The OMP CLI is the one agent package in the volume, and it has no install script: `npm` writes
+// `node_modules/.bin/omp` itself, and that file is a Bun program. So nothing is run here beyond
+// npm, and the checks below are the ones that say the server and the agent both arrived.
+// (That bin needs Bun on the space's PATH to start; see tools.js and `ompPackages`.)
 const PROGRAM_LINES = [
   "const fs = require('node:fs');",
   "const path = require('node:path');",
@@ -49,8 +51,7 @@ const PROGRAM_LINES = [
   '  }',
   "  if (offset !== input.length) fail('the input is longer than the header says');",
   "  run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--cache', path.join(stagingDirectory, 'npm-cache')], toolsDirectory);",
-  "  run(process.execPath, ['postinstall.mjs'], path.join(toolsDirectory, 'node_modules', '@opencode/cli'));",
-  "  for (const needed of ['node_modules/.bin/openchamber', 'node_modules/.bin/opencode', 'node_modules/@opencode/plugin/package.json']) {",
+  "  for (const needed of ['node_modules/.bin/openchamber', 'node_modules/.bin/omp']) {",
   "    if (!fs.existsSync(path.join(toolsDirectory, needed))) fail(needed + ' is missing after the install');",
   '  }',
   "  run('/bin/sync', [], toolsDirectory);",

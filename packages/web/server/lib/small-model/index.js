@@ -2,28 +2,11 @@ import fs from 'fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import os from 'os';
 import path from 'path';
+import { getOmpRuntimeHost } from '../agents/omp-host-access.js';
 import { readMergedSettingsSync } from '../openchamber/settings-files.js';
-import {
-  findModelInfo,
-  getDefaultModelInfo,
-  getSmallModelClient,
-  listModelInfos,
-  listProviderInfos,
-} from './client.js';
+import { findModelInfo, listModelInfos } from './client.js';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-
-// Waits between retries of `Model unavailable`, ~31 s in total. Right after
-// OpenCode starts, plugin-provided models (claude-code) stay unavailable for
-// 20-40 s while plugins for the global location load lazily. The rejection
-// precedes provider dispatch, so a retry costs no tokens.
-const UNAVAILABLE_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 16_000];
-let unavailableRetryDelaysMs = UNAVAILABLE_RETRY_DELAYS_MS;
-
-/** Test hook: replace the backoff schedule; no argument restores the default. */
-export const setUnavailableRetryDelaysForTest = (delays = UNAVAILABLE_RETRY_DELAYS_MS) => {
-  unavailableRetryDelaysMs = delays;
-};
 
 const OPENCHAMBER_SETTINGS_FILE = path.join(
   process.env.OPENCHAMBER_DATA_DIR
@@ -33,7 +16,7 @@ const OPENCHAMBER_SETTINGS_FILE = path.join(
 );
 
 // OpenChamber's own settings: when the user unchecks "use default small model"
-// their explicit override outranks the model OpenCode would pick.
+// their explicit override outranks the model the runtime would pick.
 const readSmallModelSettingsOverride = () => {
   const settings = readMergedSettingsSync({ fs, path, settingsFilePath: OPENCHAMBER_SETTINGS_FILE });
   if (settings.smallModelUseDefault !== false) return null;
@@ -53,7 +36,7 @@ export function parseModelRef(value) {
 }
 
 // Rough safety clamp so a huge input never blows the model's context window.
-// Token estimate is ~4 chars/token; when OpenCode reports no limit for the
+// Token estimate is ~4 chars/token; when the runtime reports no limit for the
 // model a conservative default applies.
 const DEFAULT_CONTEXT_TOKENS = 64_000;
 const OUTPUT_RESERVE_TOKENS = 4_000;
@@ -73,12 +56,10 @@ export const getModelInputCharBudget = ({ modelInfo, outputReserveTokens }) => {
 };
 
 /**
- * The output budget to actually request: what the caller asked for, capped by
- * what the model admits it can emit.
- *
- * `/api/experimental/generate` takes no output budget of its own, so this number only
- * shapes the input reserve — but it has to stay the same number on both sides
- * or a caller that asks for a large answer overruns the context.
+ * The output budget the caller asked for, capped by what the model admits it
+ * can emit. A session prompt takes no output budget of its own, so this number
+ * only shapes the input reserve — but it has to stay the same number on both
+ * sides or a caller that asks for a large answer overruns the context.
  */
 const resolveOutputTokens = ({ modelInfo, maxOutputTokens }) => {
   const requested = Number(maxOutputTokens) > 0 ? Number(maxOutputTokens) : 0;
@@ -104,16 +85,11 @@ const clampPromptToModelLimit = ({ prompt, modelInfo, providerID, modelID, onOve
   return { prompt: `${prompt.slice(0, maxChars)}…`, truncated: true };
 };
 
-const noClientError = () => Object.assign(
-  new Error('No small model available — OpenCode is not reachable'),
-  { statusCode: 404 },
-);
-
 /**
  * The model families that count as "small", most preferred first. The same
- * list OpenCode uses for its own session titles (`Catalog.model.small` in
- * `packages/core/src/catalog.ts`); OpenCode does not expose that lookup over
- * HTTP, so the scan is repeated here on `GET /api/model`.
+ * list OpenCode used for its own session titles (`Catalog.model.small` in
+ * `packages/core/src/catalog.ts`); OMP exposes no such lookup, so the scan is
+ * repeated here on the catalog.
  */
 export const SMALL_MODEL_FAMILY_PRIORITY = ['gpt-luna', 'gemini-flash-lite', 'gemini-flash', 'claude-haiku', 'gpt-nano', 'gpt-mini'];
 // The last two are not on OpenCode's list; v1 counted them as small and a
@@ -122,8 +98,9 @@ export const SMALL_MODEL_FAMILY_PRIORITY = ['gpt-luna', 'gemini-flash-lite', 'ge
 
 /**
  * A model's family: the catalog's `family` (models.dev) when it has one,
- * else read from the id. A custom provider or a subscription outside the
- * catalog has no `family`, yet its `gemini-3.6-flash` is still a flash.
+ * else read from the id. OMP reports no family, so every model takes the id
+ * path — a custom provider or a subscription outside the catalog has no
+ * `family`, yet its `gemini-3.6-flash` is still a flash.
  */
 export const familyOf = (model) => {
   if (model?.family) return String(model.family);
@@ -160,7 +137,7 @@ const pickSmallModel = (models, accept) => {
 };
 
 /**
- * Which model this call runs on, in order:
+ * Which model a resolution lands on, in order:
  *
  * 1. An explicit request model.
  * 2. OpenChamber's settings override (Settings → Sessions → Small Model).
@@ -168,15 +145,17 @@ const pickSmallModel = (models, accept) => {
  *    in the composer (family scan above) — `session-provider-small`. A caller
  *    that must not leave that provider then takes its own model
  *    (`session-model`): costlier, but never someone else's subscription.
- * 4. `GET /api/model/default`: OpenCode's default model — `default`. This is
- *    the chat default, not a small model; OpenCode's own small-model chain is
- *    not reachable over HTTP, which is why step 3 lives here.
+ *
+ * OpenCode's step 4 (`GET /api/model/default`) has no OMP equivalent — the
+ * runtime exposes no default-model lookup — so a caller with no explicit
+ * model, no settings override and no provider has nothing to resolve and gets
+ * `null`.
  *
  * There is no step that picks a small model from whichever other provider
  * happens to be connected: the content (diffs, replies, session text) goes
  * only where the user sent their own work or configured on purpose.
  */
-const resolveSmallModel = async ({ client, directory, model, preferredProviderID, preferredModelID, restrictToPreferredProvider }) => {
+const resolveSmallModel = ({ models, model, preferredProviderID, preferredModelID, restrictToPreferredProvider }) => {
   const explicit = parseModelRef(model);
   if (explicit) return { ...explicit, source: 'request' };
 
@@ -184,74 +163,105 @@ const resolveSmallModel = async ({ client, directory, model, preferredProviderID
   if (fromSettings) return { ...fromSettings, source: 'settings' };
 
   if (preferredProviderID) {
-    const small = pickSmallModelInProvider(await listModelInfos(client, directory), preferredProviderID);
+    const small = pickSmallModelInProvider(models, preferredProviderID);
     if (small) return { ...small, source: 'session-provider-small' };
   }
   if (restrictToPreferredProvider && preferredProviderID && preferredModelID) {
     return { providerID: preferredProviderID, modelID: preferredModelID, source: 'session-model' };
   }
 
-  const fallback = await getDefaultModelInfo(client);
-  if (!fallback) return null;
-  return { providerID: fallback.providerID, modelID: fallback.id, source: 'default' };
+  return null;
 };
 
-const JSON_FENCE = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/;
+const noModelError = (reason) => Object.assign(
+  new Error(`No small model available — ${reason}`),
+  { statusCode: 404 },
+);
 
 /**
- * `/api/experimental/generate` has no structured-output mode, so the schema travels in the
- * prompt and the reply is parsed here.
+ * The text of an assistant record's text parts. Content lives in `parts` in
+ * the canonical model, not in the message.
  */
-const buildSchemaInstruction = (responseSchema) =>
-  `Reply with JSON matching this schema and nothing else: ${JSON.stringify(responseSchema)}`;
+const textOfParts = (parts) => (Array.isArray(parts) ? parts : [])
+  .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+  .map((part) => part.text)
+  .join('');
 
-const extractJsonText = (raw) => {
-  const trimmed = typeof raw === 'string' ? raw.trim() : '';
-  if (!trimmed) return null;
-  const fenced = JSON_FENCE.exec(trimmed);
-  const candidate = (fenced ? fenced[1] : trimmed).trim();
-  try {
-    JSON.parse(candidate);
-    return candidate;
-  } catch {
-    return null;
+/**
+ * The newest completed assistant reply on a history page, or `null` while the
+ * turn is still running. The history only carries a turn once it is persisted,
+ * so a completed assistant record with text is the reply.
+ */
+const findAssistantReply = (page) => {
+  const items = Array.isArray(page?.items) ? page.items : [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.info?.role !== 'assistant') continue;
+    if (item.info.time?.completed === undefined) continue;
+    const text = textOfParts(item.parts);
+    if (text.trim()) return text;
+  }
+  return null;
+};
+
+const REPLY_POLL_MS = 250;
+
+/**
+ * Waits for the throwaway session's assistant reply. `prompt` returns as soon
+ * as the runtime accepts the turn — events stream after — so the history is
+ * polled until the reply lands, the deadline passes, or the caller aborts.
+ */
+const waitForAssistantReply = async ({ host, sessionId, timeoutMs, signal }) => {
+  const timeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS;
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const reply = findAssistantReply(await host.getMessages(sessionId));
+    if (reply !== null) return reply;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw Object.assign(
+        new Error('Small model generation timed out'),
+        { statusCode: 504, code: 'small-model-timeout' },
+      );
+    }
+    await delay(Math.min(REPLY_POLL_MS, remaining), undefined, { signal });
   }
 };
 
-const requestOptions = ({ timeoutMs, signal }) => {
-  const timeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS;
-  const signals = [AbortSignal.timeout(timeout)];
-  if (signal) signals.push(signal);
-  return { signal: AbortSignal.any(signals) };
-};
-
 /**
- * Generates text with the user's small model through the running OpenCode.
- * Credentials stay inside OpenCode; this server only sends a prompt.
+ * Generates text with the user's small model through a throwaway OMP session.
+ *
+ * The OMP runtime has no one-shot generate, so a session is opened for the
+ * call, pointed at the resolved model, prompted once, read back, and deleted —
+ * always, even when the read fails. The session never outlives the call.
+ * Credentials stay inside the runtime; this server only sends a prompt.
+ *
+ * Structured output stays out of scope: the runtime has no schema mode, and
+ * the module will not pretend a reply matched one.
  */
 export async function generateSmallModelText({ prompt, system, maxOutputTokens, model, directory, preferredProviderID, preferredModelID, restrictToPreferredProvider = false, responseSchema, timeoutMs, signal, onOverflow = 'truncate' }) {
   if (typeof prompt !== 'string' || !prompt.trim()) {
     throw Object.assign(new Error('prompt is required'), { statusCode: 400 });
   }
+  if (responseSchema) {
+    throw Object.assign(
+      new Error('Structured output is not available — the OMP runtime has no structured-output mode'),
+      { statusCode: 422, code: 'structured-output-unsupported' },
+    );
+  }
 
-  const client = getSmallModelClient(directory);
-  if (!client) throw noClientError();
+  const host = await getOmpRuntimeHost();
+  if (!host) throw noModelError('the OMP runtime is not reachable');
 
-  const resolved = await resolveSmallModel({
-    client,
-    directory,
+  const models = (await listModelInfos()) ?? [];
+  const resolved = resolveSmallModel({
+    models,
     model,
     preferredProviderID,
     preferredModelID,
     restrictToPreferredProvider,
   });
-
-  if (!resolved) {
-    throw Object.assign(
-      new Error('No small model available — OpenCode reports no default model'),
-      { statusCode: 404 },
-    );
-  }
+  if (!resolved) throw noModelError('the OMP runtime resolved no model');
 
   // A caller that must stay on its session's provider is only overruled by an
   // explicit user choice (the settings override or a request model).
@@ -259,17 +269,11 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
     && !['settings', 'request'].includes(resolved.source)
     && preferredProviderID
     && resolved.providerID !== preferredProviderID) {
-    throw Object.assign(
-      new Error('No small model available within the session provider'),
-      { statusCode: 404 },
-    );
+    throw noModelError('no model within the session provider');
   }
 
-  const models = await listModelInfos(client, directory);
   const modelInfo = findModelInfo(models, resolved.providerID, resolved.modelID);
-
   const outputTokens = resolveOutputTokens({ modelInfo, maxOutputTokens });
-
   const clamped = clampPromptToModelLimit({
     prompt: prompt.trim(),
     modelInfo,
@@ -279,61 +283,21 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
     outputReserveTokens: outputTokens,
   });
 
-  // `/api/experimental/generate` takes a single prompt, so the system instructions lead it.
+  // A session prompt takes one message, so the system instructions lead it.
   const sections = [];
   if (typeof system === 'string' && system.trim()) sections.push(system.trim());
   sections.push(clamped.prompt);
-  if (responseSchema) sections.push(buildSchemaInstruction(responseSchema));
   const fullPrompt = sections.join('\n\n');
 
-  const generationOptions = requestOptions({ timeoutMs, signal });
-  const unavailableMessage = `Model unavailable: ${resolved.providerID}/${resolved.modelID}`;
-  const send = async () => {
-    const result = await client.generate.text(
-      { prompt: fullPrompt, model: { id: resolved.modelID, providerID: resolved.providerID } },
-      generationOptions,
-    );
-    return typeof result?.text === 'string' ? result.text : '';
-  };
-
-  const sendWithCatalogRetry = async () => {
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        return await send();
-      } catch (error) {
-        if (error?._tag !== 'InvalidRequestError' || error.message !== unavailableMessage) throw error;
-        // OpenCode 2 can resolve a cold catalog before its models arrive.
-        // This rejection precedes provider dispatch; other failures must not retry.
-        if (attempt < unavailableRetryDelaysMs.length) {
-          await delay(unavailableRetryDelaysMs[attempt], undefined, { signal: generationOptions.signal });
-          continue;
-        }
-        throw Object.assign(new Error(unavailableMessage), {
-          statusCode: 503,
-          code: 'small-model-unavailable',
-        });
-      }
-    }
-  };
-
-  let text = await sendWithCatalogRetry();
-
-  if (responseSchema) {
-    // One retry: a model that ignored the shape once often honours it on a
-    // second pass, and the alternative is failing a walkthrough over a stray
-    // sentence of preamble.
-    let json = extractJsonText(text);
-    if (json === null) {
-      text = await sendWithCatalogRetry();
-      json = extractJsonText(text);
-    }
-    if (json === null) {
-      throw Object.assign(
-        new Error(`${resolved.providerID}/${resolved.modelID} did not return JSON matching the requested schema`),
-        { statusCode: 422, code: 'structured-output-unsupported', providerID: resolved.providerID, modelID: resolved.modelID },
-      );
-    }
-    text = json;
+  const cwd = typeof directory === 'string' && directory.trim() ? directory.trim() : os.tmpdir();
+  const session = await host.createSession({ cwd });
+  let text;
+  try {
+    await host.setModel(session.id, resolved.providerID, resolved.modelID);
+    await host.prompt(session.id, fullPrompt);
+    text = await waitForAssistantReply({ host, sessionId: session.id, timeoutMs, signal });
+  } finally {
+    await host.deleteSession(session.id);
   }
 
   return {
@@ -346,36 +310,19 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
 }
 
 /**
- * Provider ids the small model can actually call. A provider counts when
- * OpenCode has at least one enabled model for it — that is the same test
- * OpenCode applies before letting a chat turn use it.
- *
- * The provider list alone is not enough: it comes back empty on setups where
- * models are perfectly usable, so the model list is the authority and the
- * provider list only contributes names.
+ * Provider ids the small model can call. A provider counts when the runtime
+ * has at least one model for it — OMP's catalog already excludes providers it
+ * has no credential for, and it exposes no provider list of its own.
  */
 export async function listAuthenticatedProviders() {
-  const client = getSmallModelClient();
-  if (!client) return [];
-  try {
-    const [providers, models] = await Promise.all([
-      listProviderInfos(client),
-      listModelInfos(client),
-    ]);
-    const enabled = new Set();
-    for (const model of models) {
-      if (model?.enabled === false) continue;
-      if (typeof model?.providerID === 'string' && model.providerID) enabled.add(model.providerID);
-    }
-    const ids = new Set();
-    for (const provider of providers) {
-      if (typeof provider?.id === 'string' && enabled.has(provider.id)) ids.add(provider.id);
-    }
-    for (const id of enabled) ids.add(id);
-    return Array.from(ids);
-  } catch {
-    return [];
+  const models = await listModelInfos();
+  if (!models) return [];
+  const ids = new Set();
+  for (const model of models) {
+    if (model?.enabled === false) continue;
+    if (typeof model.providerID === 'string' && model.providerID) ids.add(model.providerID);
   }
+  return Array.from(ids);
 }
 
 /**
@@ -393,28 +340,23 @@ const resolveReserveTokens = (outputReserveTokens, limits) => (
 /**
  * Reports which model would be used, without calling it.
  *
- * `structuredOutput` stays `null`: `/api/experimental/generate` has no structured-output
- * mode for any model, and this module emulates it through the prompt. Callers
- * must read `null` as "try it", which is exactly right here — the verdict
- * comes from the reply, not from a capability flag.
+ * `structuredOutput` stays `null`: OMP cannot run a generation at all, so no
+ * model can promise structured output, and the capability is not knowable from
+ * the catalog. Callers read `null` as "not settled", never as `false`.
  */
-export async function describeSmallModel({ directory, preferredProviderID, preferredModelID, outputReserveTokens, overrideModel } = {}) {
-  const client = getSmallModelClient(directory);
-  if (!client) return null;
+export async function describeSmallModel({ preferredProviderID, outputReserveTokens, overrideModel } = {}) {
+  const models = await listModelInfos();
+  if (!models) return null;
 
   // A caller with its own model setting (the diff walkthrough) outranks the
   // small-model chain entirely — it asked for this model on purpose.
-  const resolved = await resolveSmallModel({
-    client,
-    directory,
+  const resolved = resolveSmallModel({
+    models,
     model: overrideModel,
     preferredProviderID,
-    preferredModelID,
-    restrictToPreferredProvider: false,
   });
   if (!resolved) return null;
 
-  const models = await listModelInfos(client, directory);
   const modelInfo = findModelInfo(models, resolved.providerID, resolved.modelID);
   const outputTokenLimit = Number(modelInfo?.limit?.output) > 0 ? Number(modelInfo.limit.output) : null;
 
@@ -424,10 +366,9 @@ export async function describeSmallModel({ directory, preferredProviderID, prefe
   const reserveTokens = resolveReserveTokens(outputReserveTokens, { contextTokens, outputTokenLimit });
   const { maxChars } = getModelInputCharBudget({ modelInfo, outputReserveTokens: reserveTokens });
 
-  // An override can name a model OpenCode has no credential for. It reports
-  // that as a disabled model, and readiness refuses before the user pays for
-  // a failed request. A model we cannot find at all is not evidence either
-  // way, so it counts as usable.
+  // OMP's catalog is already credential-filtered, so a model it lists is
+  // callable. A model we cannot find at all is not evidence either way, so it
+  // counts as usable.
   const hasLogin = modelInfo ? modelInfo.enabled !== false : true;
 
   return {

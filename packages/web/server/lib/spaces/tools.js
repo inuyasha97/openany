@@ -18,8 +18,8 @@ export const TOOLS_STAGING_PATH = '/tmp/openchamber-fill';
 const WEB_TARBALL_NAME = 'openchamber-web.tgz';
 const SDK_TARBALL_NAME = 'openchamber-sdk.tgz';
 
-// Exact versions for the three packages this module names, never a range or a URL.
-// That pins those three only. Their own dependencies are still ranges, and no lock file travels
+// Exact versions for the packages this module names, never a range or a URL.
+// That pins those only. Their own dependencies are still ranges, and no lock file travels
 // with the source, so two fills of one key can differ in a transitive package. A known limit.
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
@@ -52,14 +52,31 @@ const requireRevision = (value) => {
   return value;
 };
 
-/** OpenCode and its plugin always share one version. */
-const openCodePackages = (version) => ({ '@opencode/cli': version, '@opencode/plugin': version });
+// The OMP CLI version a released host installs. The desktop build stages the same version
+// (`packages/electron/scripts/prepare-omp-cli.mjs`), and `OPENCHAMBER_OMP_CLI_VERSION` overrides both.
+export const OMP_CLI_VERSION = '18.1.11';
+
+const hostOmpCliVersion = () => process.env.OPENCHAMBER_OMP_CLI_VERSION ?? OMP_CLI_VERSION;
 
 /**
- * The versions a released host installs: its own `@openchamber/web`, and OpenCode at the
- * version of the `@opencode/client` this server was built against.
+ * The OMP CLI is one npm package and `omp` is its only bin, so there is no second package to name
+ * beside it the way OpenCode's plugin was.
+ *
+ * Worth knowing before a space is expected to run it: the npm bin is a Bun program — the file
+ * starts with `#!/usr/bin/env bun` and the package declares `engines.bun` — while the pinned space
+ * image is Node only. A tools volume therefore hands a space an `omp` that is present and cannot
+ * start until the image (or the volume) also carries Bun, or until the standalone binary the
+ * desktop build stages is put into the volume instead. That choice is the place's, not this
+ * module's; the space that owns it is `places/docker.js` and `layout.js`.
  */
-export function readHostToolVersions(packageJsonUrl = new URL('../../../package.json', import.meta.url)) {
+const ompPackages = (version) => ({ '@oh-my-pi/pi-coding-agent': version });
+
+/**
+ * The versions a released host installs: its own `@openchamber/web`, and the OMP CLI it was built
+ * against. The agent version is not read from the manifest — this server spawns the agent, it does
+ * not depend on it — so it comes from the pin above, overridable the way the desktop build's is.
+ */
+export function readHostToolVersions(packageJsonUrl = new URL('../../../package.json', import.meta.url), ompCliVersion = hostOmpCliVersion()) {
   let manifest;
   try {
     manifest = JSON.parse(fs.readFileSync(packageJsonUrl, 'utf8'));
@@ -68,18 +85,22 @@ export function readHostToolVersions(packageJsonUrl = new URL('../../../package.
   }
   return {
     webVersion: requireVersion(manifest.version, '@openchamber/web'),
-    openCodeVersion: requireVersion(manifest.dependencies?.['@opencode/client'], 'OpenCode'),
+    ompVersion: requireVersion(ompCliVersion, 'the OMP CLI'),
   };
 }
 
-export function createRegistryToolsSource({ webVersion, openCodeVersion, revision = '' }) {
+/**
+ * The source a released host fills: `@openchamber/web` at `webVersion`, and the OMP CLI. A caller
+ * that names no `ompVersion` — every call site of the server today — gets this host's pinned one.
+ */
+export function createRegistryToolsSource({ webVersion, ompVersion = hostOmpCliVersion(), revision = '' }) {
   const packages = {
     '@openchamber/web': requireVersion(webVersion, '@openchamber/web'),
-    ...openCodePackages(requireVersion(openCodeVersion, 'OpenCode')),
+    ...ompPackages(requireVersion(ompVersion, 'the OMP CLI')),
   };
   return finishSource({
     kind: 'registry',
-    description: `web ${webVersion}, opencode ${openCodeVersion}`,
+    description: `web ${webVersion}, omp ${ompVersion}`,
     canonical: { kind: 'registry', packages, revision: requireRevision(revision) },
     packageJson: packageJsonText({ dependencies: packages }),
     files: [],
@@ -91,7 +112,7 @@ export function createRegistryToolsSource({ webVersion, openCodeVersion, revisio
  * The override makes every `@openchamber/sdk` in the tree the local tarball, also the one
  * that `web` asks for by version number.
  */
-export function createPackedToolsSource({ webTarballPath, sdkTarballPath, openCodeVersion, revision = '' }) {
+export function createPackedToolsSource({ webTarballPath, sdkTarballPath, ompVersion = hostOmpCliVersion(), revision = '' }) {
   const read = (filePath, what) => {
     try {
       return fs.readFileSync(filePath);
@@ -103,7 +124,7 @@ export function createPackedToolsSource({ webTarballPath, sdkTarballPath, openCo
     { name: WEB_TARBALL_NAME, bytes: read(webTarballPath, 'web') },
     { name: SDK_TARBALL_NAME, bytes: read(sdkTarballPath, 'sdk') },
   ];
-  const packages = openCodePackages(requireVersion(openCodeVersion, 'OpenCode'));
+  const packages = ompPackages(requireVersion(ompVersion, 'the OMP CLI'));
   return finishSource({
     kind: 'packed',
     description: 'development build',
