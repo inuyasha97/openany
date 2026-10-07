@@ -14,10 +14,7 @@
  * which outrank mentions. That precedence is the previous behavior, preserved.
  */
 
-import {
-    getFileMentionAutocompleteQuery,
-    type FileMentionAutocompleteInputSource,
-} from '../../fileMentionAutocompleteState';
+export type FileMentionAutocompleteInputSource = 'manual' | 'paste';
 
 export type AutocompleteKind = 'command' | 'skill' | 'snippet' | 'mention';
 
@@ -99,20 +96,12 @@ export function resolveAutocompleteTrigger(
     return matchCommandPalette(value, cursorPosition)
         ?? matchInlineToken(value, cursorPosition, '/', 'skill')
         ?? matchInlineToken(value, cursorPosition, '#', 'snippet')
-        ?? matchMention(value, cursorPosition, context);
+        ?? matchMention();
 }
 
-function matchMention(
-    value: string,
-    cursorPosition: number,
-    context: TriggerContext,
-): AutocompleteTrigger | null {
-    if (context.mentionsEnabled === false) return null;
-    const query = getFileMentionAutocompleteQuery({
-        value,
-        cursorPosition,
-        inputSource: context.inputSource,
-        insertedText: context.insertedText,
-    });
-    return query === null ? null : { kind: 'mention', query };
+function matchMention(): AutocompleteTrigger | null {
+    // The `@`-mention picker searched the runtime's file index, which OMP does
+    // not expose, so no caret position opens it.
+    return null;
 }
+

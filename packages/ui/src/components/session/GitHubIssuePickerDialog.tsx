@@ -485,7 +485,6 @@ export function GitHubIssuePickerDialog({
           { text: contextText, synthetic: true },
         ],
         variant,
-        undefined,
         { sessionId },
       ).catch((e) => {
         const message = e instanceof Error ? e.message : String(e);

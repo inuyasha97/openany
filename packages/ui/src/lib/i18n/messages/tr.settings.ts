@@ -1943,7 +1943,6 @@ export const settingsDict = {
   'settings.openchamber.visual.section.chatDisplay': 'Görüntüleme',
   'settings.openchamber.visual.section.chatMessageOptions': 'Mesaj seçenekleri',
   'settings.openchamber.visual.section.chatFeatures': 'Özellikler',
-  'settings.openchamber.visual.section.messageStreamTransport': 'Mesaj Akışı Taşıyıcısı',
   'settings.openchamber.visual.section.activityDefault': 'Etkinlik Varsayılanı',
   'settings.openchamber.visual.section.activityDefaultAria': 'Etkinlik varsayılan modu',
   'settings.openchamber.visual.section.sessionActivity': 'Oturum Etkinliği',

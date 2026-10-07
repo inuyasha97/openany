@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { MessagePage } from '@/lib/opencode/client'
+import type { MessagePage } from "@/lib/agent/contract"
 
 import { SessionMessageLoader } from './session-message-loader'
 import { ChildStoreManager } from './child-store'

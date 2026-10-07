@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:
 import type { Session } from '@/lib/opencode/model';
 import type { AgentSession } from '@/lib/agent/contract';
 import * as sessionRoutes from './session-archive-batch';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { switchRuntimeEndpoint } from '@/lib/runtime-switch';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useUIStore } from '@/stores/useUIStore';
@@ -12,6 +12,12 @@ import { buildSessionRetentionCandidates, runSessionRetentionCleanup, useSession
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
 import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+import { createOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime';
+const agentSurface = createOpenCodeStubSurface()
+// `spyOn` can only install a mock over an existing method, so give the two
+// runtime reads this suite drives a default the spies restore to.
+agentSurface.getSession = async () => { throw new Error('getSession not stubbed') }
+agentSurface.deleteSession = async () => { throw new Error('deleteSession not stubbed') }
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.
@@ -52,7 +58,7 @@ beforeEach(() => {
     const state = useGlobalSessionsStore.getState();
     return { activeSessions: state.activeSessions, archivedSessions: state.archivedSessions };
   });
-  spyOn(opencodeClient, 'getSession').mockImplementation(async (id) => {
+  spyOn(agentSurface, 'getSession').mockImplementation(async (id) => {
     const item = useGlobalSessionsStore.getState().entityById.get(id);
     if (!item) throw Object.assign(new Error('not found'), { status: 404 });
     return { ...item, runtimeId: 'opencode', nativeSessionId: item.id };
@@ -136,7 +142,7 @@ describe('retention execution', () => {
   test('refuses a failed global load even when fallback sessions remain', async () => {
     seed([session('old')]);
     useGlobalSessionsStore.setState({ status: 'error' });
-    const remove = spyOn(opencodeClient, 'deleteSession');
+    const remove = spyOn(agentSurface, 'deleteSession');
     await expect(runSessionRetentionCleanup({ force: true })).rejects.toThrow('complete session list');
     expect(remove.mock.calls).toHaveLength(0);
     expect(useGlobalSessionsStore.getState().entityById.has('old')).toBe(true);
@@ -144,7 +150,7 @@ describe('retention execution', () => {
 
   test('requests fresh authority instead of relying on a previously loaded candidate', async () => {
     seed([session('old')]);
-    const remove = spyOn(opencodeClient, 'deleteSession');
+    const remove = spyOn(agentSurface, 'deleteSession');
     spyOn(useGlobalSessionsStore.getState(), 'loadSessions').mockImplementation(async () => {
       seed([session('old', { time: { created: now - 60 * day, updated: now } })]);
       const state = useGlobalSessionsStore.getState();
@@ -156,7 +162,7 @@ describe('retention execution', () => {
 
   test('treats an authoritative 404 as completed and removes stale cached state', async () => {
     seed([session('gone')]);
-    spyOn(opencodeClient, 'deleteSession').mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
+    spyOn(agentSurface, 'deleteSession').mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
     const result = await runSessionRetentionCleanup({ force: true });
     expect(result.completedIds).toEqual(['gone']);
     expect(result.failedIds).toEqual([]);
@@ -165,7 +171,7 @@ describe('retention execution', () => {
 
   test('does not accept a false delete confirmation, and preserves unrelated successes', async () => {
     seed([session('bad'), session('good')]);
-    spyOn(opencodeClient, 'deleteSession').mockImplementation(async (id) => id !== 'bad');
+    spyOn(agentSurface, 'deleteSession').mockImplementation(async (id) => id !== 'bad');
     const result = await runSessionRetentionCleanup({ force: true });
     expect(result.completedIds).toEqual(['good']);
     expect(result.failedIds).toEqual(['bad']);
@@ -175,7 +181,7 @@ describe('retention execution', () => {
 
   test('keeps a failed child and its ancestors without preventing unrelated deletion', async () => {
     seed([session('root'), session('child', { parentID: 'root' }), session('leaf', { parentID: 'child' }), session('other')]);
-    const remove = spyOn(opencodeClient, 'deleteSession').mockImplementation(async (id) => id !== 'leaf');
+    const remove = spyOn(agentSurface, 'deleteSession').mockImplementation(async (id) => id !== 'leaf');
     const result = await runSessionRetentionCleanup({ force: true });
     expect(result.completedIds).toEqual(['other']);
     expect(result.failedIds).toEqual(['leaf', 'child', 'root']);
@@ -184,7 +190,7 @@ describe('retention execution', () => {
 
   test('rechecks selection, recent activity and new descendants during the batch', async () => {
     seed([session('first'), session('selected'), session('updated'), session('parent')]);
-    const remove = spyOn(opencodeClient, 'deleteSession').mockImplementation(async () => {
+    const remove = spyOn(agentSurface, 'deleteSession').mockImplementation(async () => {
       useSessionUIStore.setState({ currentSessionId: 'selected' });
       useGlobalSessionsStore.getState().upsertSessions([
         session('updated', { time: { created: 1, updated: now } }),
@@ -199,7 +205,7 @@ describe('retention execution', () => {
 
   test('stops at a runtime switch without reconciling the destination or its cooldown', async () => {
     seed([session('first'), session('second')]);
-    const remove = spyOn(opencodeClient, 'deleteSession').mockImplementation(async () => {
+    const remove = spyOn(agentSurface, 'deleteSession').mockImplementation(async () => {
       switchRuntimeEndpoint({ apiBaseUrl: 'https://retention-other.test', runtimeKey: 'retention-other' });
       seed([session('first'), session('second')]);
       useUIStore.setState({ autoDeleteLastRunAt: 123 });
@@ -231,7 +237,7 @@ describe('retention execution', () => {
     });
     seed(sessions);
     const existing = new Set(sessions.map((item) => item.id));
-    const remove = spyOn(opencodeClient, 'deleteSession').mockImplementation(async (id) => {
+    const remove = spyOn(agentSurface, 'deleteSession').mockImplementation(async (id) => {
       if (!existing.has(id)) throw Object.assign(new Error('cascade already deleted'), { status: 404 });
       existing.delete(id);
       for (const child of sessions) if (child.parentID === id) existing.delete(child.id);
@@ -281,7 +287,7 @@ describe('archived-only retention', () => {
   test('forces deletion in core even if a stale setting still requests archive', async () => {
     seed([...recentArchived, archived('parent'), archived('child', { parentID: 'parent' }), session('unarchived')]);
     useUIStore.setState({ sessionRetentionOnlyArchived: true, sessionRetentionAction: 'archive' });
-    const remove = spyOn(opencodeClient, 'deleteSession').mockResolvedValue(true);
+    const remove = spyOn(agentSurface, 'deleteSession').mockResolvedValue(true);
     const update = spyOn(sessionRoutes, 'requestSessionArchiveBatch');
     const result = await runSessionRetentionCleanup({ force: true });
     expect(result.action).toBe('delete');
@@ -296,7 +302,7 @@ describe('archived-only retention', () => {
   test('keeps failed archived descendants and reports their blocked ancestors', async () => {
     seed([...recentArchived, archived('parent'), archived('child', { parentID: 'parent' }), archived('other')]);
     useUIStore.getState().setSessionRetentionOnlyArchived(true);
-    const remove = spyOn(opencodeClient, 'deleteSession').mockImplementation(async (id) => id !== 'child');
+    const remove = spyOn(agentSurface, 'deleteSession').mockImplementation(async (id) => id !== 'child');
     const result = await runSessionRetentionCleanup({ force: true });
     expect(result.completedIds).toEqual(['other']);
     expect(result.failedIds).toEqual(['child', 'parent']);
@@ -307,7 +313,7 @@ describe('archived-only retention', () => {
   test('skips sessions restored during cleanup and parents with newly archived children', async () => {
     seed([...recentArchived, archived('first'), archived('restored'), archived('parent')]);
     useUIStore.getState().setSessionRetentionOnlyArchived(true);
-    const remove = spyOn(opencodeClient, 'deleteSession').mockImplementation(async () => {
+    const remove = spyOn(agentSurface, 'deleteSession').mockImplementation(async () => {
       useGlobalSessionsStore.getState().upsertSessions([
         session('restored', { time: { created: 1, updated: 2, archived: 0 } }),
         archived('new-child', { parentID: 'parent', time: { created: now, updated: now, archived: now } }),

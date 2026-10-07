@@ -35,7 +35,7 @@ let manager: ChildStoreManager
 
 beforeEach(() => {
   manager = new ChildStoreManager()
-  setSyncRefs({} as never, manager, PARENT)
+  setSyncRefs(manager, PARENT)
   useSessionUIStore.getState().setCurrentSession(null)
 })
 

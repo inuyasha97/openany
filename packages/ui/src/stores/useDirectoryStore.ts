@@ -1,12 +1,11 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { getNormalizedParentDirectory, normalizePath } from '@/lib/pathNormalization';
 import { getDesktopHomeDirectory, isVSCodeRuntime } from '@/lib/desktop';
 import { getVSCodeBootstrapConfig } from '@/lib/vscodeBootstrap';
 import { subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { updateDesktopSettings } from '@/lib/persistence';
-import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { streamDebugEnabled } from '@/stores/utils/streamDebug';
 import { getDeferredSafeStorage } from './utils/safeStorage';
 
@@ -35,14 +34,6 @@ const persistedLastDirectory = safeStorage.getItem('lastDirectory');
 const initialHasPersistedDirectory =
   typeof persistedLastDirectory === 'string' && persistedLastDirectory.length > 0;
 
-
-const invalidateFileSearchCache = (scope?: string | null) => {
-  try {
-    useFileSearchStore.getState().invalidateDirectory(scope);
-  } catch (error) {
-    console.warn('Failed to invalidate file search cache:', error);
-  }
-};
 
 const normalizeDirectoryPath = (value: string): string => normalizePath(value) ?? '';
 
@@ -156,7 +147,7 @@ const initializeHomeDirectory = async () => {
   };
 
   try {
-    const fsHome = await opencodeClient.getFilesystemHome();
+    const fsHome = await openChamberClient.getFilesystemHome();
     const resolved = acceptCandidate(fsHome);
     if (resolved) {
       return resolved;
@@ -166,7 +157,7 @@ const initializeHomeDirectory = async () => {
   }
 
   try {
-    const info = await opencodeClient.getSystemInfo();
+    const info = await openChamberClient.getSystemInfo();
     const resolved = acceptCandidate(info?.homeDirectory);
     if (resolved) {
       return resolved;
@@ -216,7 +207,7 @@ const initialCurrentDirectory = (() => {
 })();
 
 if (initialCurrentDirectory) {
-  opencodeClient.setDirectory(initialCurrentDirectory);
+  openChamberClient.setDirectory(initialCurrentDirectory);
 }
 const initialIsHomeReady = Boolean(initialHomeDirectory && initialHomeDirectory !== '/');
 
@@ -240,8 +231,7 @@ export const useDirectoryStore = create<DirectoryStore>()(
           console.log('[DirectoryStore] setDirectory called with path:', resolvedPath);
         }
 
-        opencodeClient.setDirectory(resolvedPath);
-        invalidateFileSearchCache();
+        openChamberClient.setDirectory(resolvedPath);
 
         set((state) => {
           const alreadyCurrent = state.directoryHistory[state.historyIndex] === resolvedPath;
@@ -267,8 +257,7 @@ export const useDirectoryStore = create<DirectoryStore>()(
           const newIndex = state.historyIndex - 1;
           const newDirectory = state.directoryHistory[newIndex];
 
-          opencodeClient.setDirectory(newDirectory);
-          invalidateFileSearchCache();
+          openChamberClient.setDirectory(newDirectory);
 
           safeStorage.setItem('lastDirectory', newDirectory);
 
@@ -290,8 +279,7 @@ export const useDirectoryStore = create<DirectoryStore>()(
           const newIndex = state.historyIndex + 1;
           const newDirectory = state.directoryHistory[newIndex];
 
-          opencodeClient.setDirectory(newDirectory);
-          invalidateFileSearchCache();
+          openChamberClient.setDirectory(newDirectory);
 
           safeStorage.setItem('lastDirectory', newDirectory);
 
@@ -379,8 +367,7 @@ export const useDirectoryStore = create<DirectoryStore>()(
 
         if ((shouldReplaceCurrent || currentChanged) && resolvedReady) {
           const nextDirectory = shouldReplaceCurrent ? resolvedHome : (resolvedCurrent as string);
-          opencodeClient.setDirectory(nextDirectory);
-          invalidateFileSearchCache();
+          openChamberClient.setDirectory(nextDirectory);
           safeStorage.setItem('lastDirectory', nextDirectory);
           void updateDesktopSettings({ lastDirectory: nextDirectory });
 

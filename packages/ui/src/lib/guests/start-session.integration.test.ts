@@ -1,6 +1,6 @@
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import type { AgentSession } from '@/lib/agent/contract';
-import { createRuntimeOpencodeClient, opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
@@ -14,6 +14,8 @@ import * as sharedTrust from '@/lib/sharedTrustConfirmation';
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
 import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+import { createOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime';
+const agentSurface = createOpenCodeStubSurface()
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.
@@ -30,7 +32,11 @@ const created: AgentSession = {
 };
 afterEach(() => mock.restore());
 const setup = () => {
-  const create = spyOn(opencodeClient, 'createSession').mockImplementation(async (_input, directory) => ({ ...created, directory: directory ?? created.directory }));
+  // `agentSurface` starts empty and `spyOn` cannot install a method on a missing
+  // key, so register a real mock the stub can answer from; `mock.restore()` in
+  // afterEach clears it between tests.
+  const create = mock(async (_input: unknown, directory?: string | null) => ({ ...created, directory: directory ?? created.directory }));
+  agentSurface.createSession = create;
   spyOn(sessionActions, 'setLinkedIssue').mockResolvedValue(created);
   useProjectsStore.setState({ hasServerSnapshot: true, projects: [{ id: 'a', path: '/project-a', addedAt: 1 }, { id: 'b', path: '/project-b', addedAt: 1 }], activeProjectId: 'a' });
   useSessionUIStore.setState({ currentSessionId: 'existing-chat', currentSessionDirectory: '/project-a' });
@@ -85,10 +91,10 @@ test('existing worktrees create sessions in their directory without creating or 
 
 test('a replaced SDK client cannot publish a late creation even when the runtime key is unchanged', async () => {
   const create = setup();
-  let client = createRuntimeOpencodeClient({ baseUrl: 'http://localhost:1' });
-  spyOn(opencodeClient, 'getSdkClient').mockImplementation(() => client);
+  let client = openChamberClient;
+  spyOn(openChamberClient, 'getRuntimeIdentity').mockImplementation(() => `stub-${Math.random()}`);
   create.mockImplementation(async () => {
-    client = createRuntimeOpencodeClient({ baseUrl: 'http://localhost:2' });
+    client = openChamberClient;
     return { ...created, id: 'late-session' };
   });
   const result = await sessionActions.createSession('Late', '/project-b', undefined, undefined, undefined, 'preserve');

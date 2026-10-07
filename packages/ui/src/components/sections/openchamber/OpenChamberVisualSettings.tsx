@@ -198,24 +198,6 @@ const CHAT_RENDER_MODE_OPTIONS: Option<'sorted' | 'live'>[] = [
     },
 ];
 
-const MESSAGE_STREAM_TRANSPORT_OPTIONS: Option<'auto' | 'ws' | 'sse'>[] = [
-    {
-        id: 'auto',
-        labelKey: 'settings.openchamber.visual.option.messageTransport.auto.label',
-        descriptionKey: 'settings.openchamber.visual.option.messageTransport.auto.description',
-    },
-    {
-        id: 'ws',
-        labelKey: 'settings.openchamber.visual.option.messageTransport.ws.label',
-        descriptionKey: 'settings.openchamber.visual.option.messageTransport.ws.description',
-    },
-    {
-        id: 'sse',
-        labelKey: 'settings.openchamber.visual.option.messageTransport.sse.label',
-        descriptionKey: 'settings.openchamber.visual.option.messageTransport.sse.description',
-    },
-];
-
 const ACTIVITY_RENDER_MODE_OPTIONS: Option<'collapsed' | 'summary'>[] = [
     {
         id: 'collapsed',
@@ -430,9 +412,6 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
     const setAllowPromptingSubagentSessions = useUIStore(state => state.setAllowPromptingSubagentSessions);
     const draftStartersVisible = useUIStore(state => state.draftStartersVisible);
     const setDraftStartersVisible = useUIStore(state => state.setDraftStartersVisible);
-    const messageStreamTransport = useConfigStore((state) => state.settingsMessageStreamTransport);
-    const setMessageStreamTransport = useConfigStore((state) => state.setSettingsMessageStreamTransport);
-    const effectiveMessageStreamTransport = messageStreamTransport;
     const settingsDefaultFileViewerPreview = useConfigStore((state) => state.settingsDefaultFileViewerPreview);
     const setSettingsDefaultFileViewerPreview = useConfigStore((state) => state.setSettingsDefaultFileViewerPreview);
     const isSettingsDialogOpen = useUIStore(state => state.isSettingsDialogOpen);
@@ -584,11 +563,6 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
         void updateDesktopSettings({ chatRenderMode: mode });
     }, [setChatRenderMode]);
 
-    const handleMessageStreamTransportChange = React.useCallback((mode: 'auto' | 'ws' | 'sse') => {
-        setMessageStreamTransport(mode);
-        void updateDesktopSettings({ messageStreamTransport: mode });
-    }, [setMessageStreamTransport]);
-
     const handleInputHistoryScopeChange = React.useCallback((scope: InputHistoryScope) => {
         applyInputHistoryScope(scope);
         void updateDesktopSettings({ inputHistoryScope: scope });
@@ -731,7 +705,6 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
         || shouldShow('enterToSend');
     const showBehaviorDisplaySettings = shouldShow('chatRenderMode')
         || shouldShow('activityRenderMode');
-    const showTransportSection = shouldShow('messageTransport');
     const showBehaviorMessageOptions = shouldShow('userMessageRendering')
         || shouldShow('mermaidRendering')
         || (shouldShow('diffLayout') && !isVSCode)
@@ -1720,37 +1693,10 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
                             </SettingsSection>
                         )}
 
-                        {showTransportSection && (
-                            <SettingsSection
-                                title={t('settings.openchamber.visual.section.messageStreamTransport')}
-                                divider={showBehaviorDisplaySettings || behaviorSectionDivider}
-                                settingsItem="chat.message-transport"
-                                contentClassName="space-y-2"
-                            >
-                                <SettingsChipGroup
-                                    value={effectiveMessageStreamTransport}
-                                    options={MESSAGE_STREAM_TRANSPORT_OPTIONS.map((option) => ({
-                                        value: option.id,
-                                        label: tUnsafe(option.labelKey),
-                                    }))}
-                                    onChange={handleMessageStreamTransportChange}
-                                    aria-label={t('settings.openchamber.visual.section.messageStreamTransport')}
-                                />
-                                {(() => {
-                                    const option = MESSAGE_STREAM_TRANSPORT_OPTIONS.find((item) => item.id === effectiveMessageStreamTransport);
-                                    return option?.descriptionKey ? (
-                                        <span className="typography-meta text-muted-foreground">
-                                            {tUnsafe(option.descriptionKey)}
-                                        </span>
-                                    ) : null;
-                                })()}
-                            </SettingsSection>
-                        )}
-
                         {showBehaviorMessageOptions && (
                             <SettingsSection
                                 title={t('settings.openchamber.visual.section.chatMessageOptions')}
-                                divider={showBehaviorDisplaySettings || showTransportSection || behaviorSectionDivider}
+                                divider={showBehaviorDisplaySettings || behaviorSectionDivider}
                             >
                                 {/* Flat 2×2 grid so row headers share a baseline (not stacked columns). */}
                                 <SettingsTwoColumn className="lg:gap-y-6">
@@ -1874,7 +1820,7 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
                                 {shouldShow('expandedTools') && (
                                     <SettingsSection
                                         title={t('settings.openchamber.visual.section.showToolsOpenedByDefault')}
-                                        divider={showBehaviorDisplaySettings || showTransportSection || showBehaviorMessageOptions || behaviorSectionDivider}
+                                        divider={showBehaviorDisplaySettings || showBehaviorMessageOptions || behaviorSectionDivider}
                                         contentClassName={SETTINGS_OPTION_STACK_CLASS}
                                     >
                                         <SettingsCheckboxRow

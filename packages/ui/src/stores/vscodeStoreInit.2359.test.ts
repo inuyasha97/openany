@@ -77,8 +77,8 @@ mock.module('@/contexts/runtimeAPIRegistry', () => ({
   getRegisteredRuntimeAPIs: () => null,
 }));
 
-mock.module('@/lib/opencode/client', () => ({
-  opencodeClient: {
+mock.module('@/lib/openchamber/client', () => ({
+  openChamberClient: {
     setDirectory: () => undefined,
     getDirectory: () => WORKSPACE,
     getFilesystemHome: async () => WORKSPACE,
@@ -94,12 +94,6 @@ mock.module('@/lib/runtime-switch', () => ({
   subscribeRuntimeEndpointChanged: () => () => undefined,
   getRuntimeApiBaseUrl: () => 'http://127.0.0.1:9',
   getRuntimeKey: () => 'test',
-}));
-
-mock.module('@/stores/useFileSearchStore', () => ({
-  useFileSearchStore: {
-    getState: () => ({ clearCache: () => undefined, invalidateDirectory: () => undefined }),
-  },
 }));
 
 describe('VS Code store init before RuntimeAPIs (#2359)', () => {

@@ -1,7 +1,6 @@
 import React, { act } from 'react';
 import { describe, expect, test } from 'bun:test';
 import { createRoot } from 'react-dom/client';
-import { OpenCode } from '@opencode/client';
 import { Window } from 'happy-dom';
 
 import { I18nProvider } from '@/lib/i18n';
@@ -16,10 +15,6 @@ import { CONTEXT_METADATA_KEY } from '@/lib/messages/contextParts';
 // import) out of the test graph; the expand affordance is mode-independent.
 useUIStore.setState({ userMessageRenderingMode: 'plain' });
 
-const sdk = OpenCode.make({
-    baseUrl: 'http://localhost',
-    fetch: async () => new Response('[]', { headers: { 'Content-Type': 'application/json' } }),
-});
 
 // bun test shares globalThis across a file; install a happy-dom window for the
 // client-only measurement effect, mirroring ReasoningPart.test.tsx.
@@ -157,7 +152,7 @@ describe('UserTextPart expand affordance (issue #3742)', () => {
         try {
             await act(async () => {
                 root.render(
-                    <SyncProvider sdk={sdk} directory="">
+                    <SyncProvider runtimeIdentity="test-runtime" directory="">
                         <I18nProvider>
                             <UserTextPart
                                 part={part}
@@ -204,7 +199,7 @@ describe('UserTextPart expand affordance (issue #3742)', () => {
         try {
             await act(async () => {
                 root.render(
-                    <SyncProvider sdk={sdk} directory="">
+                    <SyncProvider runtimeIdentity="test-runtime" directory="">
                         <I18nProvider>
                             <UserTextPart
                                 part={part}
@@ -246,7 +241,7 @@ describe('UserTextPart expand affordance (issue #3742)', () => {
         try {
             await act(async () => {
                 root.render(
-                    <SyncProvider sdk={sdk} directory="">
+                    <SyncProvider runtimeIdentity="test-runtime" directory="">
                         <I18nProvider>
                             <UserTextPart
                                 part={part}

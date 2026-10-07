@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createRuntimeOpencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { addRuntimeProxyHeaders, buildRuntimeFetchUrl, isLatin1Safe, runtimeFetch, sanitizeHeadersForBrowser } from './runtime-fetch';
 import { clearRuntimeAuthCredentialProvider, setRuntimeBearerToken } from './runtime-auth';
 import { configureRuntimeUrlResolver, getRuntimeUrlResolver, setRuntimeUrlResolver } from './runtime-url';
@@ -81,7 +81,7 @@ describe('runtimeFetch transport contract', () => {
     }
   });
 
-  test('preserves bodies from actual SDK mutation requests on same-origin runtimes', async () => {
+  test('preserves method, content-type, JSON bodies and caller headers for same-origin mutations', async () => {
     const previous = getRuntimeUrlResolver();
     const originalWindow = globalThis.window;
     const calls: Array<{ url: string; method: string; body: string; headers: Headers }> = [];
@@ -94,31 +94,35 @@ describe('runtimeFetch transport contract', () => {
       });
 
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = input instanceof Request ? input : new Request(input, init);
+        // Same-origin runtime paths reach the transport relative; the document
+        // origin is what resolves them in the browser.
+        const request = input instanceof Request
+          ? input
+          : new Request(new URL(String(input), 'https://app.example'), init);
         calls.push({
           url: request.url,
           method: request.method,
           body: await request.clone().text(),
           headers: request.headers,
         });
-        // The generated client checks each route's declared success status:
-        // staging a revert answers 200 with a body, the other mutations 204.
-        if (request.url.endsWith('/revert/stage')) {
-          return new Response(JSON.stringify({ ok: true, id: 'ses_1', time: { created: 1 } }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          });
-        }
         return new Response(null, { status: 204 });
       }) as typeof fetch;
 
-      const client = createRuntimeOpencodeClient({ baseUrl: 'https://app.example/api', directory: '/repo' });
-
-      await client.session.revert.stage({ sessionID: 'ses_1', messageID: 'msg_1' });
-      await client.session.shell({ sessionID: 'ses_1', command: 'ls' });
-      await client.session.update({ sessionID: 'ses_1', title: 'Renamed' });
-      await client.permission.reply({ sessionID: 'ses_1', requestID: 'perm_1', decision: 'once' });
-      await client.session.form.reply({ sessionID: 'ses_1', formID: 'form_1', answer: { confirm: true } });
+      // The mutation bodies the fork's own callers send: session revert, a
+      // shell command, a rename, a permission reply and a form answer.
+      const jsonPost = {
+        method: 'POST' as const,
+        headers: { 'content-type': 'application/json' },
+      };
+      await runtimeFetch('/api/session/ses_1/revert/stage', { ...jsonPost, body: JSON.stringify({ messageID: 'msg_1' }) });
+      await runtimeFetch('/api/session/ses_1/shell', { ...jsonPost, body: JSON.stringify({ command: 'ls' }) });
+      await runtimeFetch('/api/session/ses_1', { ...jsonPost, method: 'PATCH', body: JSON.stringify({ title: 'Renamed' }) });
+      await runtimeFetch('/api/session/ses_1/permission/perm_1/reply', { ...jsonPost, body: JSON.stringify({ decision: 'once' }) });
+      await runtimeFetch('/api/session/ses_1/form/form_1/reply', {
+        ...jsonPost,
+        headers: { 'content-type': 'application/json', 'x-opencode-directory': encodeURIComponent('/repo') },
+        body: JSON.stringify({ answer: { confirm: true } }),
+      });
 
       expect(calls.map((call) => call.url)).toEqual([
         'https://app.example/api/session/ses_1/revert/stage',
@@ -135,8 +139,13 @@ describe('runtimeFetch transport contract', () => {
         'application/json',
         'application/json',
       ]);
-      // Every request carries the directory as a header, not a query parameter.
-      expect(new Set(calls.map((call) => call.headers.get('x-opencode-directory')))).toEqual(new Set(['%2Frepo']));
+      // The directory travels as a header, URI-encoded, never as a query
+      // parameter, and the transport passes an already-encoded value through
+      // untouched rather than encoding it a second time.
+      expect(calls.map((call) => call.headers.get('x-opencode-directory'))).toEqual([
+        null, null, null, null, '%2Frepo',
+      ]);
+      expect(calls.every((call) => !call.url.includes('directory='))).toBe(true);
       expect(calls.map((call) => JSON.parse(call.body))).toEqual([
         { messageID: 'msg_1' },
         { command: 'ls' },

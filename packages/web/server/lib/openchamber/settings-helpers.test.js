@@ -227,20 +227,6 @@ describe('settings helpers', () => {
     expect(helpers.formatSettingsResponse({ editorFontSize: 20 })).toMatchObject({ editorFontSize: 20 });
   });
 
-  it('accepts messageStreamTransport as a persisted shared setting', () => {
-    const helpers = createTestHelpers();
-
-    expect(helpers.sanitizeSettingsUpdate({ messageStreamTransport: 'ws' })).toEqual({
-      messageStreamTransport: 'ws',
-    });
-    expect(helpers.sanitizeSettingsUpdate({ messageStreamTransport: 'sse' })).toEqual({
-      messageStreamTransport: 'sse',
-    });
-    expect(helpers.sanitizeSettingsUpdate({ messageStreamTransport: 'auto' })).toEqual({
-      messageStreamTransport: 'auto',
-    });
-  });
-
   it('rejects invalid messageStreamTransport values', () => {
     const helpers = createTestHelpers();
 

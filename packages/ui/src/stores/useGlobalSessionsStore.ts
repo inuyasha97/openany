@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Session } from '@/lib/opencode/model';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { getAgentRuntime } from '@/lib/agent/registry';
 import { isAdditionalRuntimeSession, listAdditionalRuntimeSessions } from '@/lib/agent/additional-sessions';
 import { filterManagedChatsForRuntime, listGlobalSessionPages, splitGlobalSessionsByArchived, type SessionPageLister } from '@/stores/globalSessions';
@@ -226,7 +226,7 @@ const listSessionPage: SessionPageLister = (options) => getAgentRuntime().listSe
 const fetchDirectoryPages = async (
   directories: Set<string>,
 ): Promise<DirectoryPageResult> => {
-  const currentDirectory = normalizePath(opencodeClient.getDirectory());
+  const currentDirectory = normalizePath(openChamberClient.getDirectory());
   const orderedDirectories = [...directories].sort((left, right) => {
     if (left === currentDirectory) return -1;
     if (right === currentDirectory) return 1;

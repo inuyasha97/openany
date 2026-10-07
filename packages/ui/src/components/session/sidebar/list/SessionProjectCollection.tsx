@@ -12,7 +12,7 @@ import { ProjectSessionSelectionEffect } from '../projects/useProjectSessionSele
 import type { WorktreeMetadata } from '@/types/worktree';
 import { buildActiveSessionNode, useRecentSessionCollection, useSessionProjectCollection } from './sessionCollection';
 import { useChildStoreManager } from '@/sync/sync-context';
-import { useGlobalSyncStore } from '@/sync/global-sync-store';
+import { useProjectsStore } from '@/stores/useProjectsStore';
 import { createSessionOwnershipIndex } from '../sessions/sessionOwnership';
 import { useProjectSessionLists } from '../projects/useProjectSessionLists';
 import { useSessionSidebarSections } from '../projects/useSessionSidebarSections';
@@ -143,7 +143,11 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
   const projectView = view.projectView;
   const { getOrderedGroups, setGroupOrderByProject, toggleGroup, toggleProject } = projectViewActions;
   const collection = useSessionProjectCollection({ knownDirectories: topology.knownDirectories, isVSCode: topology.isVSCode, isVisible: true });
-  const authoritativeProjects = useGlobalSyncStore((state) => state.projects);
+  const storeProjects = useProjectsStore((state) => state.projects);
+  const authoritativeProjects = React.useMemo(
+    () => storeProjects.map((project) => ({ id: project.id, worktree: project.path })),
+    [storeProjects],
+  );
   const spaceList = useSidebarSpaces();
   // Recent and Timeline rows label a space session with the space's name where a worktree session shows its branch.
   const spaceLabelById = React.useMemo(() => new Map(spaceList.map((space) => [space.id, space.name])), [spaceList]);

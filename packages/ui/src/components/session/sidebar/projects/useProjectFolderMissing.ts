@@ -1,5 +1,5 @@
 import React from 'react';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 
 /**
  * True only when the server confirms the project folder is gone (an unplugged
@@ -17,7 +17,7 @@ export const useProjectFolderMissing = (directory: string | undefined): boolean 
     }
     let current = true;
     const probe = () => {
-      void opencodeClient.getDirectoryAvailability(directory).then((availability) => {
+      void openChamberClient.getDirectoryAvailability(directory).then((availability) => {
         if (current && availability !== 'unknown') setMissing(availability === 'missing');
       });
     };

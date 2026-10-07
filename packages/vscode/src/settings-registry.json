@@ -328,9 +328,6 @@
     "weekStartPreference": {
       "scope": "profile"
     },
-    "messageStreamTransport": {
-      "scope": "profile"
-    },
     "diffLayoutPreference": {
       "scope": "profile"
     },

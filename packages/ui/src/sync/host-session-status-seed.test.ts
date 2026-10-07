@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import type { Session } from '@/lib/opencode/model';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import {
@@ -68,8 +68,8 @@ describe('buildHostStatusSeedEvents', () => {
 });
 
 describe('seedGlobalSessionStatusFromHost', () => {
-  let originalGetSnapshot: typeof opencodeClient.getHostSessionStatusSnapshot;
-  let snapshot: Awaited<ReturnType<typeof opencodeClient.getHostSessionStatusSnapshot>>;
+  let originalGetSnapshot: typeof openChamberClient.getHostSessionStatusSnapshot;
+  let snapshot: Awaited<ReturnType<typeof openChamberClient.getHostSessionStatusSnapshot>>;
   let requests = 0;
 
   beforeEach(() => {
@@ -77,8 +77,8 @@ describe('seedGlobalSessionStatusFromHost', () => {
     resetSessionOrdering();
     resetSessionActivityTiming();
     requests = 0;
-    originalGetSnapshot = opencodeClient.getHostSessionStatusSnapshot;
-    opencodeClient.getHostSessionStatusSnapshot = async () => {
+    originalGetSnapshot = openChamberClient.getHostSessionStatusSnapshot;
+    openChamberClient.getHostSessionStatusSnapshot = async () => {
       requests += 1;
       return snapshot;
     };
@@ -89,7 +89,7 @@ describe('seedGlobalSessionStatusFromHost', () => {
   });
 
   afterEach(() => {
-    opencodeClient.getHostSessionStatusSnapshot = originalGetSnapshot;
+    openChamberClient.getHostSessionStatusSnapshot = originalGetSnapshot;
     replaceGlobalSessionStatusById(new Map());
     useGlobalSessionsStore.getState().resetForRuntimeSwitch();
   });

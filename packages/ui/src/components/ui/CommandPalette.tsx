@@ -28,14 +28,9 @@ import {
 } from '@/sync/session-ordering';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useGitAllBranches, useGitStore } from '@/stores/useGitStore';
-import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useDeviceInfo } from '@/lib/device';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
-import { getContextFileOpenFailureMessage, validateContextFileOpen } from '@/lib/contextFileOpenGuard';
 import { toast } from '@/components/ui';
-import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
 import type { Session } from '@/lib/opencode/model';
 import { createWorktreeSession } from '@/lib/worktreeSessionCreator';
 import { formatShortcutForDisplay, getEffectiveShortcutCombo, shortcutRegistry } from '@/lib/shortcuts';
@@ -49,12 +44,10 @@ import { getSettingsNavIcon } from '@/lib/settings/metadata';
 import { Icon } from "@/components/icon/Icon";
 import { McpIcon } from '@/components/icons/McpIcon';
 import { scoreByFuzzyQuery } from '@/lib/search/fuzzySearch';
-import { truncatePathMiddle } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { sessionEvents } from '@/lib/sessionEvents';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { useProjectsStore } from '@/stores/useProjectsStore';
-import { buildCommandPaletteFileSearchKey, scoreCommandPaletteFiles } from './commandPaletteFilesState';
 import { openParallelComposer } from '@/lib/multirun/openParallelComposer';
 
 type CommandEntry = {
@@ -69,7 +62,6 @@ type CommandEntry = {
   onSelect: () => void;
 };
 
-type FileHit = { path: string; name: string; relativePath: string };
 const EMPTY_SESSIONS: Session[] = [];
 
 const normalizePath = (value: string): string => {
@@ -95,7 +87,6 @@ export const CommandPalette: React.FC = () => {
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const openContextOverview = useUIStore((s) => s.openContextOverview);
   const openContextSurface = useUIStore((s) => s.openContextSurface);
-  const openContextFile = useUIStore((s) => s.openContextFile);
   const shortcutOverrides = useUIStore((s) => s.shortcutOverrides);
   const setArchivePageOpen = useUIStore((s) => s.setArchivePageOpen);
   const setProjectContextTab = useUIStore((s) => s.setProjectContextTab);
@@ -120,20 +111,11 @@ export const CommandPalette: React.FC = () => {
   const currentDirectory = useDirectoryStore((s) => s.currentDirectory);
   const activeProject = useProjectsStore((s) => s.getActiveProject());
   const projects = useProjectsStore((s) => s.projects);
-  const effectiveDirectory = useEffectiveDirectory();
-  const searchFiles = useFileSearchStore((s) => s.searchFiles);
-  const { files: filesApi, git: gitApi } = useRuntimeAPIs();
+  const { git: gitApi } = useRuntimeAPIs();
   const ensureGitStatus = useGitStore((s) => s.ensureStatus);
   const { isMobile } = useDeviceInfo();
 
-  const currentRoot = React.useMemo(
-    () => (effectiveDirectory ? normalizePath(effectiveDirectory) : null),
-    [effectiveDirectory],
-  );
-
   const [query, setQuery] = React.useState('');
-  const debouncedQuery = useDebouncedValue(query, 200);
-  const trimmedQuery = debouncedQuery.trim();
   const liveTrimmed = query.trim();
 
   // Clear query on open (not close) so content stays visible through the
@@ -144,8 +126,8 @@ export const CommandPalette: React.FC = () => {
 
   // Lazy-load git status for every session directory we plan to display so that
   // branch labels become available across all projects, not only the active one.
-  // Deferred to idle to keep the first render (and the file-search effect) free
-  // from a flood of git store updates.
+  // Deferred to idle to keep the first render free from a flood of git store
+  // updates.
   React.useEffect(() => {
     if (!isCommandPaletteOpen || !gitApi) return;
     const handle = setTimeout(() => {
@@ -468,54 +450,6 @@ export const CommandPalette: React.FC = () => {
   );
 
   // ---------------------------------------------------------------------------
-  // File search
-  // ---------------------------------------------------------------------------
-  const [fileResults, setFileResults] = React.useState<FileHit[]>([]);
-  const [fileResultsKey, setFileResultsKey] = React.useState('');
-
-  const fileSearchKey = buildCommandPaletteFileSearchKey(currentRoot, trimmedQuery);
-
-  React.useEffect(() => {
-    if (!isCommandPaletteOpen) {
-      setFileResults([]);
-      setFileResultsKey('');
-      return;
-    }
-    if (!fileSearchKey) {
-      setFileResults([]);
-      setFileResultsKey('');
-      return;
-    }
-    if (!currentRoot) {
-      setFileResults([]);
-      setFileResultsKey('');
-      return;
-    }
-    let cancelled = false;
-    void searchFiles(currentRoot, trimmedQuery, 40, { type: 'file' })
-      .then((results) => {
-        if (cancelled) return;
-        setFileResults(
-          results.map((file) => ({
-            path: normalizePath(file.path),
-            name: file.name,
-            relativePath: file.relativePath,
-          })),
-        );
-        setFileResultsKey(fileSearchKey);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setFileResults([]);
-          setFileResultsKey(fileSearchKey);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isCommandPaletteOpen, currentRoot, trimmedQuery, fileSearchKey, searchFiles]);
-
-  // ---------------------------------------------------------------------------
   // Filter visible items
   // ---------------------------------------------------------------------------
   const hasQuery = liveTrimmed.length > 0;
@@ -546,13 +480,6 @@ export const CommandPalette: React.FC = () => {
     });
   }, [orderedActiveSessions, liveTrimmed, hasQuery]);
 
-  const scoredFiles = React.useMemo(() => {
-    if (!isCommandPaletteOpen) return [];
-    return scoreCommandPaletteFiles(fileResults, trimmedQuery, fileSearchKey, fileResultsKey);
-  }, [isCommandPaletteOpen, fileResults, fileResultsKey, fileSearchKey, trimmedQuery]);
-
-  const isFileSearchStale = isCommandPaletteOpen && fileSearchKey.length > 0 && fileResultsKey !== fileSearchKey;
-
   // ---------------------------------------------------------------------------
   // Projects
   // ---------------------------------------------------------------------------
@@ -572,22 +499,20 @@ export const CommandPalette: React.FC = () => {
   const visibleCommands = scoredCommands.map((x) => x.item);
   const visibleSettings = scoredSettings.map((x) => x.item);
   const visibleSessions = scoredSessions.map((x) => x.item);
-  const visibleFiles = hasQuery ? scoredFiles.map((x) => x.item) : [];
   const visibleProjects = hasQuery ? scoredProjects.map((x) => x.item) : [];
 
-  const groupOrder = React.useMemo<('commands' | 'settings' | 'sessions' | 'files' | 'projects')[]>(() => {
+  const groupOrder = React.useMemo<('commands' | 'settings' | 'sessions' | 'projects')[]>(() => {
     if (!hasQuery) return ['commands', 'sessions'];
     const best = (arr: { score: number }[]): number => (arr.length ? arr[0].score : Infinity);
-    const groups: { key: 'commands' | 'settings' | 'sessions' | 'files' | 'projects'; score: number }[] = [
+    const groups: { key: 'commands' | 'settings' | 'sessions' | 'projects'; score: number }[] = [
       { key: 'commands', score: best(scoredCommands) },
       { key: 'settings', score: best(scoredSettings) },
       { key: 'sessions', score: best(scoredSessions) },
-      { key: 'files', score: best(scoredFiles) },
       { key: 'projects', score: best(scoredProjects) },
     ];
     groups.sort((a, b) => a.score - b.score);
     return groups.map((g) => g.key);
-  }, [hasQuery, scoredCommands, scoredSettings, scoredSessions, scoredFiles, scoredProjects]);
+  }, [hasQuery, scoredCommands, scoredSettings, scoredSessions, scoredProjects]);
 
   const handleOpenSession = React.useCallback(
     (session: Session) => {
@@ -595,20 +520,6 @@ export const CommandPalette: React.FC = () => {
       setCurrentSession(session.id, resolveGlobalSessionDirectory(session));
     },
     [close, setCurrentSession],
-  );
-
-  const handleOpenFile = React.useCallback(
-    async (filePath: string) => {
-      if (!currentRoot) return;
-      const validation = await validateContextFileOpen(filesApi, filePath, { directory: currentRoot });
-      if (!validation.ok) {
-        toast.error(getContextFileOpenFailureMessage(validation.reason));
-        return;
-      }
-      openContextFile(currentRoot, filePath);
-      close();
-    },
-    [currentRoot, filesApi, openContextFile, close],
   );
 
   const handleOpenProject = React.useCallback(
@@ -699,31 +610,6 @@ export const CommandPalette: React.FC = () => {
                   </CommandGroup>
                 );
               }
-              if (groupKey === 'files' && visibleFiles.length > 0) {
-                return (
-                  <CommandGroup key="files">
-                    {visibleFiles.map((file) => {
-                      const display = truncatePathMiddle(file.relativePath || file.name, {
-                        maxLength: 80,
-                      });
-                      return (
-                        <CommandItem
-                          key={`file:${file.path}`}
-                          value={`file:${file.path}`}
-                          onSelect={() => {
-                            void handleOpenFile(file.path);
-                          }}
-                        >
-                          <FileTypeIcon filePath={file.path} className="mr-2 size-4 shrink-0" />
-                          <span className="truncate" aria-label={file.relativePath}>
-                            {display}
-                          </span>
-                        </CommandItem>
-                      );
-                    })}
-                  </CommandGroup>
-                );
-              }
               if (groupKey === 'projects' && visibleProjects.length > 0) {
                 return (
                   <CommandGroup key="projects">
@@ -748,12 +634,6 @@ export const CommandPalette: React.FC = () => {
               }
               return null;
             })}
-
-            {isFileSearchStale ? (
-              <div className="px-3 py-2 typography-meta text-muted-foreground">
-                {t('commandPalette.empty.searchingFiles')}
-              </div>
-            ) : null}
           </CommandList>
         </Command>
       </DialogContent>

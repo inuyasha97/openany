@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { StoreApi, UseBoundStore } from "zustand";
 import { devtools, persist } from "zustand/middleware";
-import { opencodeClient } from "@/lib/opencode/client";
+import { openChamberClient } from "@/lib/openchamber/client";
 import { getAgentRuntime } from "@/lib/agent/registry";
 import {
   startConfigUpdate,
@@ -181,7 +181,7 @@ const getRequestDirectory = (): string | null => {
     }
 
     // 2. Fallback: current OpenCode directory (session / runtime)
-    const clientDir = opencodeClient.getDirectory();
+    const clientDir = openChamberClient.getDirectory();
     if (clientDir?.trim()) {
       return clientDir.trim();
     }
@@ -614,7 +614,7 @@ async function waitForOpenCodeConnection(delayMs?: number) {
     updateConfigUpdateMessage(`Waiting for OpenCode… (attempt ${attempt})`);
 
     try {
-      const isHealthy = await opencodeClient.checkHealth();
+      const isHealthy = await openChamberClient.checkHealth();
       if (isHealthy) {
         return;
       }

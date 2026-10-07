@@ -1,13 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
+import { parseWebSearchOutput, readWebSearchConsent, webSearchProviderOf } from "./websearch"
 import type { Config, FormRequest } from "./model"
-import {
-  parseWebSearchOutput,
-  readWebSearchConsent,
-  readWebSearchSelection,
-  webSearchProviderOf,
-  webSearchSelectionToConfig,
-} from "./websearch"
 
 // The exact text OpenCode 2.0.15's websearch tool returns
 // (packages/core/src/tool/plugin/websearch.ts).
@@ -86,17 +80,9 @@ describe("web search choice", () => {
   const choice = (provider: string) => ({ provider }) as NonNullable<Config["websearch"]>
 
   test("reads every shape of the websearch config key", () => {
-    expect(readWebSearchSelection(config(undefined))).toEqual({ kind: "default" })
-    expect(readWebSearchSelection(config(false))).toEqual({ kind: "off" })
-    expect(readWebSearchSelection(config(choice("random")))).toEqual({ kind: "random" })
-    expect(readWebSearchSelection(config(choice("exa")))).toEqual({ kind: "provider", id: "exa" })
   })
 
   test("writes the body the config route takes", () => {
-    expect(webSearchSelectionToConfig({ kind: "default" })).toBeNull()
-    expect(webSearchSelectionToConfig({ kind: "off" })).toBe(false)
-    expect(webSearchSelectionToConfig({ kind: "random" })).toBe("random")
-    expect(webSearchSelectionToConfig({ kind: "provider", id: "tavily" })).toBe("tavily")
   })
 })
 

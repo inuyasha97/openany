@@ -51,7 +51,6 @@ import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import type { ToolPopupContent } from './message/types';
 import { QueuedMessageChips } from './QueuedMessageChips';
 import { AutoReviewBanner } from './AutoReviewBanner';
-import type { FileMentionHandle } from './FileMentionAutocomplete';
 import type { CommandAutocompleteHandle, CommandInfo } from './CommandAutocomplete';
 import type { SkillAutocompleteHandle } from './SkillAutocomplete';
 import type { SnippetAutocompleteHandle } from './SnippetAutocomplete';
@@ -91,7 +90,8 @@ import { useGuestsStore } from '@/lib/guests/store';
 import { isGuestActive } from '@/lib/guests/capabilities';
 import { routeGuestSlashCommand } from './composer/submit/guestCommands';
 import { pluginModeFromId } from '@/lib/surfaces/modes';
-import { opencodeClient, type SkillMentions } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
+import type { SkillMentions } from '@/lib/agent/contract';
 import { buildSkillMentionInstruction } from '@/lib/skillMentionInstruction';
 import { useGitStore } from '@/stores/useGitStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
@@ -127,7 +127,7 @@ import {
     resolveLargeTextPasteOffer,
 } from './composer/largeTextPasteOffer';
 import type { LargeTextPasteBehavior } from '@/stores/useUIStore';
-import type { FileMentionAutocompleteInputSource } from './fileMentionAutocompleteState';
+import type { FileMentionAutocompleteInputSource } from './composer/language/triggers';
 import {
     classifyMention,
     scanMentions,
@@ -397,8 +397,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         return snapshot.text;
     });
     const confirmedMentionsRef = React.useRef<Set<string>>(initialDraftSnapshotRef.current.confirmedMentions);
-    const [storedInputMode, setInputMode] = React.useState<'normal' | 'shell'>('normal');
-    const inputModeParentRef = React.useRef<string | null>(null);
     const [isDragging, setIsDragging] = React.useState(false);
     const [isInternalDrag, setIsInternalDrag] = React.useState(false);
     // At most one picker is open at a time; the prompt language decides which.
@@ -428,10 +426,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const suppressNextFileDropTextInsertTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const suppressNextFileMentionPasteRef = React.useRef(false);
     const suppressNextFileMentionPasteTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-    const shellTriggerNormalizationRef = React.useRef(false);
     const pendingDroppedAbsolutePathsRef = React.useRef<string[]>([]);
     const canAcceptDropRef = React.useRef(false);
-    const mentionRef = React.useRef<FileMentionHandle>(null);
     const commandRef = React.useRef<CommandAutocompleteHandle>(null);
     const skillRef = React.useRef<SkillAutocompleteHandle>(null);
     const snippetRef = React.useRef<SnippetAutocompleteHandle>(null);
@@ -452,12 +448,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const liveSessionId = useSessionUIStore((s) => s.currentSessionId);
     const chatColumnSession = useChatColumnSession();
     const currentSessionId = chatColumnSession ? chatColumnSession.sessionId : liveSessionId;
-    React.useEffect(() => {
-        if (inputModeParentRef.current !== null && inputModeParentRef.current !== currentSessionId) {
-            setInputMode('normal');
-        }
-        inputModeParentRef.current = currentSessionId;
-    }, [currentSessionId]);
+    // The runtime has no shell route: every send is a normal prompt.
+    const inputMode = 'normal' as const;
     const fallbackDirectory = useDirectoryStore((s) => s.currentDirectory);
     const liveEffectiveDirectory = useEffectiveDirectory();
     const currentDirectory = (chatColumnSession?.sessionId ? chatColumnSession.directory : null)
@@ -485,7 +477,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const isBtwPanelVisible = Boolean((btwPanel.btwSessionId && btwPanel.btwDirectory) || btwPanel.creating || btwPanel.pending);
     const immediateBtwSubmitRef = React.useRef<{ identity: ChatDraftIdentity; text: string } | null>(null);
     const draftCaretModeRef = React.useRef({ btw: isBtwActive, atEnd: isBtwActive });
-    const inputMode = isBtwActive ? 'normal' : storedInputMode;
     // A session promoted out of `/btw` keeps the boundary instructions in its
     // transcript — there is no way to delete a message part — so it has to say
     // they no longer apply.
@@ -783,7 +774,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const availableSkills = useSkillsStore((s) => selectSkillsForDirectory(s, currentDirectory));
     const knownSlashNames = React.useMemo(() => {
         const names = new Set<string>([
-            'init', 'review', 'undo', 'redo', 'timeline', 'compact', 'fork', 'btw', 'summary', 'workspace-review', 'plan-feature', 'craft-goal', 'schedule-task', 'catch-up', 'debug', 'weigh', 'explore',
+            'init', 'review', 'undo', 'redo', 'timeline', 'fork', 'btw', 'summary', 'workspace-review', 'plan-feature', 'craft-goal', 'schedule-task', 'catch-up', 'debug', 'weigh', 'explore',
         ]);
         if (!isMobile && !isVSCodeRuntime()) names.add('handoff-review');
         for (const command of availableCommands) names.add(command.name.toLowerCase());
@@ -850,7 +841,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         const normalizedMentionPath = mentionPath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
         if (!normalizedMentionPath) return null;
 
-        const clientDirectory = opencodeClient.getDirectory() || '';
+        const clientDirectory = openChamberClient.getDirectory() || '';
         const root = (chatSearchDirectory || clientDirectory).replace(/\\/g, '/').replace(/\/+$/, '');
         let serverPath: string | null = null;
         if (mentionPath.startsWith('/')) {
@@ -1125,7 +1116,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             identity: initialDraftIdentityRef.current,
         },
         onIdentityChange: () => {
-            setInputMode('normal');
             draftCaretModeRef.current.atEnd = isBtwActive || draftCaretModeRef.current.btw;
             draftCaretModeRef.current.btw = isBtwActive;
         },
@@ -1342,7 +1332,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // delivery 400s.
         const { sendable: mentionAttachments } = await filterMissingInlineAttachments(
             extractedMentionAttachments,
-            opencodeClient,
+            openChamberClient,
         );
         const availableSkillNames = new Set(
             selectSkillsForDirectory(useSkillsStore.getState(), currentDirectory).map((skill) => skill.name),
@@ -1772,17 +1762,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                             undefined,
                             undefined,
                             selection.variant,
-                            'normal',
                             target,
                         ),
                         draftIdentity: (directory, sessionId) => createChatDraftIdentity(getRuntimeKey(), directory, sessionId),
                         restoreText: (target, text) => useInputStore.setState({ pendingComposerRestore: { target, text, files: [] } }),
                     });
                     if (forkOutcome === 'send-failed') toast.error(t('chat.chatInput.toast.forkSendFailed'));
-                } else if (actionName === 'compact') {
-                    await sessionActions.waitForConnectionOrThrow();
-                    const compactDirectory = useSessionUIStore.getState().getDirectoryForSession(currentSessionId) || currentDirectory || undefined;
-                    await opencodeClient.compactSession(currentSessionId, compactDirectory);
                 }
             } catch (error) {
                 restoreComposerText();
@@ -1792,8 +1777,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         : getSubmitErrorMessage(error, t('chat.chatInput.toast.forkFailed')));
                     return;
                 }
-                if (actionName !== 'compact') throw error;
-                toast.error(getSubmitErrorMessage(error, t('chat.chatInput.toast.compactFailed')));
+                throw error;
             }
             return;
         }
@@ -1963,7 +1947,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // carries the same list.
         const { sendable: sendableAttachments } = await filterMissingInlineAttachments(
             primaryAttachments,
-            opencodeClient,
+            openChamberClient,
         );
 
         // Clear input (the queue was taken above)
@@ -2328,35 +2312,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // Uses keyCode === 229 fallback for WebKit where compositionend fires before keydown.
         if (isIMECompositionEvent(e)) return;
 
-        // Enter shell mode before CodeMirror inserts the trigger. Keeping the
-        // document unchanged also keeps the caret at the start for the first
-        // command character.
-        if (!isBtwActive && inputMode === 'normal' && e.key === '!') {
-            const selection = composerRef.current?.getSelection();
-            if (selection?.start === 0 && selection.end === 0) {
-                e.preventDefault();
-                setInputMode('shell');
-                closeAutocomplete();
-                return;
-            }
-        }
-
-        if (inputMode === 'shell' && e.key === 'Escape') {
-            e.preventDefault();
-            setInputMode('normal');
-            return;
-        }
-
-        if (inputMode === 'shell' && e.key === 'Backspace' && message.length === 0) {
-            e.preventDefault();
-            setInputMode('normal');
-            return;
-        }
-
         const autocomplete = openAutocomplete === 'command' ? commandRef.current
             : openAutocomplete === 'skill' ? skillRef.current
                 : openAutocomplete === 'snippet' ? snippetRef.current
-                    : openAutocomplete === 'mention' ? mentionRef.current
                         : null;
         const autocompleteKey = getDropdownNavigationKey(e) ?? e.key;
         if (autocomplete && (autocompleteKey === 'Enter' || autocompleteKey === 'ArrowUp' || autocompleteKey === 'ArrowDown' || autocompleteKey === 'Escape' || autocompleteKey === 'Tab')) {
@@ -2622,11 +2580,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }, []);
 
     const handleComposerChange = ({ value, selection, fromPaste, insertedText }: ComposerChange) => {
-        if (shellTriggerNormalizationRef.current) {
-            shellTriggerNormalizationRef.current = false;
-            setMessage(value);
-            return;
-        }
 
         // VS Code drops the dragged path as text as well as firing the drop
         // handler; swallow that duplicate insertion.
@@ -2644,25 +2597,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             clearFileMentionPasteSuppression();
         }
         const inputSource: FileMentionAutocompleteInputSource = isPasteInput ? 'paste' : 'manual';
-
-        // A leading `!` switches the composer into shell mode and is consumed.
-        // Mobile keyboards and paste may update the document without a usable
-        // keydown, so consume the trigger in the same editor transaction rather
-        // than moving the caret in a later frame against stale text.
-        if (!isBtwActive && inputMode === 'normal' && value.startsWith('!')) {
-            const shellCommand = value.slice(1);
-            const nextCursor = Math.max(0, selection.start - 1);
-            setInputMode('shell');
-            closeAutocomplete();
-            const editor = composerRef.current;
-            if (editor) {
-                shellTriggerNormalizationRef.current = true;
-                editor.replaceRange(0, 1, '', nextCursor);
-            } else {
-                setMessage(shellCommand);
-            }
-            return;
-        }
 
         setMessage(value);
         updateAutocompleteState(value, selection.start, inputSource, pastedInsertedText);
@@ -3917,7 +3851,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         commandRef={commandRef}
                         skillRef={skillRef}
                         snippetRef={snippetRef}
-                        mentionRef={mentionRef}
                         onCommandSelect={handleCommandSelect}
                         onSkillSelect={handleSkillSelect}
                         onSnippetSelect={handleSnippetSelect}
@@ -4043,9 +3976,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                 placeholder={isBtwActive
                                     ? t('chat.btw.mainComposerPlaceholder')
                                     : currentSessionId || newSessionDraftOpen
-                                        ? inputMode === 'shell'
-                                            ? t('chat.chatInput.placeholder.shell')
-                                            : t(useCompactChatPlaceholder ? 'chat.chatInput.placeholder.chatCompact' : 'chat.chatInput.placeholder.chat')
+                                        ? t(useCompactChatPlaceholder ? 'chat.chatInput.placeholder.chatCompact' : 'chat.chatInput.placeholder.chat')
                                         : t('chat.chatInput.placeholder.selectSession')}
                                 editable={Boolean(currentSessionId || newSessionDraftOpen)}
                                 autoCorrect={composerAutoCorrect({ isMobile })}
@@ -4063,7 +3994,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                         : isMobile
                                             ? 'pt-4 pb-2.5'
                                             : 'pt-4 pb-2',
-                                    inputMode === 'shell' ? 'font-mono' : 'typography-markdown md:typography-ui-label',
+                                    'typography-markdown md:typography-ui-label',
                                 )}
                             />
                         </div>

@@ -21,14 +21,32 @@ let runtimeKey = "test-runtime"
 const pollingDirectory = "/test/project"
 let sdkIdentity = {}
 
-mock.module("@/lib/opencode/client", () => ({
-  opencodeClient: {
-    getSdkClient: () => sdkIdentity,
+const stubClient = {
+    getRuntimeIdentity: () => sdkIdentity,
     getActiveSessionStatuses: mock(() => {
       statusSnapshotCalls.push(pollingDirectory)
       return respondWithSnapshot()
     }),
-  },
+    getDirectory: () => null,
+    setDirectory: () => undefined,
+    getDirectoryAvailability: async () => 'unknown' as const,
+    probeDirectory: async () => true,
+    getFilesystemHome: async () => null,
+    getFilesystemHomeInfo: async () => ({ home: '/home' }),
+    createDirectory: async (path: string) => ({ success: true, path }),
+    cloneRepository: async (input: { destinationPath: string }) => ({ success: true, path: input.destinationPath }),
+    listLocalDirectory: async () => [],
+    getHostSessionStatusSnapshot: async () => null,
+    getWebServerSessionActivity: async () => null,
+    getBaseUrl: () => '/api',
+    reconnectToRuntimeBaseUrl: () => undefined,
+    checkHealth: async () => true,
+    probeHealth: async () => 'healthy' as const,
+    getSystemInfo: async () => ({ homeDirectory: '/' }),
+}
+setOpenCodeStubSurface(stubClient)
+mock.module("@/lib/openchamber/client", () => ({
+    openChamberClient: stubClient,
 }))
 
 mock.module("@/lib/runtime-switch", () => ({
@@ -36,6 +54,7 @@ mock.module("@/lib/runtime-switch", () => ({
 }))
 
 import { applyGlobalSessionStatusSnapshot, useGlobalSessionStatusStore } from "../global-session-status"
+import { createOpenCodeStubRuntime, setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime'
 import { useSessionOrderingStore } from "../session-ordering"
 import { useSessionActivityTimingStore } from "../session-activity-timing"
 
@@ -231,7 +250,6 @@ describe("maybePollStatusAfterMessageCompletion (issue OPE-193)", () => {
 
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.

@@ -20,7 +20,7 @@ import type {
   SessionStructuredError,
   ToolContent,
   AgentInfo,
-} from "@opencode/client"
+} from "./wire"
 import {
   compact,
   partIds,

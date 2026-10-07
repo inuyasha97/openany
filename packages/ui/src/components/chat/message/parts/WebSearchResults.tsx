@@ -3,7 +3,6 @@ import { Icon } from '@/components/icon/Icon';
 import { useI18n, getCurrentIntlLocale } from '@/lib/i18n';
 import type { WebSearchOutput, WebSearchResult } from '@/lib/opencode/websearch';
 import { openExternalUrl } from '@/lib/url';
-import { useWebSearchStore } from '@/stores/useWebSearchStore';
 
 /**
  * A finished `websearch` call as a list of result cards: site icon and
@@ -90,13 +89,8 @@ const ResultCard: React.FC<{ result: WebSearchResult }> = ({ result }) => {
 
 export const WebSearchResults: React.FC<{ output: WebSearchOutput; providerId: string | null }> = ({ output, providerId }) => {
     const { t } = useI18n();
-    // Name the provider when Settings already read the list; the id otherwise.
-    const providerName = useWebSearchStore((store) => {
-        if (!providerId) return null;
-        const state = store.state;
-        if (state.kind !== 'ready') return providerId;
-        return state.snapshot.providers.find((provider) => provider.id === providerId)?.name ?? providerId;
-    });
+    // The provider id is all the runtime records on a finished search.
+    const providerName = providerId;
 
     return (
         <div className="w-full min-w-0 space-y-1">

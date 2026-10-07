@@ -1996,7 +1996,6 @@ export const settingsDict = {
   'settings.openchamber.visual.section.chatDisplay': '표시',
   'settings.openchamber.visual.section.chatMessageOptions': '메시지 옵션',
   'settings.openchamber.visual.section.chatFeatures': '기능',
-  'settings.openchamber.visual.section.messageStreamTransport': '메시지 스트림 전송',
   'settings.openchamber.visual.section.activityDefault': 'Activity 기본값',
   'settings.openchamber.visual.section.activityDefaultAria': 'Activity 기본 모드',
   'settings.openchamber.visual.section.sessionActivity': '세션 활동',

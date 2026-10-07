@@ -2019,7 +2019,6 @@ export const settingsDict = {
   'settings.openchamber.visual.section.chatDisplay': 'Weergave',
   'settings.openchamber.visual.section.chatMessageOptions': 'Berichtopties',
   'settings.openchamber.visual.section.chatFeatures': 'Functies',
-  'settings.openchamber.visual.section.messageStreamTransport': 'Transport voor berichtenstreams',
   'settings.openchamber.visual.section.activityDefault': 'Standaardactiviteit',
   'settings.openchamber.visual.section.activityDefaultAria': 'Standaardmodus voor activiteit',
   'settings.openchamber.visual.section.sessionActivity': 'Sessieactiviteit',

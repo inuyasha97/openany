@@ -138,7 +138,7 @@ describe('resolveQueuedSessionStatusType', () => {
     childStores = new ChildStoreManager();
     const store = childStores.ensureChild(DIRECTORY, { bootstrap: false });
     store.setState({ status: 'complete', session_status: {}, message: {} });
-    setSyncRefs({} as never, childStores, DIRECTORY);
+    setSyncRefs(childStores, DIRECTORY);
   });
 
   test('treats a session with an in-flight assistant turn as busy even when the status entry is missing', () => {
@@ -322,7 +322,7 @@ describe('buildQueuedAutoSendPayload', () => {
     });
 
     expect(sendMessageCalls[0]?.[0]).toBe('sanitized transport text');
-    expect(sendMessageCalls[0]?.[9]).toEqual({
+    expect(sendMessageCalls[0]?.[8]).toEqual({
       target: {
         runtimeKey: 'runtime-original',
         sessionId: 'session-original',
@@ -370,7 +370,6 @@ describe('buildQueuedAutoSendPayload', () => {
       undefined,
       undefined,
       'variant-1',
-      'normal',
       {
         target: {
           runtimeKey: 'runtime-original',

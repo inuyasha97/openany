@@ -73,14 +73,6 @@ describe('planLocalSlashCommand', () => {
         expect(planLocalSlashCommand('/fork', 'normal', false, false)).toBeNull();
     });
 
-    test('an action command retains an attached inline comment', () => {
-        expect(planLocalSlashCommand('/compact', 'normal', true, true)).toEqual({
-            command: { name: 'compact', argument: '' },
-            kind: 'action',
-            attachedContext: 'retain',
-        });
-    });
-
     test('prompt commands send attached context instead of disabling command parsing', () => {
         expect(planLocalSlashCommand('/summary auth', 'normal', true, true)).toEqual({
             command: { name: 'summary', argument: 'auth' },
@@ -91,7 +83,7 @@ describe('planLocalSlashCommand', () => {
     });
 
     test('session actions stay on the normal send path for a new-session draft', () => {
-        for (const command of ['compact', 'undo', 'redo', 'timeline']) {
+        for (const command of ['undo', 'redo', 'timeline']) {
             expect(planLocalSlashCommand(`/${command}`, 'normal', false, false)).toBeNull();
         }
     });

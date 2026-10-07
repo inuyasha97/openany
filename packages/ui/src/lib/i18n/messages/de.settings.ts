@@ -1952,7 +1952,6 @@ export const settingsDict = {
   'settings.openchamber.visual.section.navigation': 'Navigation',
   'settings.openchamber.visual.section.chatRenderMode': 'Chat-Darstellungsmodus',
   'settings.openchamber.visual.section.chatRenderModeAria': 'Chat-Darstellungsmodus',
-  'settings.openchamber.visual.section.messageStreamTransport': 'Nachrichtenstrom-Transport',
   'settings.openchamber.visual.section.activityDefault': 'Aktivitätsstandard',
   'settings.openchamber.visual.section.activityDefaultAria': 'Aktivitätsstandardmodus',
   'settings.openchamber.visual.section.sessionActivity': 'Sitzungsaktivität',

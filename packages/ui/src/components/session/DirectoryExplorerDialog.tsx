@@ -23,7 +23,7 @@ import { runtimeFetch } from '@/lib/runtime-fetch';
 import { useDeviceInfo } from '@/lib/device';
 import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
 import { Icon } from "@/components/icon/Icon";
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { useI18n } from '@/lib/i18n';
 import { formatShortcutForDisplay } from '@/lib/shortcuts';
 import {
@@ -139,7 +139,7 @@ const resolveFreshFilesystemHome = async (): Promise<string | null> => {
     // Fall back to the client helper below.
   }
 
-  return opencodeClient.getFilesystemHome().catch(() => null);
+  return openChamberClient.getFilesystemHome().catch(() => null);
 };
 
 export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = ({
@@ -273,7 +273,7 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
     setIsLoading(true);
     setIsBrowseDirectoryMissing(false);
     setBrowseErrorReason(null);
-    opencodeClient.listLocalDirectory(browseDirectoryAbsolutePath)
+    openChamberClient.listLocalDirectory(browseDirectoryAbsolutePath)
       .then((result) => {
         if (cancelled) return;
         setIsBrowseDirectoryMissing(false);
@@ -477,7 +477,7 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
           toast.error(t('directoryExplorerDialog.toast.cloneUrlRequired'));
           return;
         }
-        const result = await opencodeClient.cloneRepository({
+        const result = await openChamberClient.cloneRepository({
           remoteUrl,
           destinationPath: target,
           gitIdentityId: selectedGitIdentity?.id ?? null,
@@ -499,7 +499,7 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
         handleClose();
         return;
       } else if (shouldCreateSelection) {
-        await opencodeClient.createDirectory(target, { asProject: true });
+        await openChamberClient.createDirectory(target, { asProject: true });
       }
       const project = await addProject(selectedTarget);
       if (!project) {

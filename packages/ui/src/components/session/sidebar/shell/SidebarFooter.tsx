@@ -6,7 +6,6 @@ import { useI18n } from '@/lib/i18n';
 
 type Props = {
   onOpenSettings: () => void;
-  onOpenUsage: () => void;
   onOpenShortcuts: () => void;
   onOpenAbout: () => void;
   onOpenUpdate: () => void;
@@ -18,7 +17,6 @@ const footerButtonClassName = 'inline-flex h-8 w-8 items-center justify-center r
 
 export function SidebarFooter({
   onOpenSettings,
-  onOpenUsage,
   onOpenShortcuts,
   onOpenAbout,
   onOpenUpdate,
@@ -42,14 +40,6 @@ export function SidebarFooter({
               </button>
             </TooltipTrigger>
             <TooltipContent side="top" sideOffset={4}><p>{t('sessions.sidebar.footer.actions.settings')}</p></TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button type="button" onClick={onOpenUsage} className={footerButtonClassName} aria-label={t('usageStats.openAction')}>
-                <Icon name="bar-chart" className="h-4.5 w-4.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={4}><p>{t('usageStats.openAction')}</p></TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>

@@ -1,22 +1,23 @@
 /**
  * Event Pipeline — transport connection, translation, coalescing, and batched flush.
  *
- * Wire events (OpenCode v2 `/api/event`, or the OpenChamber server's WebSocket
- * bridge of that stream) are translated into `SyncEvent`s here and coalesced
- * per directory before the reducer sees them. This module must not make
- * state-dependent decisions about event validity: deciding whether a delta is
- * already represented by a full part snapshot belongs in the reducer.
+ * The event stream is the OpenChamber server's WebSocket bridge
+ * (`/api/global/event/ws`); OMP events and every OpenChamber frame arrive on
+ * it, already in the canonical vocabulary. Frames are translated into
+ * `SyncEvent`s here and coalesced per directory before the reducer sees them.
+ * This module must not make state-dependent decisions about event validity:
+ * deciding whether a delta is already represented by a full part snapshot
+ * belongs in the reducer.
  *
  * Plain closure API:
- *   const { cleanup } = createEventPipeline({ sdk, onEvents })
+ *   const { cleanup } = createEventPipeline({ onEvents })
  *
  * No class, no start/stop lifecycle. One pipeline per mount.
  * Abort controller created once at init, cleaned up via returned cleanup fn.
  */
 
-import type { OpenCodeClient } from "@opencode/client"
 import { z } from "zod"
-import { opencodeClient } from "@/lib/opencode/client"
+import { openChamberClient } from "@/lib/openchamber/client"
 import { GLOBAL_EVENT_DIRECTORY, syncEventSessionID, type SyncEvent } from "@/lib/agent/events"
 import { getAgentRuntime, registerSessionRuntime } from "@/lib/agent/registry"
 import type { Metadata, Session } from "@/lib/opencode/model"
@@ -24,7 +25,6 @@ import { getRuntimeUrlResolver } from "@/lib/runtime-url"
 import { clearRuntimeUrlAuthToken, refreshRuntimeUrlAuthToken } from "@/lib/runtime-auth"
 import { type RelayTunnelWebSocket } from "@/lib/relay/tunnel-client"
 import { openRuntimeWebSocket } from "@/lib/relay/runtime-socket"
-import { isVSCodeRuntime } from "@/lib/desktop"
 import { spaceCreationStepSchema } from "@/lib/spaces/spaces-api"
 import { syncDebug } from "./debug"
 import { countSyncPerformance } from "./performance-diagnostics"
@@ -38,10 +38,8 @@ import { countSyncPerformance } from "./performance-diagnostics"
 const FLUSH_FRAME_MS = 100
 const BACKPRESSURE_FLUSH_FRAME_MS = 200
 const BACKPRESSURE_MODE_MS = 10_000
-const STREAM_YIELD_MS = 8
 const DEFAULT_RECONNECT_DELAY_MS = 250
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 30_000
-const WS_FALLBACK_WINDOW_MS = 60_000
 const DEFAULT_WS_READY_TIMEOUT_MS = 2_000
 // Retry pacing. Visible+online tabs probe quickly so the user sees connection
 // recovery in under a second of real outage; hidden/offline tabs back off
@@ -63,14 +61,11 @@ type EventPipelineDelivery = {
 }
 
 export type EventPipelineInput = {
-  sdk: OpenCodeClient
   routeDirectory?: (directory: string, payload: SyncEvent) => string
   /** Called after stream reconnects (visibility restore or heartbeat timeout). */
   onReconnect?: (details: { replayReset: boolean }) => void
   /** Called when the stream disconnects (heartbeat timeout, network error, or transport failure). */
   onDisconnect?: (reason: string) => void
-  /** Called when transport switches (e.g. WS timeout → SSE fallback) without actual disconnection. */
-  onTransportSwitch?: () => void
   /**
    * Called when the host announces that an isolated space's own event connection came or
    * went; after a gap that one space is re-read. `wasReady` says whether the space's stream
@@ -89,7 +84,6 @@ export type EventPipelineInput = {
    * that carries no event. Starting an attempt that has received nothing yet does not count.
    */
   onStreamActivity?: () => void
-  transport?: "auto" | "ws" | "sse"
   heartbeatTimeoutMs?: number
   reconnectDelayMs?: number
   wsReadyTimeoutMs?: number
@@ -101,7 +95,7 @@ export type EventPipeline = {
 }
 
 // Frames the OpenChamber server sends on `/api/global/event/ws`. `payload` is
-// the wire event as OpenCode published it; the server adds replay metadata.
+// the wire event as the server projected it; the server adds replay metadata.
 const wsFrameSchema = z.object({
   type: z.enum(["ready", "event", "error", "backpressure"]),
   replayReset: z.boolean().optional(),
@@ -281,7 +275,7 @@ function translatePayload(payload: unknown, frameDirectory: string | undefined):
 function buildGlobalEventWsUrl(lastEventId?: string): string {
   let baseUrl = "/api"
   try {
-    baseUrl = opencodeClient.getBaseUrl()
+    baseUrl = openChamberClient.getBaseUrl()
   } catch {
     baseUrl = "/api"
   }
@@ -313,7 +307,7 @@ type DirectoryQueue = {
 
 type AttemptAbortReason =
   | "pipeline_stopped"
-  | `${"ws" | "sse"}_${string}`
+  | `ws_${string}`
   | null
 
 /** Key under which repeated events for the same entity collapse into one. */
@@ -356,18 +350,15 @@ function mergeCoalesced(previous: SyncEvent, next: SyncEvent): SyncEvent {
 
 export function createEventPipeline(input: EventPipelineInput): EventPipeline {
   const {
-    sdk,
     onEvent,
     onEvents,
     onReconnect,
     onDisconnect,
-    onTransportSwitch,
     onSpaceStream,
     onSpaceProgress,
     onSpaceSetup,
     onStreamActivity,
     routeDirectory,
-    transport = "auto",
     heartbeatTimeoutMs = DEFAULT_HEARTBEAT_TIMEOUT_MS,
     reconnectDelayMs = DEFAULT_RECONNECT_DELAY_MS,
     wsReadyTimeoutMs = DEFAULT_WS_READY_TIMEOUT_MS,
@@ -375,7 +366,6 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
   const abort = new AbortController()
   let disconnected = false
   let lastEventId: string | undefined
-  let wsFallbackUntil = 0
 
   const directories = new Map<string, DirectoryQueue>()
 
@@ -436,7 +426,6 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     d.timer = setTimeout(() => flushDir(directory), Math.max(0, flushFrameMs - elapsed))
   }
 
-  const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
   const isAbortError = (error: unknown): boolean =>
     error instanceof DOMException && error.name === "AbortError" ||
     (typeof error === "object" && error !== null && (error as { name?: string }).name === "AbortError")
@@ -534,7 +523,6 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
   let attempt: AbortController | undefined
   let lastEventAt = Date.now()
   let heartbeat: ReturnType<typeof setTimeout> | undefined
-  let activeTransport: "ws" | "sse" = transport === "ws" ? "ws" : "sse"
   let attemptAbortReason: AttemptAbortReason = null
   let consecutiveFailures = 0
   let backpressureUntil = 0
@@ -631,7 +619,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     lastEventAt = Date.now()
     if (heartbeat) clearTimeout(heartbeat)
     heartbeat = setTimeout(() => {
-      attemptAbortReason = `${activeTransport}_heartbeat_timeout`
+      attemptAbortReason = "ws_heartbeat_timeout"
       attempt?.abort()
     }, heartbeatTimeoutMs)
   }
@@ -648,30 +636,6 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     onStreamActivity?.()
   }
 
-  const runSseAttempt = async (signal: AbortSignal) => {
-    // Keepalive comments carry no event but prove the socket is alive.
-    const events = sdk.event.subscribe({ signal, onActivity: noteStreamActivity })
-
-    let connected = false
-    let yielded = Date.now()
-    resetHeartbeat()
-
-    for await (const event of events) {
-      noteStreamActivity()
-      streamErrorLogged = false
-      if (!connected) {
-        connected = true
-        markConnected()
-      }
-
-      enqueuePayload(event, undefined)
-
-      if (Date.now() - yielded < STREAM_YIELD_MS) continue
-      yielded = Date.now()
-      await wait(0)
-    }
-  }
-
   const runWsAttempt = async (signal: AbortSignal) => {
     // A WebSocket upgrade can't carry an Authorization header, so it
     // authenticates purely via the oc_url_token query param. The sync token
@@ -680,15 +644,11 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     // rejects it ("HTTP Authentication failed; no valid credentials available")
     // and the resulting reconnect storm churns the sync store (transient
     // status-missing → idle flicker). Mint/await a valid token BEFORE
-    // connecting. (SSE avoids this: the SDK fetch sends the bearer header.)
+    // connecting.
     try {
       await refreshRuntimeUrlAuthToken()
     } catch (error) {
       const wrapped = error instanceof Error ? error : new Error("Message stream WebSocket auth token unavailable")
-      if (transport === "auto") {
-        wsFallbackUntil = Date.now() + WS_FALLBACK_WINDOW_MS
-        ;(wrapped as Error & { code?: string }).code = "WS_FALLBACK"
-      }
       ;(wrapped as Error & { reason?: string }).reason = "ws_auth_token_unavailable"
       throw wrapped
     }
@@ -698,19 +658,11 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     await new Promise<void>((resolve, reject) => {
       let settled = false
       let opened = false
-      let readyAt = 0
       const socket: RelayTunnelWebSocket = openGlobalEventSocket(lastEventId)
-      const setFallbackCode = (error: Error, force = false) => {
-        if ((force || !opened) && transport === "auto") {
-          wsFallbackUntil = Date.now() + WS_FALLBACK_WINDOW_MS
-          ;(error as Error & { code?: string }).code = "WS_FALLBACK"
-        }
-      }
 
       let readyTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
         readyTimer = undefined
         const error = new Error("Message stream WebSocket ready timeout")
-        setFallbackCode(error)
         settleReject(error)
         try {
           socket.close()
@@ -782,7 +734,6 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
           // reconnect callback repairs authoritative state; retire that cursor.
           if (frame.replayReset === true) lastEventId = undefined
           opened = true
-          readyAt = Date.now()
           if (readyTimer) {
             clearTimeout(readyTimer)
             readyTimer = undefined
@@ -795,7 +746,6 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
         if (frame.type === "error") {
           const error = new Error(frame.message || "Message stream WebSocket error")
           ;(error as Error & { reason?: string }).reason = `ws_error_frame:${frame.message || "unknown"}`
-          setFallbackCode(error)
           settleReject(error)
           try {
             socket.close()
@@ -839,28 +789,9 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
           clearRuntimeUrlAuthToken()
         }
 
-        // If the WS stream connects (ready) but then drops quickly, prefer SSE for a while.
-        // This avoids tight reconnect loops with repeated console spam.
-        const livedMs = readyAt > 0 ? Date.now() - readyAt : 0
-        const unstableAfterReady = opened && livedMs > 0 && livedMs < 2_000
-        setFallbackCode(error, unstableAfterReady)
         settleReject(error)
       }
     })
-  }
-
-  const resolveTransport = (): "ws" | "sse" => {
-    // The VS Code webview bridges only HTTP/SSE; there is no WebSocket bridge.
-    if (typeof WebSocket !== "function" || isVSCodeRuntime()) {
-      return "sse"
-    }
-    if (transport === "ws") {
-      return "ws"
-    }
-    if (transport === "sse") {
-      return "sse"
-    }
-    return wsFallbackUntil > Date.now() ? "sse" : "ws"
   }
 
   void (async () => {
@@ -869,8 +800,6 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
       lastEventAt = Date.now()
       attemptAbortReason = null
       let retryDelayMs = reconnectDelayMs
-      const currentTransport = resolveTransport()
-      activeTransport = currentTransport
       const onAbort = () => {
         attemptAbortReason = "pipeline_stopped"
         attempt?.abort()
@@ -878,20 +807,9 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
       abort.signal.addEventListener("abort", onAbort)
 
       try {
-        if (currentTransport === "ws") {
-          await runWsAttempt(attempt.signal)
-        } else {
-          await runSseAttempt(attempt.signal)
-        }
+        await runWsAttempt(attempt.signal)
       } catch (error) {
-        const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined
-        if (currentTransport === "ws" && code === "WS_FALLBACK") {
-          retryDelayMs = 0
-          // Transport switch (WS → SSE fallback), not a real disconnection.
-          // The consumer still gets a hook so it can resync authoritative
-          // state; real networks can lose/buffer events around transport flips.
-          onTransportSwitch?.()
-        } else if (!isAbortError(error)) {
+        if (!isAbortError(error)) {
           consecutiveFailures += 1
           if (!streamErrorLogged) {
             streamErrorLogged = true
@@ -910,8 +828,8 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
           const reason = typeof taggedReason === "string" && taggedReason.length > 0
             ? taggedReason
             : typeof message === "string" && message.length > 0
-              ? `${currentTransport}_error:${message.slice(0, 80)}`
-              : `${currentTransport}_error:unknown`
+              ? `ws_error:${message.slice(0, 80)}`
+              : "ws_error:unknown"
           notifyDisconnected(reason)
 
           // Exponential backoff so a hard-down server / dead network doesn't
@@ -967,7 +885,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
   // is almost certainly dead after sleep — abort immediately so the
   // reconnect loop fires on the next tick with retryDelayMs = 0.
   const onSystemResume = () => {
-    attemptAbortReason = `${activeTransport}_system_resume`
+    attemptAbortReason = "ws_system_resume"
     attempt?.abort()
   }
 
@@ -990,7 +908,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
   }
 
   const reconnect = (reason = "manual") => {
-    attemptAbortReason = `${activeTransport}_${reason}`
+    attemptAbortReason = `ws_${reason}`
     attempt?.abort()
   }
 

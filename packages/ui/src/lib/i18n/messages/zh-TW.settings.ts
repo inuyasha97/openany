@@ -1901,7 +1901,6 @@ export const settingsDict = {
   'settings.openchamber.visual.section.chatDisplay': '顯示',
   'settings.openchamber.visual.section.chatMessageOptions': '訊息選項',
   'settings.openchamber.visual.section.chatFeatures': '功能',
-  'settings.openchamber.visual.section.messageStreamTransport': '訊息流傳輸方式',
   'settings.openchamber.visual.section.activityDefault': '活動預設狀態',
   'settings.openchamber.visual.section.activityDefaultAria': '活動預設模式',
   'settings.openchamber.visual.section.sessionActivity': '工作階段活動',

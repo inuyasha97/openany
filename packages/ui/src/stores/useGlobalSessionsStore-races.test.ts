@@ -1,9 +1,9 @@
 import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import type { AgentSession } from "@/lib/agent/contract"
-import type { SessionPage } from "@/lib/opencode/client"
+import type { AgentRuntime, AgentSession, SessionListOptions, SessionPage } from "@/lib/agent/contract"
 
-import { opencodeClient } from "@/lib/opencode/client"
+import { openChamberClient } from "@/lib/openchamber/client"
+import { registerAgentRuntime } from "@/lib/agent/registry"
 import { useGlobalSessionsStore } from "./useGlobalSessionsStore"
 
 type Deferred<T> = {
@@ -32,7 +32,16 @@ const listSessionsPage = async (): Promise<SessionPage> => ({
   sessions: await listRequest.promise,
   cursor: {},
 })
-const originalListSessionsPage = opencodeClient.listSessionsPage
+const idleListSessionsPage = async (): Promise<SessionPage> => ({ sessions: [], cursor: {} })
+// The store lists sessions through the agent runtime; `getAgentRuntime()` runs
+// the current implementation so tests can swap it per case.
+let listSessionsPageImpl: (options?: SessionListOptions) => Promise<SessionPage> = idleListSessionsPage
+const createFakeRuntime = (id: string): AgentRuntime => ({
+  id,
+  listSessionsPage: (options?: SessionListOptions) => listSessionsPageImpl(options),
+} as unknown as AgentRuntime)
+registerAgentRuntime(createFakeRuntime("omp"))
+registerAgentRuntime(createFakeRuntime("opencode"))
 
 const session = (id: string, title = id, archived?: number): AgentSession => ({
   id,
@@ -49,12 +58,12 @@ const session = (id: string, title = id, archived?: number): AgentSession => ({
 describe("global session mutation reconciliation", () => {
   beforeEach(() => {
     listRequest = deferred<AgentSession[]>()
-    opencodeClient.listSessionsPage = listSessionsPage
+    listSessionsPageImpl = listSessionsPage
     useGlobalSessionsStore.getState().resetForRuntimeSwitch()
   })
 
   afterEach(() => {
-    opencodeClient.listSessionsPage = originalListSessionsPage
+    listSessionsPageImpl = idleListSessionsPage
   })
 
   test("keeps a session created after a full load starts", async () => {
@@ -185,12 +194,12 @@ describe("paginated global session load", () => {
   beforeEach(() => {
     secondPage = deferred<AgentSession[]>()
     listCalls = 0
-    opencodeClient.listSessionsPage = pagedListSessionsPage
+    listSessionsPageImpl = pagedListSessionsPage
     useGlobalSessionsStore.getState().resetForRuntimeSwitch()
   })
 
   afterEach(() => {
-    opencodeClient.listSessionsPage = originalListSessionsPage
+    listSessionsPageImpl = idleListSessionsPage
   })
 
   test("shows the first page before pagination finishes", async () => {
@@ -270,18 +279,7 @@ describe("paginated global session load", () => {
   })
 })
 
-const originalHomeInfo = opencodeClient.getFilesystemHomeInfo;
-
-import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
-
-// The registry's default runtime is the real OMP client; register a
-// client-backed double so this test drives app logic with its mocked client.
-registerAgentRuntime(createOpenCodeStubRuntime());
-// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
-// registry answers an unregistered id with the real OMP client, so register the
-// double under that id too.
-registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
-opencodeClient.getFilesystemHomeInfo = async () => ({ home: '/home/user' });
+const originalHomeInfo = openChamberClient.getFilesystemHomeInfo;
+openChamberClient.getFilesystemHomeInfo = async () => ({ home: '/home/user' });
 await ensureChatsRootDirectory();
-opencodeClient.getFilesystemHomeInfo = originalHomeInfo;
+openChamberClient.getFilesystemHomeInfo = originalHomeInfo;

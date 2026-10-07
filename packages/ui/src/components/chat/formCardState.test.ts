@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { FormField, FormValue } from '@opencode/client';
+import type { FormField, FormValue } from '@/lib/opencode/model';
 import {
     buildFormAnswer,
     evaluateForm,

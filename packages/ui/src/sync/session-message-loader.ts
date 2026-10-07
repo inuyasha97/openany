@@ -1,5 +1,5 @@
 import type { Message, Part } from "@/lib/opencode/model"
-import type { MessagePage } from "@/lib/opencode/client"
+import type { MessagePage } from "@/lib/agent/contract"
 import type { ChildStoreManager, DirectoryStore } from "./child-store"
 import { retry } from "./retry"
 import { mergeOptimisticPage, type OptimisticItem } from "./optimistic"
@@ -81,7 +81,7 @@ type LoadPerformanceDetails = {
 
 /**
  * The loader only needs one page call. Narrowing the dependency to that call
- * keeps the adapter (`opencodeClient`) the single place that knows how the
+ * keeps the adapter (`getAgentRuntimeForSession`) the single place that knows how the
  * server encodes messages, and keeps tests free of a whole SDK double.
  */
 export type SessionMessagePageSource = {

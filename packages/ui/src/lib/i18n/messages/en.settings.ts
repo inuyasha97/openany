@@ -2019,7 +2019,6 @@ export const settingsDict = {
   'settings.openchamber.visual.section.chatDisplay': 'Display',
   'settings.openchamber.visual.section.chatMessageOptions': 'Message options',
   'settings.openchamber.visual.section.chatFeatures': 'Features',
-  'settings.openchamber.visual.section.messageStreamTransport': 'Message Stream Transport',
   'settings.openchamber.visual.section.activityDefault': 'Activity Default',
   'settings.openchamber.visual.section.activityDefaultAria': 'Activity default mode',
   'settings.openchamber.visual.section.sessionActivity': 'Session activity',

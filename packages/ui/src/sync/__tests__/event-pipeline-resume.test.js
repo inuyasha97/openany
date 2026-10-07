@@ -1,104 +1,155 @@
-import { afterEach, describe, expect, it } from 'bun:test';
-import { createEventPipeline } from '../event-pipeline';
+import { afterEach, beforeEach, describe, expect, it, jest, mock } from 'bun:test';
+import { clearRuntimeUrlAuthToken, setRuntimeUrlAuthToken } from '@/lib/runtime-auth';
+import { configureRuntimeUrlResolver } from '@/lib/runtime-url';
 
 const savedDocument = globalThis.document;
 const savedWindow = globalThis.window;
 
+function createEventTarget(extras = {}) {
+  const listeners = new Map();
+  return {
+    ...extras,
+    addEventListener(event, handler) {
+      const list = listeners.get(event);
+      if (list) list.add(handler);
+      else listeners.set(event, new Set([handler]));
+    },
+    removeEventListener(event, handler) {
+      listeners.get(event)?.delete(handler);
+    },
+    dispatch(event) {
+      const list = listeners.get(event);
+      if (!list) return;
+      for (const handler of Array.from(list)) {
+        handler();
+      }
+    },
+  };
+}
+
+const streams = [];
+
+/**
+ * The transport double: frames are yielded by an async generator that ends
+ * when the pipeline tears the socket down, exactly as a real socket reader
+ * does when its attempt is aborted.
+ */
+const createScriptedStream = () => {
+  const pending = [];
+  let wake = null;
+  let closed = false;
+  const controller = new AbortController();
+
+  const socket = {
+    readyState: 1,
+    onopen: null,
+    onmessage: null,
+    onerror: null,
+    onclose: null,
+    send: () => undefined,
+    close: () => {
+      closed = true;
+      controller.abort();
+      wake?.();
+    },
+  };
+
+  const frames = async function* (signal) {
+    while (!signal.aborted) {
+      const frame = pending.shift();
+      if (frame === undefined) {
+        const waiting = Promise.withResolvers();
+        wake = waiting.resolve;
+        signal.addEventListener('abort', () => waiting.resolve(), { once: true });
+        await waiting.promise;
+        wake = null;
+        continue;
+      }
+      yield frame;
+    }
+  };
+
+  void (async () => {
+    socket.onopen?.();
+    for await (const frame of frames(controller.signal)) {
+      if (closed) return;
+      socket.onmessage?.({ data: JSON.stringify(frame) });
+      await Promise.resolve();
+    }
+  })();
+
+  const stream = { socket, push: (frame) => { pending.push(frame); wake?.(); } };
+  streams.push(stream);
+  return stream;
+};
+
+mock.module('@/lib/relay/runtime-socket', () => ({
+  openRuntimeWebSocket: () => createScriptedStream().socket,
+}));
+
+const { createEventPipeline } = await import('../event-pipeline');
+
+/** Lets the pipeline's own microtasks run without advancing the clock. */
+const until = async (predicate) => {
+  for (let tick = 0; tick < 200; tick += 1) {
+    if (predicate()) return true;
+    await Promise.resolve();
+  }
+  return predicate();
+};
+
+beforeEach(() => {
+  jest.useFakeTimers();
+  streams.length = 0;
+  globalThis.document = createEventTarget({ visibilityState: 'visible' });
+  globalThis.window = createEventTarget({
+    location: { href: 'http://127.0.0.1:3000/', origin: 'http://127.0.0.1:3000' },
+  });
+  // The socket upgrade authenticates with the url token; a valid token keeps
+  // the pipeline's pre-connect mint off the network.
+  setRuntimeUrlAuthToken('test-url-token', Date.now() + 60_000);
+  configureRuntimeUrlResolver({ apiBaseUrl: 'http://127.0.0.1:3000' });
+});
+
 afterEach(() => {
+  clearRuntimeUrlAuthToken();
+  jest.useRealTimers();
   globalThis.document = savedDocument;
   globalThis.window = savedWindow;
 });
 
 describe('createEventPipeline — system resume reconnect', () => {
   it('reconnects immediately on openchamber:system-resume event', async () => {
-    const winListeners = {};
-    globalThis.document = {
-      visibilityState: 'visible',
-      addEventListener() {},
-      removeEventListener() {},
-    };
-    globalThis.window = {
-      location: {
-        href: 'http://127.0.0.1:3000/',
-        origin: 'http://127.0.0.1:3000',
-      },
-      addEventListener(event, handler) { winListeners[event] = handler; },
-      removeEventListener(event) { delete winListeners[event]; },
-    };
-
     const disconnectReasons = [];
-    let reconnectCount = 0;
-    const eventCalls = [];
-
-    let sdkCallIndex = 0;
-    let releaseFirstStream;
-    const firstHold = new Promise((resolve) => { releaseFirstStream = resolve; });
-
-    const sdk = {
-      event: {
-        // Accept options with signal so the mock generator can abort.
-        subscribe: (options) => {
-          const callIndex = sdkCallIndex++;
-          eventCalls.push(callIndex);
-          const signal = options?.signal;
-          if (callIndex === 0) {
-            return (async function* () {
-                yield { id: 'evt_1', created: 1000, location: { directory: '/repo' }, type: 'session.status', data: { sessionID: 's1', status: { type: 'idle' } } };
-                // Wait for either the hold promise or abort signal.
-                await Promise.race([
-                  firstHold,
-                  new Promise((_, reject) => {
-                    if (signal?.aborted) { reject(signal.reason || new DOMException('Aborted', 'AbortError')); return; }
-                    signal?.addEventListener('abort', () => {
-                      reject(signal.reason || new DOMException('Aborted', 'AbortError'));
-                    });
-                  }),
-                ]);
-              })();
-          }
-          return (async function* () {
-              yield { id: 'evt_1', created: 1000, location: { directory: '/repo' }, type: 'session.status', data: { sessionID: 's1', status: { type: 'idle' } } };
-              await new Promise(() => {});
-            })();
-        },
-      },
-    };
-
-    const recovered = new Promise((resolve) => {
-      const { cleanup } = createEventPipeline({
-        sdk,
-        transport: 'sse',
-        heartbeatTimeoutMs: 60_000,
-        reconnectDelayMs: 60_000,
-        onEvent: () => {},
-        onDisconnect: (reason) => {
-          disconnectReasons.push(reason);
-        },
-        onReconnect: () => {
-          reconnectCount += 1;
-          // onReconnect fires on the initial connect too (count=1),
-          // so wait for the second reconnect (count=2) triggered by resume.
-          if (reconnectCount === 2) {
-            cleanup();
-            resolve();
-          }
-        },
-      });
-
-      // Wait for first SSE attempt to start and deliver the event, then
-      // simulate OS resume by invoking the registered handler directly.
-      setTimeout(() => {
-        const handler = winListeners['openchamber:system-resume'];
-        if (handler) handler();
-      }, 80);
+    const reconnects = [];
+    const { cleanup } = createEventPipeline({
+      heartbeatTimeoutMs: 60_000,
+      reconnectDelayMs: 60_000,
+      onEvent: () => {},
+      onDisconnect: (reason) => disconnectReasons.push(reason),
+      onReconnect: () => reconnects.push(1),
     });
 
-    await recovered;
-    releaseFirstStream();
+    try {
+      // Initial connect: the socket opens and reports ready.
+      await until(() => streams.length === 1);
+      streams[0].push({ type: 'ready' });
+      await until(() => reconnects.length === 1);
 
-    // Should have made two SDK calls: initial connect + reconnect after resume.
-    expect(eventCalls.length).toBe(2);
-    // Disconnect reason should include system_resume.
-    expect(disconnectReasons.some((r) => r.includes('system_resume'))).toBe(true);
+      // Simulate OS resume by invoking the registered handler directly. The
+      // pipeline must abort the (almost certainly dead) connection and start a
+      // fresh attempt with no backoff, without any clock time elapsing.
+      globalThis.window.dispatch('openchamber:system-resume');
+      await until(() => streams.length > 1);
+      streams[1].push({ type: 'ready' });
+      await until(() => reconnects.length === 2);
+
+      // Should have made two attempts: initial connect + reconnect after resume.
+      expect(streams).toHaveLength(2);
+      // Disconnect reason should include system_resume.
+      expect(disconnectReasons.some((reason) => reason.includes('system_resume'))).toBe(true);
+    } finally {
+      cleanup();
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import type { Session } from '@/lib/opencode/model';
 import { checkIsGitRepository, snapshotGitWorktree } from '@/lib/gitApi';
 import { getWorktreeSetupWaitEnabled } from '@/lib/openchamberConfig';
@@ -149,9 +149,9 @@ export async function addLaneToRun(input: {
 }): Promise<string> {
   const { run, model } = input;
   const runtimeKey = getRuntimeKey();
-  const client = opencodeClient.getSdkClient();
+  const runtimeIdentity = openChamberClient.getRuntimeIdentity();
   const assertCurrent = () => {
-    if (getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== client) throw new Error('Runtime changed');
+    if (getRuntimeKey() !== runtimeKey || openChamberClient.getRuntimeIdentity() !== runtimeIdentity) throw new Error('Runtime changed');
   };
   const template = run.lanes.find((lane) => lane.identity.runGroup === input.runGroup) ?? run.lanes[0];
   const templateSession = template ? input.sessionById.get(template.sessionId) : undefined;

@@ -1,448 +1,363 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client"
-import type { SyncEvent } from "@/lib/opencode/events"
-import { forgetSessionRuntime, runtimeIdForSession } from "@/lib/agent/registry"
-import { adoptRelayTunnel, deactivateRelayTunnel } from "@/lib/relay/runtime-tunnel"
-import type { RelayTunnelClient, RelayTunnelWebSocket } from "@/lib/relay/tunnel-client"
+/**
+ * The event pipeline against the server's WebSocket bridge.
+ *
+ * Everything the sync layer reduces arrives on `/api/global/event/ws`, already
+ * in the canonical vocabulary: the host's own frames (status, archive, metadata,
+ * notifications, space lifecycle) and the fork's runtime frames
+ * (`openchamber:omp`), which the server projects into `SyncEvent`s before it
+ * sends them. The pipeline's job is transport — connect, translate, coalesce
+ * per directory, flush in arrival order — so these tests drive it through a
+ * scripted stream instead of a real socket.
+ */
+
+import { afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test"
+import type { RelayTunnelWebSocket } from "@/lib/relay/tunnel-client"
+import { GLOBAL_EVENT_DIRECTORY, type SyncEvent } from "@/lib/agent/events"
+import { forgetSessionRuntime, registerAgentRuntime, runtimeIdForSession } from "@/lib/agent/registry"
+import { createOpenCodeStubRuntime } from "@/lib/agent/testing/opencode-stub-runtime"
 import { clearRuntimeUrlAuthToken, setRuntimeUrlAuthToken } from "@/lib/runtime-auth"
-import { createEventPipeline } from "./event-pipeline"
+import { configureRuntimeUrlResolver } from "@/lib/runtime-url"
+import type { Part, Session } from "@/lib/opencode/model"
+import type { EventPipeline, SpaceProgress } from "./event-pipeline"
 
-const failAfter = (ms: number) => new Promise<never>((_, reject) => {
-  setTimeout(() => reject(new Error("Timed out waiting for event pipeline flush")), ms)
-})
-
-const base = { id: "evt_1", created: 1000, location: { directory: "/repo" } }
-const durable = { aggregateID: "ses_1", seq: 1, version: 1 as const }
-
-function textEnded(text: string): OpenCodeEvent {
-  return { ...base, type: "session.text.ended", durable, data: { sessionID: "ses_1", assistantMessageID: "msg_1", ordinal: 0, text } }
+// A frame as the server sends it. `payload` is the wire event or the host's
+// own frame; `directory` is the directory the bridge attached.
+type Frame = {
+  type: "ready" | "event" | "error" | "backpressure"
+  replayReset?: boolean
+  payload?: unknown
+  eventId?: string
+  directory?: string
+  message?: string
 }
 
-function textDelta(delta: string): OpenCodeEvent {
-  return { ...base, type: "session.text.delta", data: { sessionID: "ses_1", assistantMessageID: "msg_1", ordinal: 0, delta } }
+type ScriptedStream = {
+  socket: RelayTunnelWebSocket
+  /** Queues one frame; the stream hands it to the socket in arrival order. */
+  push: (frame: Frame) => void
 }
 
-function statusEvent(type: "busy" | "retry"): OpenCodeEvent {
-  return {
-    ...base,
-    type: "session.status",
-    data: {
-      sessionID: "ses_1",
-      status: type === "busy" ? { type } : { type, attempt: 1, message: "retrying", next: 1 },
-    },
-  }
-}
+/**
+ * The stream double: frames are yielded by an async generator that ends when
+ * the pipeline tears the socket down, exactly as a real socket's reader does
+ * when its attempt is aborted. The pipeline's own `onopen`/`onmessage` handlers
+ * are what the double calls, so no delivery path is replaced.
+ */
+const createScriptedStream = (): ScriptedStream => {
+  const pending: Frame[] = []
+  let wake: (() => void) | null = null
+  let closed = false
+  const controller = new AbortController()
 
-/** A raw stream payload: wire events, or OpenChamber's own bridge events. */
-type StreamPayload = OpenCodeEvent | { type: string; properties: Record<string, string> }
-
-/** `keepalives` counts SSE comments sent before the events. They are activity without an event. */
-function createSdk(events: StreamPayload[], streamFinished: () => void, keepalives = 0): OpenCodeClient {
-  const subscribe = ({ signal, onActivity }: { signal?: AbortSignal; onActivity?: () => void }) => ({
-    async *[Symbol.asyncIterator]() {
-      for (let sent = 0; sent < keepalives; sent += 1) {
-        onActivity?.()
-      }
-      for (const payload of events) {
-        yield payload as OpenCodeEvent
-      }
-      streamFinished()
-      await new Promise<void>((resolve) => {
-        if (!signal || signal.aborted) {
-          resolve()
-          return
-        }
-        signal.addEventListener("abort", () => resolve(), { once: true })
-      })
-    },
-  })
-  // SAFETY: the pipeline only touches `event.subscribe` on the client.
-  return { event: { subscribe } } as unknown as OpenCodeClient
-}
-
-const describeEvent = (event: SyncEvent): string => {
-  if (event.type === "message.part.delta") return `delta:${event.properties.delta}`
-  if (event.type === "message.part.updated" && event.properties.part.type === "text") return `updated:${event.properties.part.text}`
-  return event.type
-}
-
-async function collect(events: StreamPayload[], expected: number): Promise<{ directory: string; events: SyncEvent[] }> {
-  let resolveStreamFinished!: () => void
-  const streamFinished = new Promise<void>((resolve) => {
-    resolveStreamFinished = resolve
-  })
-  let resolveDelivered!: () => void
-  const deliveredAll = new Promise<void>((resolve) => {
-    resolveDelivered = resolve
-  })
-  const delivered: SyncEvent[] = []
-  let deliveredDirectory = ""
-  const pipeline = createEventPipeline({
-    sdk: createSdk(events, resolveStreamFinished),
-    onEvents: (directory, batch) => {
-      deliveredDirectory = directory
-      delivered.push(...batch)
-      if (delivered.length >= expected) resolveDelivered()
-    },
-    transport: "sse",
-    heartbeatTimeoutMs: 1_000,
-  })
-  try {
-    await streamFinished
-    await Promise.race([deliveredAll, failAfter(500)])
-  } finally {
-    pipeline.cleanup()
-  }
-  return { directory: deliveredDirectory, events: delivered }
-}
-
-describe("createEventPipeline", () => {
-  test("translates wire events, routes them by location, and delivers one ordered batch", async () => {
-    const { directory, events } = await collect([textEnded("a"), textDelta("b"), textEnded("ab")], 3)
-    expect(directory).toBe("/repo")
-    expect(events.map(describeEvent)).toEqual(["updated:a", "delta:b", "updated:ab"])
-  })
-
-  test("merges consecutive deltas for one part", async () => {
-    const { events } = await collect([textEnded(""), textDelta("b"), textDelta("c")], 2)
-    expect(events.map(describeEvent)).toEqual(["updated:", "delta:bc"])
-  })
-
-  test("does not merge deltas across an intervening part snapshot", async () => {
-    // The "ab" snapshot is a coalescing barrier: the trailing "c" delta must
-    // stay a separate event after it, not merge into the "b" delta queued
-    // before the snapshot (which the snapshot would then overwrite).
-    const { events } = await collect([textEnded("a"), textDelta("b"), textEnded("ab"), textDelta("c")], 4)
-    expect(events.map(describeEvent)).toEqual(["updated:a", "delta:b", "updated:ab", "delta:c"])
-  })
-
-  test("does not coalesce session status across an idle barrier", async () => {
-    const { events } = await collect(
-      [statusEvent("busy"), { ...base, type: "session.idle", data: { sessionID: "ses_1" } }, statusEvent("retry")],
-      3,
-    )
-    expect(events.map((event) => event.type)).toEqual(["session.status", "session.idle", "session.status"])
-    const last = events[2]
-    expect(last.type === "session.status" && last.properties.status.type).toBe("retry")
-  })
-
-  test("folds successive session patches into one", async () => {
-    const { events } = await collect(
-      [
-        { ...base, type: "session.renamed", durable, data: { sessionID: "ses_1", title: "New" } },
-        { ...base, type: "session.usage.updated", data: { sessionID: "ses_1", cost: 1, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } } },
-      ],
-      1,
-    )
-    expect(events).toHaveLength(1)
-    expect(events[0]).toMatchObject({ type: "session.patched", properties: { patch: { title: "New", cost: 1, time: { updated: 1000 } } } })
-  })
-
-  test("bridges openchamber session status events into session.status", async () => {
-    const { directory, events } = await collect(
-      [{ type: "openchamber:session-status", properties: { sessionID: "ses_1", status: "idle" } }],
-      1,
-    )
-    expect(directory).toBe("global")
-    expect(events[0]).toEqual({ type: "session.status", properties: { sessionID: "ses_1", status: { type: "idle" } } })
-  })
-
-  test("bridges openchamber archive announcements into session patches", async () => {
-    const { events } = await collect(
-      [{ type: "openchamber:session-archived", properties: { sessionID: "ses_1", archivedAt: 42 } as never }],
-      1,
-    )
-    expect(events[0]).toEqual({ type: "session.patched", properties: { sessionID: "ses_1", patch: { time: { archived: 42 } } } })
-  })
-
-  test("bridges openchamber metadata announcements into session patches", async () => {
-    const { events } = await collect(
-      [{ type: "openchamber:session-metadata", properties: { sessionID: "ses_1", metadata: { pinned: true } } as never }],
-      1,
-    )
-    expect(events[0]).toEqual({ type: "session.patched", properties: { sessionID: "ses_1", patch: { metadata: { pinned: true } } } })
-  })
-
-  test("passes OpenChamber notification and auto-accept frames through typed", async () => {
-    const { events } = await collect(
-      [
-        { type: "openchamber:notification", properties: { kind: "agent-complete", sessionId: "ses_1", title: "Done" } },
-        { type: "openchamber:permission-auto-accept.updated", properties: { sessions: { ses_1: true }, modes: { ses_1: "safety" }, revision: 3 } as never },
-      ],
-      2,
-    )
-    expect(events[0]).toEqual({ type: "openchamber.notification", properties: { kind: "agent-complete", sessionId: "ses_1", title: "Done" } })
-    expect(events[1]).toEqual({ type: "openchamber.permission-auto-accept", properties: { sessions: { ses_1: true }, modes: { ses_1: "safety" }, revision: 3 } })
-  })
-
-  test("routes an openchamber:omp frame to the session directory", async () => {
-    const { directory, events } = await collect(
-      [{
-        type: "openchamber:omp",
-        properties: {
-          sessionID: "ses_1",
-          directory: "/repo",
-          events: [
-            { type: "session.status", properties: { sessionID: "ses_1", status: { type: "busy" } } },
-            { type: "session.idle", properties: { sessionID: "ses_1" } },
-          ],
-        },
-      } as never],
-      2,
-    )
-    expect(directory).toBe("/repo")
-    expect(events).toEqual([
-      { type: "session.status", properties: { sessionID: "ses_1", status: { type: "busy" } } },
-      { type: "session.idle", properties: { sessionID: "ses_1" } },
-    ])
-  })
-
-  test("routes an openchamber:omp frame without a directory to the global queue", async () => {
-    const { directory, events } = await collect(
-      [{ type: "openchamber:omp", properties: { sessionID: "ses_1", events: [{ type: "session.idle", properties: { sessionID: "ses_1" } }] } as never }],
-      1,
-    )
-    expect(directory).toBe("global")
-    expect(events).toEqual([{ type: "session.idle", properties: { sessionID: "ses_1" } }])
-  })
-
-  test("binds a session to its runtime from an openchamber:omp session.created frame", async () => {
-    forgetSessionRuntime("ses_1")
-    try {
-      await collect(
-        [{
-          type: "openchamber:omp",
-          properties: {
-            sessionID: "ses_1",
-            directory: "/repo",
-            events: [{
-              type: "session.created",
-              properties: { info: { id: "ses_1", sessionID: "ses_1", projectID: "", directory: "/repo", title: "", cost: 0, tokens: {}, time: {}, runtimeId: "omp", nativeSessionId: "ses_1" } },
-            }],
-          },
-        } as never],
-        1,
-      )
-      expect(runtimeIdForSession("ses_1")).toBe("omp")
-    } finally {
-      forgetSessionRuntime("ses_1")
-    }
-  })
-
-  test("ignores payloads that are neither wire events nor bridge events", async () => {
-    const { events } = await collect([{ type: "something.else", properties: {} }, textEnded("x")], 1)
-    expect(events.map(describeEvent)).toEqual(["updated:x"])
-  })
-
-  test("hands a space-stream announcement to its owner and delivers no event for it", async () => {
-    let resolveStreamFinished!: () => void
-    const streamFinished = new Promise<void>((resolve) => { resolveStreamFinished = resolve })
-    const delivered: SyncEvent[] = []
-    const announced: Array<{ spaceId: string; status: string; wasReady: boolean }> = []
-    const pipeline = createEventPipeline({
-      sdk: createSdk([
-        { type: "openchamber:space-stream", properties: { spaceId: "a1b2c3d4e5f6", status: "connected", wasReady: false, timestamp: 1 } as never },
-        { type: "openchamber:space-stream", properties: { spaceId: "not-an-id", status: "connected", wasReady: false } as never },
-        textEnded("a"),
-      ], resolveStreamFinished),
-      onEvents: (_directory, batch) => { delivered.push(...batch) },
-      onSpaceStream: (details) => { announced.push(details) },
-      transport: "sse",
-      heartbeatTimeoutMs: 1_000,
-    })
-    try {
-      await streamFinished
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    } finally {
-      pipeline.cleanup()
-    }
-    expect(announced).toEqual([{ spaceId: "a1b2c3d4e5f6", status: "connected", wasReady: false }])
-    expect(delivered.map(describeEvent)).toEqual(["updated:a"])
-  })
-
-  test("hands a creation step of a space to its owner, failure included, and delivers no event for it", async () => {
-    let resolveStreamFinished!: () => void
-    const streamFinished = new Promise<void>((resolve) => { resolveStreamFinished = resolve })
-    const delivered: SyncEvent[] = []
-    const steps: Array<{ spaceId: string; step: string; failure: { code: string; message: string } | null }> = []
-    const pipeline = createEventPipeline({
-      sdk: createSdk([
-        { type: "openchamber:space-progress", properties: { spaceId: "a1b2c3d4e5f6", step: "creating", failure: null, timestamp: 1 } as never },
-        { type: "openchamber:space-progress", properties: { spaceId: "a1b2c3d4e5f6", step: "failed", failure: { code: "docker_daemon_unreachable", message: "down", details: null }, timestamp: 2 } as never },
-        { type: "openchamber:space-progress", properties: { spaceId: "a1b2c3d4e5f6", step: "dancing", failure: null } as never },
-        textEnded("a"),
-      ], resolveStreamFinished),
-      onEvents: (_directory, batch) => { delivered.push(...batch) },
-      onSpaceProgress: (progress) => { steps.push(progress) },
-      transport: "sse",
-      heartbeatTimeoutMs: 1_000,
-    })
-    try {
-      await streamFinished
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    } finally {
-      pipeline.cleanup()
-    }
-    expect(steps).toEqual([
-      { spaceId: "a1b2c3d4e5f6", step: "creating", failure: null },
-      { spaceId: "a1b2c3d4e5f6", step: "failed", failure: { code: "docker_daemon_unreachable", message: "down" } },
-    ])
-    expect(delivered.map(describeEvent)).toEqual(["updated:a"])
-  })
-
-  test("hands a move of a space's setup commands to its owner and delivers no event for it", async () => {
-    let resolveStreamFinished!: () => void
-    const streamFinished = new Promise<void>((resolve) => { resolveStreamFinished = resolve })
-    const delivered: SyncEvent[] = []
-    const moved: string[] = []
-    const pipeline = createEventPipeline({
-      sdk: createSdk([
-        { type: "openchamber:space-setup", properties: { spaceId: "a1b2c3d4e5f6", timestamp: 1 } as never },
-        { type: "openchamber:space-setup", properties: { spaceId: "../etc" } as never },
-        textEnded("a"),
-      ], resolveStreamFinished),
-      onEvents: (_directory, batch) => { delivered.push(...batch) },
-      onSpaceSetup: (spaceId) => { moved.push(spaceId) },
-      transport: "sse",
-      heartbeatTimeoutMs: 1_000,
-    })
-    try {
-      await streamFinished
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    } finally {
-      pipeline.cleanup()
-    }
-    expect(moved).toEqual(["a1b2c3d4e5f6"])
-    expect(delivered.map(describeEvent)).toEqual(["updated:a"])
-  })
-
-  test("reports keepalives that carry no event as stream activity", async () => {
-    let resolveStreamFinished!: () => void
-    const streamFinished = new Promise<void>((resolve) => { resolveStreamFinished = resolve })
-    const delivered: SyncEvent[] = []
-    let activity = 0
-    const pipeline = createEventPipeline({
-      sdk: createSdk([textEnded("a")], resolveStreamFinished, 2),
-      onEvents: (_directory, batch) => { delivered.push(...batch) },
-      onStreamActivity: () => { activity += 1 },
-      transport: "sse",
-      heartbeatTimeoutMs: 1_000,
-    })
-    try {
-      await streamFinished
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    } finally {
-      pipeline.cleanup()
-    }
-    // Two keepalives and one event; only the event is delivered.
-    expect(activity).toBe(3)
-    expect(delivered.map(describeEvent)).toEqual(["updated:a"])
-  })
-
-  test("reports no stream activity for an attempt that has received nothing", async () => {
-    let resolveStreamFinished!: () => void
-    const streamFinished = new Promise<void>((resolve) => { resolveStreamFinished = resolve })
-    let activity = 0
-    const pipeline = createEventPipeline({
-      sdk: createSdk([], resolveStreamFinished),
-      onEvents: () => undefined,
-      onStreamActivity: () => { activity += 1 },
-      transport: "sse",
-      heartbeatTimeoutMs: 1_000,
-    })
-    try {
-      await streamFinished
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    } finally {
-      pipeline.cleanup()
-    }
-    expect(activity).toBe(0)
-  })
-})
-
-/** A relay tunnel socket the test drives by hand. */
-function createFakeSocket(): RelayTunnelWebSocket {
-  let readyState = 1
-  return {
-    get readyState() { return readyState },
+  const socket: RelayTunnelWebSocket = {
+    readyState: 1,
     onopen: null,
     onmessage: null,
     onerror: null,
     onclose: null,
     send: () => undefined,
-    close: () => { readyState = 3 },
+    close: () => {
+      closed = true
+      controller.abort()
+      wake?.()
+    },
+  }
+
+  const frames = async function* (signal: AbortSignal): AsyncGenerator<Frame> {
+    while (!signal.aborted) {
+      const frame = pending.shift()
+      if (frame === undefined) {
+        const waiting = Promise.withResolvers<void>()
+        wake = waiting.resolve
+        signal.addEventListener("abort", () => waiting.resolve(), { once: true })
+        await waiting.promise
+        wake = null
+        continue
+      }
+      yield frame
+    }
+  }
+
+  void (async () => {
+    socket.onopen?.()
+    for await (const frame of frames(controller.signal)) {
+      if (closed) return
+      socket.onmessage?.({ data: JSON.stringify(frame) })
+      // One microtask per frame: the pipeline's own delivery stays synchronous,
+      // so a test that queues several frames in one turn sees them in one flush.
+      await Promise.resolve()
+    }
+  })()
+
+  return {
+    socket,
+    push: (frame) => {
+      pending.push(frame)
+      wake?.()
+    },
   }
 }
 
-describe("createEventPipeline over the WebSocket transport", () => {
-  beforeEach(() => {
-    Object.defineProperty(globalThis, "window", {
-      value: Object.assign(new EventTarget(), { location: new URL("http://runtime.test") }),
-      configurable: true,
-      writable: true,
-    })
-    // A valid URL token lets the attempt open the socket without minting one.
-    setRuntimeUrlAuthToken("fixture-url-token", Date.now() + 10 * 60_000)
-  })
+const streams: ScriptedStream[] = []
+const pipelines: EventPipeline[] = []
 
-  afterEach(() => {
-    deactivateRelayTunnel()
-    clearRuntimeUrlAuthToken()
-    Reflect.deleteProperty(globalThis, "window")
-  })
+mock.module("@/lib/relay/runtime-socket", () => ({
+  openRuntimeWebSocket: () => {
+    const stream = createScriptedStream()
+    streams.push(stream)
+    return stream.socket
+  },
+}))
 
-  test("counts a heartbeat frame as stream activity without delivering an event", async () => {
-    const paths: string[] = []
-    const sockets: RelayTunnelWebSocket[] = []
-    const tunnel: RelayTunnelClient = {
-      async fetch() { throw new Error("the WebSocket transport must not fetch") },
-      openWebSocket(pathWithQuery) {
-        paths.push(pathWithQuery)
-        const socket = createFakeSocket()
-        sockets.push(socket)
-        return socket
-      },
-      getStatus: () => ({ state: "connected" }),
-      subscribeStatus: () => () => undefined,
-      close: () => undefined,
-    }
-    adoptRelayTunnel({ relayUrl: "wss://relay.test", serverId: "fixture", hostEncPubJwk: {} }, tunnel)
-    const delivered: SyncEvent[] = []
-    let activity = 0
-    const pipeline = createEventPipeline({
-      sdk: createSdk([], () => undefined),
-      onEvents: (_directory, batch) => { delivered.push(...batch) },
-      onStreamActivity: () => { activity += 1 },
-      transport: "ws",
-      heartbeatTimeoutMs: 1_000,
-    })
-    try {
-      for (let i = 0; i < 20 && sockets.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
-      expect(sockets).toHaveLength(1)
-      expect(paths[0]).toContain("/api/global/event/ws")
-      const socket = sockets[0]
-      socket.onmessage?.({ data: JSON.stringify({ type: "ready" }) })
-      socket.onmessage?.({
-        data: JSON.stringify({ type: "event", payload: { type: "openchamber:heartbeat", timestamp: 1 }, directory: "global" }),
-      })
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    } finally {
-      pipeline.cleanup()
-    }
-    // The ready frame and the heartbeat frame both prove the socket is alive. Neither is an event.
-    expect(activity).toBe(2)
-    expect(delivered).toEqual([])
-  })
+// The mock has to be registered before the pipeline module is evaluated, so a
+// static import cannot work here.
+const { createEventPipeline } = await import("./event-pipeline")
+
+/**
+ * Lets the pipeline's own microtasks run (connect, then one frame per turn)
+ * without advancing the clock. Its flush timer is driven by `jest`, below.
+ */
+const until = async (predicate: () => boolean): Promise<boolean> => {
+  for (let tick = 0; tick < 50; tick += 1) {
+    if (predicate()) return true
+    await Promise.resolve()
+  }
+  return predicate()
+}
+
+/** Delivers queued frames, runs the pipeline's flush timer, then settles. */
+const flush = async (): Promise<void> => {
+  await until(() => false)
+  jest.advanceTimersByTime(1_000)
+  await until(() => false)
+}
+
+const makeSession = (id: string): Session => ({
+  id,
+  projectID: "project",
+  directory: "/repo/a",
+  title: id,
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  time: { created: 1, updated: 1 },
 })
 
+const textPart = (id: string, messageID: string, text: string): Part => ({
+  id,
+  sessionID: "ses_1",
+  messageID,
+  type: "text",
+  text,
+})
 
-import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+const delta = (value: string): SyncEvent => ({
+  type: "message.part.delta",
+  properties: { sessionID: "ses_1", messageID: "msg_1", partID: "msg_1:text:0", field: "text", delta: value },
+})
 
-// The registry's default runtime is the real OMP client; register a
-// client-backed double so this test drives app logic with its mocked client.
-registerAgentRuntime(createOpenCodeStubRuntime());
-// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
-// registry answers an unregistered id with the real OMP client, so register the
-// double under that id too.
-registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
+/** One projected batch from the fork's runtime, as the server sends it. */
+const runtimeFrame = (events: SyncEvent[], directory?: string): Frame => ({
+  type: "event",
+  payload: { type: "openchamber:omp", properties: { sessionID: "ses_1", directory, events } },
+})
+
+type Harness = {
+  stream: ScriptedStream
+  batches: Array<{ directory: string; events: SyncEvent[] }>
+  reconnects: Array<{ replayReset: boolean }>
+  disconnects: string[]
+  spaceStreams: Array<{ spaceId: string; status: "connected" | "disconnected"; wasReady: boolean }>
+  spaceProgress: SpaceProgress[]
+  spaceSetup: string[]
+}
+
+/** Mounts one pipeline against a scripted stream and waits for it to connect. */
+const startPipeline = async (): Promise<Harness> => {
+  const harness: Harness = {
+    stream: { socket: undefined as unknown as RelayTunnelWebSocket, push: () => undefined },
+    batches: [],
+    reconnects: [],
+    disconnects: [],
+    spaceStreams: [],
+    spaceProgress: [],
+    spaceSetup: [],
+  }
+  const pipeline = createEventPipeline({
+    onEvents: (directory, events) => harness.batches.push({ directory, events: [...events] }),
+    onReconnect: (details) => harness.reconnects.push(details),
+    onDisconnect: (reason) => harness.disconnects.push(reason),
+    onSpaceStream: (details) => harness.spaceStreams.push(details),
+    onSpaceProgress: (details) => harness.spaceProgress.push(details),
+    onSpaceSetup: (spaceId) => harness.spaceSetup.push(spaceId),
+  })
+  pipelines.push(pipeline)
+  await until(() => streams.length > 0)
+  harness.stream = streams[streams.length - 1]
+  harness.stream.push({ type: "ready" })
+  await until(() => harness.reconnects.length > 0)
+  return harness
+}
+
+beforeEach(() => {
+  jest.useFakeTimers()
+  streams.length = 0
+  pipelines.length = 0
+  // The socket upgrade authenticates with the url token; the pipeline mints one
+  // before it connects. A valid token keeps that off the network.
+  setRuntimeUrlAuthToken("test-url-token", Date.now() + 60_000)
+  configureRuntimeUrlResolver({ apiBaseUrl: "https://runtime.test" })
+})
+
+afterEach(() => {
+  for (const pipeline of pipelines) pipeline.cleanup()
+  clearRuntimeUrlAuthToken()
+  jest.useRealTimers()
+})
+
+describe("event pipeline", () => {
+  test("delivers an openchamber:omp frame to the directory it names, in order", async () => {
+    const harness = await startPipeline()
+
+    // The frame's own directory wins over the one the bridge attached.
+    harness.stream.push({
+      type: "event",
+      directory: "/repo/attached",
+      eventId: "evt_1",
+      payload: {
+        type: "openchamber:omp",
+        properties: {
+          sessionID: "ses_1",
+          directory: "/repo/a",
+          events: [
+            { type: "message.patched", properties: { sessionID: "ses_1", messageID: "msg_1", patch: { time: { created: 5 } } } },
+            { type: "message.part.updated", properties: { sessionID: "ses_1", part: textPart("msg_1:text:0", "msg_1", "hello") } },
+            delta(" world"),
+          ],
+        },
+      },
+    })
+    await flush()
+
+    expect(harness.batches).toHaveLength(1)
+    expect(harness.batches[0].directory).toBe("/repo/a")
+    expect(harness.batches[0].events.map((event) => event.type)).toEqual([
+      "message.patched",
+      "message.part.updated",
+      "message.part.delta",
+    ])
+    expect(harness.disconnects).toEqual([])
+  })
+
+  test("falls back to the bridge's directory, then to the global queue", async () => {
+    const harness = await startPipeline()
+
+    harness.stream.push({
+      type: "event",
+      directory: "/repo/b",
+      payload: {
+        type: "openchamber:omp",
+        properties: { sessionID: "ses_1", events: [{ type: "session.idle", properties: { sessionID: "ses_1" } }] },
+      },
+    })
+    await flush()
+    expect(harness.batches).toHaveLength(1)
+    expect(harness.batches[0].directory).toBe("/repo/b")
+
+    harness.stream.push({
+      type: "event",
+      payload: {
+        type: "openchamber:omp",
+        properties: { sessionID: "ses_2", events: [{ type: "session.idle", properties: { sessionID: "ses_2" } }] },
+      },
+    })
+    await flush()
+    expect(harness.batches).toHaveLength(2)
+    expect(harness.batches[1].directory).toBe(GLOBAL_EVENT_DIRECTORY)
+    expect(harness.batches[1].events.map((event) => event.type)).toEqual(["session.idle"])
+  })
+
+  test("registers the runtime a created session came from", async () => {
+    const harness = await startPipeline()
+    registerAgentRuntime(createOpenCodeStubRuntime("acp"))
+    expect(runtimeIdForSession("ses_child")).toBe("omp")
+
+    // SAFETY: the server's `session.created` carries the owning runtime id on
+    // the info record; the canonical `Session` type does not declare it.
+    const childInfo = { ...makeSession("ses_child"), runtimeId: "acp" } as Session
+
+    try {
+      harness.stream.push(
+        runtimeFrame(
+          [{ type: "session.created", properties: { info: childInfo } }],
+          "/repo/a",
+        ),
+      )
+      await flush()
+
+      expect(runtimeIdForSession("ses_child")).toBe("acp")
+    } finally {
+      forgetSessionRuntime("ses_child")
+    }
+  })
+
+  test("coalesces repeated deltas into one growth and lets a snapshot end the window", async () => {
+    const harness = await startPipeline()
+
+    harness.stream.push(runtimeFrame([delta("Hel"), delta("lo")], "/repo/a"))
+    await flush()
+
+    expect(harness.batches).toHaveLength(1)
+    expect(harness.batches[0].events).toHaveLength(1)
+    const [first] = harness.batches[0].events
+    if (first?.type !== "message.part.delta") throw new Error("expected one coalesced delta")
+    expect(first.properties.delta).toBe("Hello")
+
+    // A full part snapshot is a barrier for that part: a delta queued before it
+    // stays before it, and a delta after it is delivered after it rather than
+    // merged into the earlier one.
+    harness.stream.push(runtimeFrame([
+      delta("!"),
+      { type: "message.part.updated", properties: { sessionID: "ses_1", part: textPart("msg_1:text:0", "msg_1", "Hello!") } },
+      delta("?"),
+    ], "/repo/a"))
+    await flush()
+
+    expect(harness.batches).toHaveLength(2)
+    expect(harness.batches[1].events.map((event) => event.type)).toEqual([
+      "message.part.delta",
+      "message.part.updated",
+      "message.part.delta",
+    ])
+  })
+
+  test("hands the host's space frames to their owner instead of a directory queue", async () => {
+    const harness = await startPipeline()
+    const spaceId = "abcdef012345"
+
+    harness.stream.push({
+      type: "event",
+      payload: { type: "openchamber:space-stream", properties: { spaceId, status: "disconnected", wasReady: true } },
+    })
+    harness.stream.push({
+      type: "event",
+      payload: {
+        type: "openchamber:space-progress",
+        properties: { spaceId, step: "failed", failure: { code: "setup_failed", message: "bun install failed" } },
+      },
+    })
+    harness.stream.push({
+      type: "event",
+      payload: { type: "openchamber:space-setup", properties: { spaceId } },
+    })
+    await flush()
+
+    expect(harness.spaceStreams).toEqual([{ spaceId, status: "disconnected", wasReady: true }])
+    expect(harness.spaceProgress).toEqual([
+      { spaceId, step: "failed", failure: { code: "setup_failed", message: "bun install failed" } },
+    ])
+    expect(harness.spaceSetup).toEqual([spaceId])
+
+    // A space frame is not a session event: it never reaches a directory queue.
+    expect(harness.batches).toEqual([])
+  })
+})

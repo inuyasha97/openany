@@ -3,15 +3,8 @@ import { z } from 'zod';
 import type { Metadata, Session } from '@/lib/opencode/model';
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
-
-// The registry's default runtime is the real OMP client; register a
-// client-backed double so this test drives app logic with its mocked client.
-registerAgentRuntime(createOpenCodeStubRuntime());
-// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
-// registry answers an unregistered id with the real OMP client, so register the
-// double under that id too.
-registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
+import type { AgentRuntime } from '@/lib/agent/contract';
+import * as runtimeSwitchModule from '@/lib/runtime-switch';
 
 const upsertedSessions: Session[] = [];
 const registeredDirectories: Array<{ sessionID: string; directory: string }> = [];
@@ -63,21 +56,22 @@ const mergePatch = (current: Metadata, patch: Metadata): Metadata => {
 };
 
 const storedMetadata = new Map<string, Metadata>();
-type FakeRuntimeClient = { runtime: string };
-const sdkClient = { runtime: 'multirun.test' };
-let activeClient: FakeRuntimeClient = sdkClient;
 
-const fakeOpencodeClient = {
-  getSdkClient: () => activeClient,
+// The store creates and rolls back sessions through the agent runtime, so the
+// test registers a double whose `createSession`/`deleteSession` drive the same
+// bookkeeping the store asserts on. Register it under the default id and under
+// `opencode`, the runtime id OpenCode-created sessions carry.
+const createFakeRuntime = (id: string): AgentRuntime => ({
+  id,
   createSession: async (params: { title?: string; metadata?: Metadata }, directory?: string | null): Promise<Session> => {
     const dir = directory ?? '/repo';
     operationOrder.push(`createSession:${dir}`);
     createdCount += 1;
-    const id = createdCount === 1 ? 'ses_multirun' : `ses_multirun_${createdCount}`;
-    storedMetadata.set(id, params.metadata ?? {});
+    const sessionId = createdCount === 1 ? 'ses_multirun' : `ses_multirun_${createdCount}`;
+    storedMetadata.set(sessionId, params.metadata ?? {});
     onCreate();
     return {
-      id, projectID: 'p', title: params.title ?? '', directory: dir,
+      id: sessionId, projectID: 'p', title: params.title ?? '', directory: dir,
       cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       time: { created: 1, updated: 1 }, metadata: params.metadata,
     };
@@ -87,7 +81,17 @@ const fakeOpencodeClient = {
     storedMetadata.delete(id);
     return true;
   },
-};
+} as unknown as AgentRuntime);
+registerAgentRuntime(createFakeRuntime('omp'));
+registerAgentRuntime(createFakeRuntime('opencode'));
+
+// The store detects a runtime change by comparing `getRuntimeKey()` across an
+// await; drive that key directly instead of the removed SDK client.
+let currentRuntimeKey = 'multirun.test';
+mock.module('@/lib/runtime-switch', () => ({
+  ...runtimeSwitchModule,
+  getRuntimeKey: () => currentRuntimeKey,
+}));
 
 mock.module('@/sync/session-ui-store', () => ({
   routeMessage: async ({ sessionId }: { sessionId: string }) => { dispatchedSessionIds.push(sessionId); },
@@ -99,10 +103,6 @@ mock.module('@/sync/session-ui-store', () => ({
       },
     }),
   },
-}));
-
-mock.module('@/lib/opencode/client', () => ({
-  opencodeClient: fakeOpencodeClient,
 }));
 
 mock.module('@/lib/sessionKnowledgeApi', () => ({
@@ -216,7 +216,7 @@ describe('useMultiRunStore', () => {
     deletedSessionIds.length = 0;
     createdCount = 0;
     rejectNextMembership = false;
-    activeClient = sdkClient;
+    currentRuntimeKey = 'multirun.test';
     storedMetadata.clear();
     onCreate = () => {};
     isGitRepository = false;
@@ -264,7 +264,7 @@ describe('useMultiRunStore', () => {
 
   test('changing runtime while creating stops dispatch and registration', async () => {
     onCreate = () => {
-      activeClient = { runtime: 'other-runtime.test' };
+      currentRuntimeKey = 'other-runtime.test';
       useMultiRunStore.getState().resetForRuntimeSwitch();
     };
     const result = await useMultiRunStore.getState().createMultiRun({

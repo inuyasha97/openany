@@ -218,12 +218,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['messages', 'conversation', 'rendering'],
   },
   {
-    id: 'chat.message-transport',
-    page: 'general',
-    titleKey: 'settings.openchamber.visual.section.messageStreamTransport',
-    keywords: ['streaming', 'sse', 'websocket'],
-  },
-  {
     id: 'chat.session-recap',
     page: 'chat',
     titleKey: 'settings.openchamber.visual.field.sessionRecap',
@@ -976,30 +970,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['oauth', 'headers', 'timeout', 'code mode', 'codemode'],
   },
   {
-    id: 'plugins.create',
-    page: 'plugins',
-    titleKey: 'settings.plugins.sidebar.actions.addTitle',
-    keywords: ['add', 'plugin', 'npm', 'path', 'file'],
-  },
-  {
-    id: 'plugins.spec',
-    page: 'plugins',
-    titleKey: 'settings.plugins.page.field.spec',
-    keywords: ['npm', 'package', 'path'],
-  },
-  {
-    id: 'plugins.options',
-    page: 'plugins',
-    titleKey: 'settings.plugins.page.field.options',
-    keywords: ['json', 'configuration'],
-  },
-  {
-    id: 'plugins.content',
-    page: 'plugins',
-    titleKey: 'settings.plugins.page.field.content',
-    keywords: ['file', 'code'],
-  },
-  {
     id: 'snippets.create',
     page: 'snippets',
     titleKey: 'settings.snippets.sidebar.actions.create',
@@ -1044,19 +1014,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'providers',
     titleKey: 'settings.providers.page.models.title',
     keywords: ['models', 'hide', 'show'],
-  },
-  {
-    id: 'web-search.provider',
-    page: 'web-search',
-    titleKey: 'settings.webSearch.section.provider',
-    descriptionKey: 'settings.webSearch.section.providerInfo',
-    keywords: ['web search', 'websearch', 'internet', 'default provider', 'disable', 'off', 'random'],
-  },
-  {
-    id: 'web-search.keys',
-    page: 'web-search',
-    titleKey: 'settings.webSearch.section.keys',
-    keywords: ['api key', 'exa', 'tavily', 'firecrawl', 'parallel', 'tinyfish', 'credentials'],
   },
   {
     id: 'skills.create',

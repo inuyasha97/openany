@@ -40,6 +40,7 @@ declare module "bun:test" {
   // Tests that need to swap implementations at runtime cast through `Mock<T>`.
   export interface Mock<T extends (...args: never[]) => unknown> {
     (...args: Parameters<T>): ReturnType<T>;
+    mock: { calls: Parameters<T>[] };
     mockImplementation(fn: T): Mock<T>;
     mockReturnValue(value: ReturnType<T>): Mock<T>;
     mockReset(): Mock<T>;
@@ -59,6 +60,12 @@ declare module "bun:test" {
     function module(moduleName: string, factory: () => Record<string, unknown>): void;
     function restore(): void;
   }
+  /** Bun's Jest-compatible surface; only the fake-timer API is declared. */
+  export const jest: {
+    useFakeTimers(): void;
+    useRealTimers(): void;
+    advanceTimersByTime(ms: number): void;
+  };
 }
 
 // Vite asset-query imports need a URL loader when real UI modules run in Bun.

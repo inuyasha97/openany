@@ -5,7 +5,6 @@ import { pathToFileURL } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
-import { OpenCode } from '@opencode/client';
 import type { Part } from '@/lib/opencode/model';
 import { SyncProvider } from '@/sync/sync-context';
 
@@ -38,13 +37,9 @@ const runtimeApis: RuntimeAPIs = {
   get permissions() { return unavailable(); },
   get notifications() { return unavailable(); },
 };
-const sdk = OpenCode.make({
-  baseUrl: 'http://localhost',
-  fetch: async () => new Response('[]', { headers: { 'Content-Type': 'application/json' } }),
-});
 const TestProviders = ({ children }: { children: React.ReactNode }) => (
   <RuntimeAPIContext.Provider value={runtimeApis}>
-    <SyncProvider sdk={sdk} directory="">
+    <SyncProvider runtimeIdentity="test-runtime" directory="">
       <I18nProvider>{children}</I18nProvider>
     </SyncProvider>
   </RuntimeAPIContext.Provider>

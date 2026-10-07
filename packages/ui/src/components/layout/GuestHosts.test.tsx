@@ -1,7 +1,6 @@
 import { expect, spyOn, test } from 'bun:test';
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { OpenCode } from '@opencode/client';
 import { Window } from 'happy-dom';
 import { hostMessageSchema } from '@openchamber/sdk/schemas';
 import type { GuestMessage, HostMessage } from '@openchamber/sdk';
@@ -45,8 +44,8 @@ test(`${variant.name}: actions and commands use the execution entry and clean up
   const fetch = spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const target = String(input instanceof Request ? input.url : input);
     if (target.includes('/auth/url-token')) return Response.json({ token: 'scoped-test', expiresAt: Date.now() + 60_000 });
-    // The sync bootstrap runs on the shared `opencodeClient`, not the provider's
-    // sdk prop, so its v2 list routes are answered here.
+    // The sync bootstrap runs on the shared agent runtime, not the provider's
+    // runtimeKey prop, so its v2 list routes are answered here.
     if (target.includes('/event')) return new Response(new ReadableStream(), { headers: { 'content-type': 'text/event-stream' } });
     if (target.includes('/session/active')) return Response.json({});
     if (target.includes('/location')) return Response.json({ directory: '/visible', project: { id: 'project', directory: '/visible', canonical: '/visible' } });
@@ -56,15 +55,6 @@ test(`${variant.name}: actions and commands use the execution entry and clean up
   const error = spyOn(toast, 'error').mockImplementation(() => 'error');
   const clipboard = spyOn(dom.navigator.clipboard, 'writeText').mockResolvedValue(undefined);
   const dismiss = spyOn(toast, 'dismiss').mockImplementation(() => 'dismissed');
-  const sdk = OpenCode.make({ baseUrl: 'http://sync.test', fetch: async (request) => {
-    const path = new URL(request instanceof Request ? request.url : request.toString()).pathname;
-    if (path.endsWith('/event')) return new Response(new ReadableStream(), { headers: { 'content-type': 'text/event-stream' } });
-    const body = path.endsWith('/location')
-      ? { directory: '/visible', project: { id: 'project', directory: '/visible', canonical: '/visible' } }
-      : path.endsWith('/session/active') ? {}
-      : { data: [] };
-    return Response.json(body);
-  } });
   const theme = getDefaultTheme(false);
   const themeContext: ThemeContextValue = {
     currentTheme: theme, availableThemes: [theme], customThemeIds: [], setTheme: () => {}, customThemesLoading: false,
@@ -95,7 +85,7 @@ test(`${variant.name}: actions and commands use the execution entry and clean up
   let restoreCommandPost = () => {};
   try {
     await act(async () => root.render(<React.StrictMode><I18nProvider><ThemeSystemContext.Provider value={themeContext}>
-      <SyncProvider sdk={sdk} directory="/visible"><GuestHosts /></SyncProvider>
+      <SyncProvider runtimeIdentity="test-runtime" directory="/visible"><GuestHosts /></SyncProvider>
     </ThemeSystemContext.Provider></I18nProvider></React.StrictMode>));
     await act(async () => {
       done = runGuestAction(entry, { kind: 'message', action: 'count', sessionId: 'target', sessionTitle: 'Target', directory: '/target', messageId: 'm1', role: 'assistant', text: 'Hello' }, (key) => key);
@@ -148,7 +138,7 @@ test(`${variant.name}: actions and commands use the execution entry and clean up
     expect(error.mock.calls.length).toBe(0);
     if (variant.entry && variant.backgroundEntry) {
       await act(async () => root.render(<React.StrictMode><I18nProvider><ThemeSystemContext.Provider value={themeContext}>
-        <SyncProvider sdk={sdk} directory="/visible"><GuestHosts /><PluginPane mode="plugin:counter" /></SyncProvider>
+        <SyncProvider runtimeIdentity="test-runtime" directory="/visible"><GuestHosts /><PluginPane mode="plugin:counter" /></SyncProvider>
       </ThemeSystemContext.Provider></I18nProvider></React.StrictMode>));
       const visibleFrame = container.querySelector('iframe');
       if (!visibleFrame) throw new Error('Visible panel missing');

@@ -1,8 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
-import { OpenCode } from '@opencode/client';
 import type { AssistantMessage, Session, UserMessage } from '@/lib/opencode/model';
 import { useUIStore } from '@/stores/useUIStore';
 import { I18nProvider } from '@/lib/i18n';
@@ -51,16 +50,17 @@ describe('mounted turn telemetry with live sync stores', () => {
   let root: Root;
   let dom: ReturnType<typeof installDom>;
   let messageRequests = 0;
-  // Keep bootstrap pending so each test controls real store publications. No
+  // Keep bootstrap pending so each test controls real store publications: the
+  // transport answers nothing, so no request below ever settles. No
   // hook/module replacements: subscription and materialization paths are real.
-  const sdk = OpenCode.make({ baseUrl: 'http://telemetry.test', fetch: (request) => {
-    const url = new URL(request instanceof Request ? request.url : request.toString());
-    if (/\/session\/[^/]+\/message$/.test(url.pathname)) messageRequests += 1;
+  spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const target = input instanceof Request ? input.url : String(input);
+    if (/\/session\/[^/]+\/message$/.test(new URL(target).pathname)) messageRequests += 1;
     return new Promise<Response>(() => undefined);
-  } });
+  });
   const render = async (visible = true, selectedDirectory = directory, selectedSession = sessionId) => {
     await act(async () => root.render(
-      <SyncProvider sdk={sdk} directory={selectedDirectory}>
+      <SyncProvider runtimeIdentity="test-runtime" directory={selectedDirectory}>
         <I18nProvider>{visible ? <WorkStatusTelemetrySection sessionId={selectedSession} directory={selectedDirectory} /> : null}</I18nProvider>
       </SyncProvider>,
     ));

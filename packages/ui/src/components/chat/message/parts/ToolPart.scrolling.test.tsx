@@ -4,7 +4,6 @@ import { plugin } from 'bun';
 import { pathToFileURL } from 'node:url';
 import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
-import { OpenCode } from '@opencode/client';
 import type { ToolPart as ToolPartData } from '@/lib/opencode/model';
 import { SyncProvider } from '@/sync/sync-context';
 import { I18nProvider } from '@/lib/i18n';
@@ -75,10 +74,6 @@ test('expanded shell output follows growth until the reader scrolls up', async (
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
-  const sdk = OpenCode.make({
-    baseUrl: 'http://localhost',
-    fetch: async () => new Response('[]', { headers: { 'Content-Type': 'application/json' } }),
-  });
   const renderOutput = async (output: string, completed = false) => {
     const part: ToolPartData = {
       id: 'prt_bash_follow', sessionID: 'ses_bash_follow', messageID: 'msg_bash_follow',
@@ -89,7 +84,7 @@ test('expanded shell output follows growth until the reader scrolls up', async (
     };
     await act(async () => {
       root.render(
-        <SyncProvider sdk={sdk} directory="">
+        <SyncProvider runtimeIdentity="test-runtime" directory="">
           <I18nProvider>
             <ThemeSystemContext.Provider value={themeContext}>
               <ToolPart part={part} isExpanded isMobile={false} onToggle={() => {}} />

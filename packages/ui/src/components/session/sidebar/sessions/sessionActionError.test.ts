@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { OpencodeApiError } from '@/lib/opencode/client';
+import { OpencodeApiError } from '@/lib/openchamber/client';
 import { describeSessionActionError } from './sessionActionError';
 
 const t = ((key: string, params?: Record<string, string | number>) => (

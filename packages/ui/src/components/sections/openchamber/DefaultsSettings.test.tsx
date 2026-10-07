@@ -70,9 +70,16 @@ mock.module('@/sync/session-ui-store', () => ({
   useSessionUIStore: <T,>(selector: (state: typeof sessionState) => T): T => selector(sessionState),
 }));
 mock.module('@/lib/runtime-fetch', () => ({
-  runtimeFetch: async () => new Response(JSON.stringify({ authenticatedProviders: [] }), {
-    headers: { 'Content-Type': 'application/json' },
-  }),
+  runtimeFetch: async (input: string) => {
+    if (String(input).includes('/api/config/settings')) {
+      return new Response(JSON.stringify({ warming: false }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ authenticatedProviders: [] }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  },
 }));
 const persistenceModule = await import('@/lib/persistence');
 mock.module('@/lib/persistence', () => ({
@@ -83,11 +90,6 @@ mock.module('@/lib/persistence', () => ({
     return { ok: true };
   },
   reportSettingsSaveState: () => {},
-}));
-const opencodeModule = await import('@/lib/opencode/client');
-mock.module('@/lib/opencode/client', () => ({
-  ...opencodeModule,
-  opencodeClient: { getConfig: async () => ({ warming: false }) },
 }));
 mock.module('@/lib/i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),

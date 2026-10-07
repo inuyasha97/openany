@@ -299,7 +299,7 @@ and the send path reading the same grammar.
 - **Skills named inline (`/name`) are attached to the prompt, not hinted at.**
   `buildOutgoingMessage` reports the composer text's skill names (deduped, in
   order) as `skillNames`; `ChatInput` hands them to the send as
-  `SkillMentions`, and `opencodeClient.sendMessage` maps each name to its
+  `SkillMentions`, and the runtime's `sendPrompt` maps each name to its
   OpenCode skill id (`GET /api/skill`; the id is the skill's folder and can
   differ from its frontmatter name) and sends them in the prompt's `skills`
   field. OpenCode then loads each skill's content into that user message. It

@@ -1,5 +1,5 @@
 import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { describe, expect, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
 import React, { act } from 'react';
@@ -422,11 +422,11 @@ describe('buildActiveSessionNode', () => {
   });
 });
 
-const originalHomeInfo = opencodeClient.getFilesystemHomeInfo;
-opencodeClient.getFilesystemHomeInfo = async () => ({
+const originalHomeInfo = openChamberClient.getFilesystemHomeInfo;
+openChamberClient.getFilesystemHomeInfo = async () => ({
   home: '/home',
   canonicalChatsRoot: '/HOME/.config/openchamber/chats',
   canonicalLegacyChatsRoot: '/HOME/.config/openchamber/chats',
 });
 await ensureChatsRootDirectory();
-opencodeClient.getFilesystemHomeInfo = originalHomeInfo;
+openChamberClient.getFilesystemHomeInfo = originalHomeInfo;

@@ -1,8 +1,9 @@
+import { createOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime'
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import type { UserMessage } from "@/lib/opencode/model"
 import type { AgentSession } from "@/lib/agent/contract"
-import { opencodeClient } from "@/lib/opencode/client"
-import type { MessagePage } from "@/lib/opencode/client"
+import { openChamberClient } from "@/lib/openchamber/client"
+import type { MessagePage } from "@/lib/agent/contract"
 import type { SessionMessagePageSource } from "./session-message-loader"
 import { getRuntimeKey } from "@/lib/runtime-switch"
 import { ChildStoreManager } from "./child-store"
@@ -10,8 +11,9 @@ import { createSession, setActionRefs } from "./session-actions"
 import { SessionMessageLoader, setImperativeSessionMessageLoader } from "./session-message-loader"
 import { useSessionUIStore } from "./session-ui-store"
 
-const originalCreateSession = opencodeClient.createSession
-const originalDirectory = opencodeClient.getDirectory()
+const agentSurface = createOpenCodeStubSurface()
+const originalCreateSession = agentSurface.createSession
+const originalDirectory = openChamberClient.getDirectory()
 const originalSelection = useSessionUIStore.getState()
 let childStores: ChildStoreManager
 let loader: SessionMessageLoader
@@ -45,8 +47,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  opencodeClient.createSession = originalCreateSession
-  opencodeClient.setDirectory(originalDirectory)
+  agentSurface.createSession = originalCreateSession
+  openChamberClient.setDirectory(originalDirectory)
   useSessionUIStore.setState(originalSelection)
   setImperativeSessionMessageLoader(null)
   loader.dispose()
@@ -55,7 +57,7 @@ afterEach(() => {
 
 describe("confirmed session creation", () => {
   test("publishes the new transcript before navigation can issue a failing history read", async () => {
-    opencodeClient.createSession = async () => session
+    agentSurface.createSession = async () => session
 
     expect(await createSession(undefined, "/requested")).toBe(session)
     const target = { directory: session.directory, sessionID: session.id }
@@ -78,7 +80,7 @@ describe("confirmed session creation", () => {
       role: "user",
       time: { created: 2 },
     } satisfies UserMessage
-    opencodeClient.createSession = async () => {
+    agentSurface.createSession = async () => {
       store.setState({ session: [newerSession], message: { [session.id]: [record] } })
       return session
     }
@@ -91,7 +93,7 @@ describe("confirmed session creation", () => {
   })
 
   test("a rejected create does not seed an empty successful transcript", async () => {
-    opencodeClient.createSession = async () => { throw new Error("offline") }
+    agentSurface.createSession = async () => { throw new Error("offline") }
     const previousSelection = useSessionUIStore.getState().currentSessionId
 
     expect(await createSession(undefined, "/requested")).toBeNull()

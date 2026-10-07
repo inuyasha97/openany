@@ -147,7 +147,6 @@ const LOCAL_ACTION_COMMANDS = new Set([
     'redo',
     'timeline',
     'handoff-review',
-    'compact',
     'fork',
 ]);
 

@@ -1996,7 +1996,6 @@ export const settingsDict = {
   "settings.openchamber.visual.section.chatDisplay": "Відображення",
   "settings.openchamber.visual.section.chatMessageOptions": "Параметри повідомлень",
   "settings.openchamber.visual.section.chatFeatures": "Функції",
-  "settings.openchamber.visual.section.messageStreamTransport": "Транспорт потокових повідомлень",
   "settings.openchamber.visual.section.activityDefault": "Активність за замовчуванням",
   "settings.openchamber.visual.section.activityDefaultAria": "Режим активності за замовчуванням",
   "settings.openchamber.visual.section.sessionActivity": "Активність сесії",

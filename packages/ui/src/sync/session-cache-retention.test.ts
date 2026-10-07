@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import type { MessagePage } from "@/lib/opencode/client"
+import type { MessagePage } from "@/lib/agent/contract"
 import type { FormRequest, Message, Part } from "@/lib/opencode/model"
 import { ChildStoreManager } from "./child-store"
 import { SessionMessageLoader, type SessionMessageTarget } from "./session-message-loader"

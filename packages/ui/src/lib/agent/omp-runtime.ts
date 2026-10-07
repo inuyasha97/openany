@@ -15,7 +15,7 @@
 
 import { z } from "zod"
 import { runtimeFetch } from "@/lib/runtime-fetch"
-import type { FileDiffInfo, FormInfo, SessionRevert } from "@opencode/client"
+import type { FileDiffInfo, FormInfo, SessionRevert } from "@/lib/opencode/wire"
 import type {
   Agent,
   Command,

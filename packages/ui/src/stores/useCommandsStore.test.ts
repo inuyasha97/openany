@@ -3,15 +3,7 @@ import type { Command } from './useCommandsStore';
 import { runSessionListNetworkTask } from '../lib/background-network';
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
-
-// The registry's default runtime is the real OMP client; register a
-// client-backed double so this test drives app logic with its mocked client.
-registerAgentRuntime(createOpenCodeStubRuntime());
-// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
-// registry answers an unregistered id with the real OMP client, so register the
-// double under that id too.
-registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
+import type { AgentRuntime } from '@/lib/agent/contract';
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => { throw new Error('Promise not initialized'); };
@@ -39,10 +31,20 @@ const listCommandsMock = async (directory?: string | null) => {
 const getDirectoryMock = () => getDirectoryImpl();
 const runtimeFetchMock = async () => runtimeFetchImpl();
 
-mock.module('@/lib/opencode/client', () => ({
-  opencodeClient: {
+// The store reads commands from the agent runtime; register a double whose
+// `listCommands` is this test's deferred mock. The registry's default runtime
+// is the real OMP client, and sessions created by the OpenCode client carry
+// `runtimeId: "opencode"`, so register the double under both ids.
+const createFakeRuntime = (id: string): AgentRuntime => ({
+  id,
+  listCommands: listCommandsMock,
+} as unknown as AgentRuntime);
+registerAgentRuntime(createFakeRuntime('omp'));
+registerAgentRuntime(createFakeRuntime('opencode'));
+
+mock.module('@/lib/openchamber/client', () => ({
+  openChamberClient: {
     getDirectory: getDirectoryMock,
-    listCommands: listCommandsMock,
   },
 }));
 

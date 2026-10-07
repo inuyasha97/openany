@@ -4,7 +4,7 @@ import { createDeferredSafeJSONStorage } from './utils/safeStorage';
 import { startConfigUpdate } from '@/lib/configUpdate';
 import { refreshAfterOpenCodeRestart } from '@/stores/useAgentsStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 
 export type McpScope = 'user' | 'project';
@@ -38,7 +38,7 @@ const getConfigDirectory = (): string | null => {
       return activeProject.path.trim();
     }
 
-    const clientDir = opencodeClient.getDirectory();
+    const clientDir = openChamberClient.getDirectory();
     if (clientDir?.trim()) {
       return clientDir.trim();
     }

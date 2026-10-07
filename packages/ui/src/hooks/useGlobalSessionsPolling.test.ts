@@ -2,10 +2,11 @@ import { describe, expect, spyOn, test } from 'bun:test';
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { subscribeRuntimeEndpointChanged, switchRuntimeEndpoint } from '@/lib/runtime-switch';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
-import type { SessionPage } from '@/lib/opencode/client';
+import type { SessionPage } from '@/lib/agent/contract';
+import { setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime';
 import {
   GLOBAL_SESSIONS_REFRESH_INTERVAL_MS,
   startGlobalSessionsPolling,
@@ -145,16 +146,19 @@ test('the mounted poller recovers real store failure and starts a fresh load on 
     Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
   }
   const fetch = spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 404 }));
-  const home = spyOn(opencodeClient, 'getFilesystemHomeInfo')
+  const home = spyOn(openChamberClient, 'getFilesystemHomeInfo')
     .mockRejectedValueOnce(new Error('startup unavailable'))
     .mockResolvedValue({ home: '/home/user', chatsRoot: '/chats' });
-  const host = spyOn(opencodeClient, 'getHostSessionStatusSnapshot').mockResolvedValue(null);
+  const host = spyOn(openChamberClient, 'getHostSessionStatusSnapshot').mockResolvedValue(null);
   const session = (id: string): SessionPage => ({ sessions: [{
     id, runtimeId: 'opencode', nativeSessionId: id, projectID: 'project', directory: '/project', title: id,
     time: { created: 1, updated: 2 },
     cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   }], cursor: {} });
-  const list = spyOn(opencodeClient, 'listSessionsPage').mockResolvedValue(session('restored'));
+  // The page list is an agent-domain call: the poller reaches it through the runtime.
+  const agentSurface = { listSessionsPage: async (_options?: { global?: boolean }): Promise<SessionPage> => session('restored') };
+  setOpenCodeStubSurface(agentSurface);
+  const list = spyOn(agentSurface, 'listSessionsPage').mockResolvedValue(session('restored'));
   const clock = timers();
   // happy-dom returns Node timer handles; retain that contract while controlling time.
   const originalTimeout = dom.setTimeout.bind(dom);

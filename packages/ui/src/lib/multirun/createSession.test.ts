@@ -4,7 +4,7 @@ import type { Metadata, Session } from '@/lib/opencode/model';
 import { getMultiRunIdentity, type MultiRunIdentity } from './identity';
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+import { createOpenCodeStubRuntime, setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime'
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.
@@ -40,8 +40,7 @@ type CreationFailure = { rejectUpdate?: boolean; omitSavedMarker?: boolean; swit
 let options: CreationFailure = {};
 let current = true;
 
-mock.module('@/lib/opencode/client', () => ({
-  opencodeClient: {
+const stubClient = {
     createSession: async (params: { title?: string; metadata?: Metadata }, directory?: string | null): Promise<Session> => {
       expect(directory).toBe('/repo');
       calls.push('create');
@@ -65,8 +64,28 @@ mock.module('@/lib/opencode/client', () => ({
       calls.push('delete');
       return true;
     },
-  },
-}));
+    getDirectory: () => null,
+    setDirectory: () => undefined,
+    getRuntimeIdentity: () => 'test-runtime',
+    getDirectoryAvailability: async () => 'unknown' as const,
+    probeDirectory: async () => true,
+    getFilesystemHome: async () => null,
+    getFilesystemHomeInfo: async () => ({ home: '/home' }),
+    createDirectory: async (path: string) => ({ success: true, path }),
+    cloneRepository: async (input: { destinationPath: string }) => ({ success: true, path: input.destinationPath }),
+    listLocalDirectory: async () => [],
+    getHostSessionStatusSnapshot: async () => null,
+    getWebServerSessionActivity: async () => null,
+    getBaseUrl: () => '/api',
+    reconnectToRuntimeBaseUrl: () => undefined,
+    checkHealth: async () => true,
+    probeHealth: async () => 'healthy' as const,
+    getSystemInfo: async () => ({ homeDirectory: '/' }),
+}
+setOpenCodeStubSurface(stubClient)
+mock.module("@/lib/openchamber/client", () => ({
+    openChamberClient: stubClient,
+}))
 
 mock.module('@/sync/session-archive-batch', () => ({
   requestSessionMetadataUpdate: async (_sessionID: string, patch: Metadata) => {

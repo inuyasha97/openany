@@ -1,9 +1,9 @@
-import { afterAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { Window } from 'happy-dom';
 import type { AgentWithExtras } from '@/stores/useAgentsStore';
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+import { createOpenCodeStubRuntime, setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime';
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.
@@ -26,6 +26,30 @@ Object.assign(globalThis, {
 });
 
 const DIRECTORY = '/workspace/project';
+
+// The store's OpenChamber-owned calls (the directory cursor and the health
+// probe) go to the shared client; pin them so classification and load
+// generations do not depend on the real transport.
+mock.module('@/lib/openchamber/client', () => ({
+  openChamberClient: {
+    getDirectory: () => DIRECTORY,
+    setDirectory: () => {},
+    checkHealth: async () => true,
+    getFilesystemHome: async () => DIRECTORY,
+    getFilesystemHomeInfo: async () => ({ home: DIRECTORY }),
+    getSystemInfo: async () => ({ homeDirectory: DIRECTORY }),
+  },
+}));
+
+// The store reads agents through the runtime registry, so the surface it
+// calls has to answer from this test's mocked `fetch` (the `/agent` list).
+setOpenCodeStubSurface({
+  listAgents: async () => {
+    const response = await fetch('/agent');
+    const body = await response.json() as { data?: unknown[] };
+    return (body.data ?? []) as never;
+  },
+});
 
 type ListedAgent = {
   id: string;

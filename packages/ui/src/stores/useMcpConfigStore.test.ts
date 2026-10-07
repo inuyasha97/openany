@@ -28,8 +28,8 @@ const runtimeFetchMock = async (url: string, init?: RequestInit) => {
 
 mock.module('@/lib/runtime-fetch', () => ({ runtimeFetch: runtimeFetchMock }));
 
-mock.module('@/lib/opencode/client', () => ({
-  opencodeClient: { getDirectory: () => '/workspace/project' },
+mock.module('@/lib/openchamber/client', () => ({
+  openChamberClient: { getDirectory: () => '/workspace/project' },
 }));
 
 mock.module('@/stores/useProjectsStore', () => ({

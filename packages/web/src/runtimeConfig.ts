@@ -6,7 +6,7 @@ import { restoreDesktopRelayRuntime } from '@openchamber/ui/lib/desktopRelayRest
 import { getInjectedBootOutcome } from '@openchamber/ui/lib/desktopBoot';
 import { configureRuntimeUrlResolver } from '@openchamber/ui/lib/runtime-url';
 import type { EmbeddedSessionRuntimeBootstrap } from '@openchamber/ui/components/layout/contextPanelEmbeddedChat';
-import { opencodeClient } from '@openchamber/ui/lib/opencode/client';
+import { openChamberClient } from '@openchamber/ui/lib/openchamber/client';
 import { createWebAPIs } from './api';
 
 // The switcher's statuses are warmed after boot settles, not during it.
@@ -74,7 +74,7 @@ export const createConfiguredWebAPIs = (bootstrap?: EmbeddedSessionRuntimeBootst
   }
   // createWebAPIs imports UI stores, which instantiate the SDK singleton before
   // an embedded frame's asynchronous parent bootstrap is available.
-  opencodeClient.reconnectToRuntimeBaseUrl();
+  openChamberClient.reconnectToRuntimeBaseUrl();
   void refreshRuntimeUrlAuthToken(apiBaseUrl || undefined).catch(() => {});
   if (localOrigin && !sameOrigin(apiBaseUrl, localOrigin) && Object.keys(getRuntimeExtraHeadersSync()).length > 0) {
     void refreshLocalRuntimeUrlAuthToken(localOrigin).catch(() => {});
@@ -95,7 +95,7 @@ export const createConfiguredWebAPIs = (bootstrap?: EmbeddedSessionRuntimeBootst
       ]).then(() => {
         // Relay-capable windows may select a reachable direct leg before React
         // subscribes to runtime-change events, so bind the SDK explicitly.
-        opencodeClient.reconnectToRuntimeBaseUrl();
+        openChamberClient.reconnectToRuntimeBaseUrl();
       });
   // Learn every instance's reachability in the background, so the switcher opens
   // on real values instead of probing for the first time under the user's

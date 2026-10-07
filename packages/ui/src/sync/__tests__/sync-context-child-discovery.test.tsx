@@ -3,10 +3,10 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Window } from 'happy-dom'
 import { mock } from 'bun:test'
-import { OpenCode } from '@opencode/client'
 import type { Session } from '@/lib/opencode/model'
 import type { AgentSession } from '@/lib/agent/contract'
-import type { SessionListOptions, SessionPage } from '@/lib/opencode/client'
+import type { SessionListOptions, SessionPage } from '@/lib/agent/contract'
+import { createOpenCodeStubRuntime, setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime'
 
 const DIRECTORY = '/repo/discovery'
 const cursorsSeenOnDiscoveryCalls: Array<string | undefined> = []
@@ -57,15 +57,9 @@ let sequence = 0
 // stable references rather than a fresh object per call.
 const sdkIdentity = {}
 
-mock.module('@/lib/opencode/client', () => ({
-  ascendingId: (prefix: string) => `${prefix}_${(sequence += 1).toString().padStart(6, '0')}`,
-  isOpencodeNotFound: () => false,
-  OpencodeApiError: Error,
-  normalizeOpencodeError: (operation: string, error: unknown) => new Error(`${operation}: ${String(error)}`),
-  OPENCODE_DIRECTORY_HEADER: 'x-opencode-directory',
-  opencodeClient: {
+const stubClient = {
     listSessionsPage,
-    getSdkClient: () => sdkIdentity,
+    getRuntimeIdentity: () => sdkIdentity,
     getScopedSdkClient: () => sdkIdentity,
     getDirectory: () => DIRECTORY,
     setDirectory: () => undefined,
@@ -90,7 +84,28 @@ mock.module('@/lib/opencode/client', () => ({
       parentMessageFetches.push(id)
       return { items: [], cursor: {} }
     },
-  },
+    getDirectoryAvailability: async () => 'unknown' as const,
+    probeDirectory: async () => true,
+    getFilesystemHomeInfo: async () => ({ home: '/home' }),
+    createDirectory: async (path: string) => ({ success: true, path }),
+    cloneRepository: async (input: { destinationPath: string }) => ({ success: true, path: input.destinationPath }),
+    listLocalDirectory: async () => [],
+    getHostSessionStatusSnapshot: async () => null,
+    getWebServerSessionActivity: async () => null,
+    getBaseUrl: () => '/api',
+    reconnectToRuntimeBaseUrl: () => undefined,
+    checkHealth: async () => true,
+    probeHealth: async () => 'healthy' as const,
+    getSystemInfo: async () => ({ homeDirectory: '/' }),
+}
+setOpenCodeStubSurface(stubClient)
+mock.module("@/lib/openchamber/client", () => ({
+    openChamberClient: stubClient,
+  ascendingId: (prefix: string) => `${prefix}_${(sequence += 1).toString().padStart(6, '0')}`,
+  isOpencodeNotFound: () => false,
+  OpencodeApiError: Error,
+  normalizeOpencodeError: (operation: string, error: unknown) => new Error(`${operation}: ${String(error)}`),
+  OPENCODE_DIRECTORY_HEADER: 'x-opencode-directory',
 }))
 
 const { SyncProvider, setActiveSession } = await import('../sync-context')
@@ -192,8 +207,6 @@ describe('SyncProvider child-session discovery pagination', () => {
     const dom = installHookTestDomWithStorage()
     cursorsSeenOnDiscoveryCalls.length = 0
     parentMessageFetches.length = 0
-    const sdk = OpenCode.make({ baseUrl: 'http://discovery.test', fetch: () => hang<Response>() })
-
     try {
       // Seed the persisted cache so the watchdog's first pass (before any
       // bootstrap session commit) sees the parent as a candidate.
@@ -201,7 +214,7 @@ describe('SyncProvider child-session discovery pagination', () => {
 
       const root = createRoot(dom.container)
       await act(async () => root.render(
-        <SyncProvider sdk={sdk} directory={DIRECTORY}>
+        <SyncProvider runtimeIdentity="test-runtime" directory={DIRECTORY}>
           <div />
         </SyncProvider>,
       ))
@@ -246,7 +259,6 @@ describe('SyncProvider child-session discovery pagination', () => {
 
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.

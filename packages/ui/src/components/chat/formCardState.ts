@@ -8,7 +8,7 @@
  * rendering, and so the component stays a view.
  */
 
-import type { FormField, FormValue } from '@opencode/client';
+import type { FormField, FormValue } from '@/lib/opencode/model';
 
 /**
  * The value a field currently holds in the card.

@@ -15,7 +15,6 @@
 import React from 'react';
 
 import { CommandAutocomplete, type CommandAutocompleteHandle, type CommandInfo } from '../../CommandAutocomplete';
-import { FileMentionAutocomplete, type FileMentionHandle } from '../../FileMentionAutocomplete';
 import { SkillAutocomplete, type SkillAutocompleteHandle } from '../../SkillAutocomplete';
 import { SnippetAutocomplete, type SnippetAutocompleteHandle } from '../../SnippetAutocomplete';
 import type { AutocompleteKind } from '../language/triggers';
@@ -64,7 +63,6 @@ export interface ComposerAutocompletePopupsProps {
     commandRef: React.RefObject<CommandAutocompleteHandle | null>;
     skillRef: React.RefObject<SkillAutocompleteHandle | null>;
     snippetRef: React.RefObject<SnippetAutocompleteHandle | null>;
-    mentionRef: React.RefObject<FileMentionHandle | null>;
     onCommandSelect: (command: CommandInfo) => void;
     onSkillSelect: (skillName: string) => void;
     onSnippetSelect: (snippet: unknown, trigger: string) => void;
@@ -111,15 +109,8 @@ export function ComposerAutocompletePopups(props: ComposerAutocompletePopupsProp
                 />
             );
         case 'mention':
-            return (
-                <FileMentionAutocomplete
-                    ref={props.mentionRef}
-                    searchQuery={query}
-                    onFileSelect={props.onFileSelect}
-                    onAgentSelect={props.onAgentSelect}
-                    onClose={onClose}
-                    style={style}
-                />
-            );
+            // No picker: the runtime exposes no file index for the composer to
+            // search, so `matchMention` never opens this kind.
+            return null;
     }
 }

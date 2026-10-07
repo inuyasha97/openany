@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { OpenCodeEvent } from "@opencode/client"
-
 import { partIds } from "./model"
-import { messageIdFromEvent, routeWireEvent, syncEventMessageID, syncEventSessionID, translateWireEvent } from "./events"
+import { messageIdFromEvent, routeWireEvent, syncEventMessageID, syncEventSessionID, translateWireEvent, type OpenCodeEvent } from "./events"
 
 const base = { id: "evt_1", created: 1000, location: { directory: "/repo" } }
 const durable = { aggregateID: "ses_1", seq: 1, version: 1 as const }

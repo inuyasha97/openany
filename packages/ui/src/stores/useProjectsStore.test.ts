@@ -3,13 +3,13 @@ import type { ProjectEntry } from "@/lib/api/types"
 import type { DesktopSettings } from "@/lib/desktop"
 import { useProjectsStore } from "./useProjectsStore"
 import { useDirectoryStore } from "./useDirectoryStore"
-import { opencodeClient } from "../lib/opencode/client"
+import { openChamberClient } from "../lib/openchamber/client"
 
 describe("useProjectsStore settings synchronization", () => {
   test("preserves drive roots and deduplicates Windows drive/separator variants", () => {
     const previous = useProjectsStore.getState()
     const directoryState = useDirectoryStore.getState()
-    const sdkDirectory = opencodeClient.getDirectory()
+    const sdkDirectory = openChamberClient.getDirectory()
     try {
       useProjectsStore.getState().synchronizeFromSettings({ projects: [
         { id: "drive", path: "c:\\" },
@@ -20,13 +20,13 @@ describe("useProjectsStore settings synchronization", () => {
     } finally {
       useProjectsStore.setState(previous, true)
       useDirectoryStore.setState(directoryState, true)
-      opencodeClient.setDirectory(sdkDirectory)
+      openChamberClient.setDirectory(sdkDirectory)
     }
   })
 
   test("directory navigation preserves roots and does not create history duplicates for Windows spelling variants", () => {
     const previous = useDirectoryStore.getState()
-    const sdkDirectory = opencodeClient.getDirectory()
+    const sdkDirectory = openChamberClient.getDirectory()
     try {
       useDirectoryStore.setState({ homeDirectory: "/home", currentDirectory: "/home", directoryHistory: ["/home"], historyIndex: 0 })
       useDirectoryStore.getState().setDirectory("c:\\Project")
@@ -38,7 +38,7 @@ describe("useProjectsStore settings synchronization", () => {
       expect(useDirectoryStore.getState().directoryHistory).toEqual(["/home", "C:/Project", "C:/Other"])
       useDirectoryStore.getState().goToParent()
       expect(useDirectoryStore.getState().currentDirectory).toBe("C:/")
-      expect(opencodeClient.getDirectory()).toBe("C:/")
+      expect(openChamberClient.getDirectory()).toBe("C:/")
       useDirectoryStore.getState().goToParent()
       expect(useDirectoryStore.getState().currentDirectory).toBe("C:/")
       useDirectoryStore.getState().setDirectory("\\\\Server\\Share\\Folder")
@@ -47,7 +47,7 @@ describe("useProjectsStore settings synchronization", () => {
       expect(useDirectoryStore.getState().currentDirectory).toBe("//Server/Share")
     } finally {
       useDirectoryStore.setState(previous, true)
-      opencodeClient.setDirectory(sdkDirectory)
+      openChamberClient.setDirectory(sdkDirectory)
     }
   })
 

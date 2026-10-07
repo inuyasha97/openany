@@ -1,7 +1,6 @@
 import { expect, spyOn, test } from 'bun:test';
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { OpenCode } from '@opencode/client';
 import { Window } from 'happy-dom';
 import { hostMessageSchema } from '@openchamber/sdk/schemas';
 import type { GuestMessage, HostMessage } from '@openchamber/sdk';
@@ -34,14 +33,6 @@ test('a status-only extension loads its section entry, sizes the frame within ra
     if (target.includes('/location')) return Response.json({ directory: '/visible', project: { id: 'project', directory: '/visible', canonical: '/visible' } });
     return Response.json({ data: [] });
   });
-  const sdk = OpenCode.make({ baseUrl: 'http://sync.test', fetch: async (request) => {
-    const path = new URL(request instanceof Request ? request.url : request.toString()).pathname;
-    if (path.endsWith('/event')) return new Response(new ReadableStream(), { headers: { 'content-type': 'text/event-stream' } });
-    const body = path.endsWith('/location')
-      ? { directory: '/visible', project: { id: 'project', directory: '/visible', canonical: '/visible' } }
-      : path.endsWith('/session/active') ? {} : { data: [] };
-    return Response.json(body);
-  } });
   const theme = getDefaultTheme(false);
   const themeContext: ThemeContextValue = {
     currentTheme: theme, availableThemes: [theme], customThemeIds: [], setTheme: () => {}, customThemesLoading: false,
@@ -64,7 +55,7 @@ test('a status-only extension loads its section entry, sizes the frame within ra
   let restorePost = () => {};
   try {
     await act(async () => root.render(<I18nProvider><ThemeSystemContext.Provider value={themeContext}>
-      <SyncProvider sdk={sdk} directory="/visible"><WorkStatusExtensionSection guest={guest} /></SyncProvider>
+      <SyncProvider runtimeIdentity="test-runtime" directory="/visible"><WorkStatusExtensionSection guest={guest} /></SyncProvider>
     </ThemeSystemContext.Provider></I18nProvider>));
     for (let attempt = 0; attempt < 100 && !container.querySelector('iframe'); attempt++) {
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });

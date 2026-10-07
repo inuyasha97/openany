@@ -3,7 +3,7 @@ import { resetSpaceModelAccess } from '@/lib/spaces/space-model-access';
 import { resetSpaceCreationRequests } from '@/lib/spaces/space-creation';
 import { useGuestsStore } from '@/lib/guests/store';
 import { useGuestOauthStore } from '@/lib/guests/oauth-store';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import type { RuntimeEndpointChangedDetail } from '@/lib/runtime-switch';
 import { disposeTerminalInputTransport } from '@/lib/terminalApi';
 import { useConfigStore } from '@/stores/useConfigStore';
@@ -13,7 +13,6 @@ import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useAutoReviewStore } from '@/stores/useAutoReviewStore';
 import { usePermissionStore } from '@/stores/permissionStore';
 import { useMessageQueueStore } from '@/stores/messageQueueStore';
-import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useGitStore } from '@/stores/useGitStore';
 import { useGitHubPrStatusStore } from '@/stores/useGitHubPrStatusStore';
 import { useSessionFoldersStore } from '@/stores/useSessionFoldersStore';
@@ -47,7 +46,7 @@ import { useSessionMultiSelectStore } from '@/stores/useSessionMultiSelectStore'
 // no bounce back to the draft.
 export const reconnectAppForTransportSwitch = (): void => {
   disposeTerminalInputTransport();
-  opencodeClient.reconnectToRuntimeBaseUrl();
+  openChamberClient.reconnectToRuntimeBaseUrl();
   resetStreamingState();
 };
 
@@ -58,7 +57,7 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
   }
   disposeTerminalInputTransport();
   useTerminalStore.getState().clearAll();
-  opencodeClient.reconnectToRuntimeBaseUrl();
+  openChamberClient.reconnectToRuntimeBaseUrl();
   useConfigStore.setState({
     providers: [],
     agents: [],
@@ -88,7 +87,6 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
   resetSessionActivityTiming();
   usePermissionStore.getState().reset();
   useMessageQueueStore.getState().resetForRuntimeSwitch(detail.previousRuntimeKey);
-  useFileSearchStore.getState().resetForRuntimeSwitch();
   useGitStore.getState().resetForRuntimeSwitch(detail.runtimeKey);
   useGitHubPrStatusStore.getState().resetForRuntimeSwitch();
   useSessionFoldersStore.getState().resetForRuntimeSwitch(detail.runtimeKey);

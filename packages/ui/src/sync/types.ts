@@ -1,6 +1,5 @@
 import type {
   Agent,
-  Config,
   FormRequest,
   Message,
   Part,
@@ -10,18 +9,8 @@ import type {
   SessionStatus,
   Vcs,
 } from "@/lib/opencode/model"
-import type { ProviderCatalog } from "@/lib/opencode/client"
 
 export type { Project }
-
-/** Resolved filesystem context of a directory (from `/api/location` plus the server home). */
-export type Path = {
-  /** Directory the store is scoped to. */
-  directory: string
-  /** Project root that contains `directory`. */
-  worktree: string
-  home: string
-}
 
 export type ProjectMeta = {
   name?: string
@@ -41,9 +30,6 @@ export type State = {
   project: string
   projectMeta: ProjectMeta | undefined
   icon: string | undefined
-  provider: ProviderCatalog
-  config: Config
-  path: Path
   session: Session[]
   sessionTotal: number
   sessionListSource?: "empty" | "persisted" | "live" | "authoritative"
@@ -68,10 +54,6 @@ export type State = {
 export type GlobalState = {
   ready: boolean
   error?: InitError
-  path: Path
-  projects: Project[]
-  providers: ProviderCatalog
-  config: Config
   reload: undefined | "pending" | "complete"
 }
 
@@ -120,16 +102,10 @@ export const EVICTION_GRACE_MS = 30 * 1000
 export const DIR_IDLE_TTL_MS = 20 * 60 * 1000
 export const SESSION_CACHE_LIMIT = 20
 
-export const EMPTY_PATH: Path = { directory: "", worktree: "", home: "" }
-export const EMPTY_PROVIDER_CATALOG: ProviderCatalog = { providers: [], models: [] }
-
 export const INITIAL_STATE: State = {
   project: "",
   projectMeta: undefined,
   icon: undefined,
-  provider: EMPTY_PROVIDER_CATALOG,
-  config: {},
-  path: EMPTY_PATH,
   status: "loading",
   agent: [],
   session: [],
@@ -149,9 +125,5 @@ export const INITIAL_STATE: State = {
 
 export const INITIAL_GLOBAL_STATE: GlobalState = {
   ready: false,
-  path: EMPTY_PATH,
-  projects: [],
-  providers: EMPTY_PROVIDER_CATALOG,
-  config: {},
   reload: undefined,
 }

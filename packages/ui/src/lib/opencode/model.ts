@@ -1,10 +1,10 @@
 /**
  * OpenChamber's session domain model.
  *
- * This is the shape every store, reducer, and component works with. OpenCode
- * v2 wire types (`@opencode/client`) never leave the adapter layer: the
- * projection in `./projection.ts` and the event reducer are the only code that
- * knows how the server encodes sessions and messages. Keeping the model here
+ * This is the shape every store, reducer, and component works with. The v2
+ * wire types (`./wire.ts`) never leave the adapter layer: the projection in
+ * `./projection.ts` and the event reducer are the only code that knows how the
+ * server encodes sessions and messages. Keeping the model here
  * means a server-side rename is an adapter change, not a 200-file change.
  *
  * Messages keep the "message + ordered parts" layout the sync stores are tuned
@@ -32,7 +32,7 @@ import type {
   SessionStructuredError,
   SkillInfo,
   TokenUsageInfo,
-} from "@opencode/client"
+} from "./wire"
 
 // ---------------------------------------------------------------------------
 // Catalog / configuration (wire shapes are already stable value objects)
@@ -70,7 +70,15 @@ export type ConfigDocument = Extract<ConfigEntry, { type: "document" }>
 /** One merged configuration document (lowest to highest priority entries folded). */
 export type Config = ConfigDocument["info"]
 export type ConfigSource = ConfigEntry
-export type { JsonValue, ModelRef, PermissionRuleset, TokenUsageInfo }
+export type {
+  FormField,
+  FormValue,
+  JsonValue,
+  ModelRef,
+  PermissionEffect,
+  PermissionRuleset,
+  TokenUsageInfo,
+} from "./wire"
 
 /**
  * Finds a catalog model by the id a selection holds. `id` is the catalog key

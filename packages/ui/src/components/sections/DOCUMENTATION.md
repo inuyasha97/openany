@@ -81,17 +81,13 @@ already have a connection and minus MCP OAuth registrations (`mcp_*`); v2's
 `GET /api/provider` lists only what is configured or connected right now, so
 it cannot offer anything new.
 
-### MCP OAuth
+### MCP servers
 
-A remote MCP server with OAuth enabled is registered by OpenCode as an
-integration (`mcp_<hash>`, `metadata.source: "mcp"`, named after the server)
-with one `oauth` method, so signing in is the same connect / status /
-complete flow the Providers page runs. `mcp/McpOAuthSignIn.tsx` looks the
-integration up by server name in the server's directory (the registration is
-per Location) and mounts the shared `providers/ProviderOAuthMethods.tsx`
-with that directory. It appears in the status card while the server reports
-`needs_auth`; once the credential is stored, the page connects the server
-again, which is what moves it out of `needs_auth`.
+The MCP page lists and toggles servers through the agent runtime
+(`listMcpServers` / `connectMcpServer` / `disconnectMcpServer`, backed by the
+server's `mcp.json` reader). OAuth sign-in for a remote MCP server is gone:
+it used the OpenCode integration surface, and this runtime exposes no
+equivalent yet, so the page no longer offers it.
 
 ## Entity shapes: OpenCode 2 only
 

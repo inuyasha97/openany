@@ -13,7 +13,7 @@
  * addressed by `(assistantMessageID, ordinal)`, tool calls by their call id.
  */
 
-import type { OpenCodeEvent } from "@opencode/client"
+import type { EventSubscribeOutput } from "./wire"
 import { z } from "zod"
 import {
   compact,
@@ -57,6 +57,9 @@ export type {
 } from "@/lib/agent/events"
 
 export { GLOBAL_EVENT_DIRECTORY, syncEventMessageID, syncEventSessionID } from "@/lib/agent/events"
+
+/** The wire event union, under the name the sync layer and its tests use. */
+export type OpenCodeEvent = EventSubscribeOutput
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -41,8 +41,6 @@ owner cannot replace the catalog or finish the current owner's loading state.
 
 ### Feature cache / query stores
 
-The Stats page keeps its reports in a feature-local store, `components/views/usage/usageStatsStore.ts`: keyed by runtime, range and project, in memory only, never refetched on its own once a key has a report, cleared on runtime switch. A failed refresh keeps the cached report. The report is requested with `tools: "none"`; tool calls, which make OpenCode scan every tool call in the range, load on request under the same key, over the loaded report's own window. Once the user asks for them, every report shown later in the app session fetches its tool calls after it lands. A failed tool read shows an error with retry and never reads as zero calls.
-
 PR status reads share the aggregate background-network budget as well as their PR-specific cap. Command discovery gates each scope/config read, including body decoding, rather than only gating the initial SDK list. Command reads have a bounded deadline and abort on runtime reset. Reset clears server-derived command caches and invalidates late reads and mutation responses while preserving unsaved command drafts.
 
 These are the most performance-sensitive.
@@ -442,8 +440,8 @@ rule list; commands carry `template` and `subagent`; MCP servers carry
 
 Two rules follow from the routes:
 
-- **The list is not the config.** `opencodeClient.listAgents` answers OpenCode's
-  RESOLVED `AgentInfo` (built-in defaults and global config already merged), and
+- **The list is not the config.** `getAgentRuntime().listAgents` answers the
+  runtime's RESOLVED `AgentInfo` (built-in defaults and global config already merged), and
   the v2 `CommandInfo` carries only a name and a description. Anything that
   edits, duplicates or renames an entity reads its own stored entry instead:
   `useAgentsStore.fetchAgentEntity` / `fetchAgentPermissions`, and the

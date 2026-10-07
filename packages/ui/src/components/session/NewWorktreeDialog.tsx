@@ -568,7 +568,6 @@ export function NewWorktreeDialog({
           undefined,
           undefined,
           resolveDefaultVariant(providerID, modelID),
-          undefined,
           { sessionId: args.sessionId, directory: args.directory },
         );
       }
@@ -622,7 +621,6 @@ export function NewWorktreeDialog({
           { text: contextText, synthetic: true },
         ],
         variant,
-        undefined,
         { sessionId: args.sessionId, directory: args.directory },
       );
 
@@ -686,7 +684,6 @@ export function NewWorktreeDialog({
           { text: contextText, synthetic: true },
         ],
         variant,
-        undefined,
         { sessionId: args.sessionId },
       );
 
@@ -742,7 +739,6 @@ export function NewWorktreeDialog({
           { text: contextText, synthetic: true },
         ],
         variant,
-        undefined,
         { sessionId: args.sessionId },
       );
 

@@ -1,5 +1,5 @@
 import type { Session } from "@/lib/opencode/model";
-import type { SessionListOptions, SessionPage } from "@/lib/opencode/client";
+import type { SessionListOptions, SessionPage } from "@/lib/agent/contract";
 import type { SpaceMark } from "@/lib/spaces/spaces-store";
 import { runSessionListNetworkTask } from '@/lib/background-network';
 import { retry } from "@/sync/retry";

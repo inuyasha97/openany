@@ -1,5 +1,5 @@
 import type { useI18n } from '@/lib/i18n';
-import { OpencodeApiError } from '@/lib/opencode/client';
+import { OpencodeApiError } from '@/lib/openchamber/client';
 
 type Translate = ReturnType<typeof useI18n>['t'];
 

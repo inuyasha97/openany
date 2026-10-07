@@ -11,7 +11,8 @@ import { useSessionUIStore } from "./session-ui-store"
 import { useInputStore } from "./input-store"
 import type { ChildStoreManager } from "./child-store"
 import { computeSubtreeIds } from "./scoped-blocking-requests"
-import { opencodeClient, type SyntheticContextInput } from "@/lib/opencode/client"
+import { openChamberClient } from "@/lib/openchamber/client"
+import type { ContextPartMetadata } from "@/lib/messages/contextParts"
 import { forgetSessionRuntime, getAgentRuntime, getAgentRuntimeForSession, registerSessionRuntime } from "@/lib/agent/registry"
 import { toJsonRecord } from "@/lib/opencode/json"
 import { ascendingId } from "@/lib/opencode/ids"
@@ -940,6 +941,14 @@ function getRequestReplyDirectory(
  */
 export type SessionCreateSelection = { model?: ModelRef; agent?: string }
 
+/** One context item admitted before a prompt; `id` is client-minted when given. */
+export type SyntheticContextInput = {
+  id?: string
+  text: string
+  metadata?: ContextPartMetadata
+  description?: string
+}
+
 export async function createSession(
   title?: string,
   directoryOverride?: string | null,
@@ -950,12 +959,12 @@ export async function createSession(
   runtimeId?: string,
 ): Promise<Session | null> {
   const runtimeKey = getRuntimeKey()
-  const runtimeClient = opencodeClient.getSdkClient()
+  const runtimeIdentity = openChamberClient.getRuntimeIdentity()
   try {
     // Capture the effective directory used for session creation so we can fall
     // back to it when the server response omits the `directory` field.
     // Without this, setCurrentSession would fall through to a stale
-    // opencodeClient.getDirectory() value and group the session under the
+    // openChamberClient.getDirectory() value and group the session under the
     // wrong project (closes #1637, #2270).
     const effectiveDirectory = directoryOverride ?? dir()
     const session = await getAgentRuntime(runtimeId).createSession(
@@ -963,7 +972,7 @@ export async function createSession(
       effectiveDirectory,
     )
 
-    if (getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== runtimeClient) return null
+    if (getRuntimeKey() !== runtimeKey || openChamberClient.getRuntimeIdentity() !== runtimeIdentity) return null
     registerSessionRuntime(session.id, session.runtimeId ?? runtimeId ?? "opencode")
     const sessionDirectory = session.directory || effectiveDirectory || null
     // Pre-populate routing index so SSE events arriving before session.created

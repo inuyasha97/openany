@@ -1910,7 +1910,6 @@ export const settingsDict = {
   'settings.openchamber.visual.section.chatDisplay': 'Affichage',
   'settings.openchamber.visual.section.chatMessageOptions': 'Options des messages',
   'settings.openchamber.visual.section.chatFeatures': 'Fonctionnalités',
-  'settings.openchamber.visual.section.messageStreamTransport': 'Transport de flux de messages',
   'settings.openchamber.visual.section.activityDefault': 'Activité par défaut',
   'settings.openchamber.visual.section.activityDefaultAria': 'Mode d\'activité par défaut',
   'settings.openchamber.visual.section.sessionActivity': 'Activité de session',

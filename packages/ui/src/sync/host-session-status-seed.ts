@@ -1,5 +1,5 @@
 import type { SyncEvent } from '@/lib/opencode/events';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import type { HostSessionStatusSnapshot } from '@/lib/opencode/session-status';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { resolveGlobalSessionDirectory, useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
@@ -13,7 +13,7 @@ import { seedGlobalBlockingRequests } from './global-blocking-requests';
 // is invisible to the event stream until its next status event. The OpenChamber
 // host (web server, or the VS Code extension host) has been listening to the
 // single upstream stream the whole time and answers `/api/sessions/status` in
-// one request without creating OpenCode instances.
+// one request without creating agent-runtime instances.
 //
 // The seed is strictly additive: it only adds busy entries for sessions this
 // client has not observed itself. Absence from the host map never clears
@@ -65,7 +65,7 @@ export const seedGlobalSessionStatusFromHost = (): Promise<void> => {
   if (inFlight) return inFlight;
   const runtimeKey = getRuntimeKey();
   inFlight = (async () => {
-    const snapshot = await opencodeClient.getHostSessionStatusSnapshot();
+    const snapshot = await openChamberClient.getHostSessionStatusSnapshot();
     // A runtime switch between request and response clears the index; the old
     // host's sessions must not be written into the new one.
     if (!snapshot || getRuntimeKey() !== runtimeKey) return;

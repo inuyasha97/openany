@@ -75,7 +75,7 @@ export async function exerciseDiffHunkActions(snapshotCase?: 'cold' | 'cached' |
   const { createWebAPIs } = await import('../../../../web/src/api/index');
   const { MultiFileDiffEntry } = await import('@/components/views/DiffView');
   const { SyncProvider } = await import('@/sync/sync-context');
-  const { opencodeClient } = await import('@/lib/opencode/client');
+  const { openChamberClient } = await import('@/lib/openchamber/client');
   const { useGitStore } = await import('@/stores/useGitStore');
   const changes = snapshotCase === 'cold-single' ? [1] : [1, 25, 50];
   let remaining = [...changes];
@@ -130,7 +130,7 @@ export async function exerciseDiffHunkActions(snapshotCase?: 'cold' | 'cached' |
   Object.defineProperty(container, 'clientHeight', { value: 2000 });
   document.body.append(container);
   const root = createRoot(container);
-  const render = () => act(async () => root.render(<I18nProvider><SyncProvider sdk={opencodeClient.getSdkClient()} directory=""><RuntimeAPIContext.Provider value={apis}>
+  const render = () => act(async () => root.render(<I18nProvider><SyncProvider runtimeIdentity={openChamberClient.getRuntimeIdentity()} directory=""><RuntimeAPIContext.Provider value={apis}>
     <MultiFileDiffEntry directory="/repo" file={file} layout={layout} wrapLines={false} isSelected={false}
       isExpanded isMounted onSelect={() => {}} onExpandedChange={() => {}} registerSectionRef={() => {}}
       showOpenInEditorAction onOpenInEditor={(_path, diff) => { openedPatch = diff?.patch ?? null; }}

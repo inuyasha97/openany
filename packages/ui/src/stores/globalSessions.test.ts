@@ -1,10 +1,9 @@
 import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { describe, expect, test } from 'bun:test'
-import type { SessionListOptions, SessionPage } from '@/lib/opencode/client'
+import type { SessionListOptions, SessionPage } from '@/lib/agent/contract'
 import type { Session } from '@/lib/opencode/model'
 import type { AgentSession } from '@/lib/agent/contract'
-import { OpenCode } from '@opencode/client'
 
 import {
   filterManagedChatsForRuntime,
@@ -50,25 +49,27 @@ describe('managed Chats runtime visibility', () => {
 })
 
 describe('listGlobalSessionPages', () => {
-  test('uses the next cursor from the SDK HTTP response rather than guessing from session timestamps', async () => {
+  test('uses the next cursor from the server response rather than guessing from session timestamps', async () => {
     const cursors: Array<string | null> = []
-    const apiClient = OpenCode.make({
-      baseUrl: 'https://sessions.test',
-      fetch: async (request) => {
-        const url = new URL(request instanceof Request ? request.url : request.toString())
-        const cursor = url.searchParams.get('cursor')
-        cursors.push(cursor)
-        return cursor === null
-          ? Response.json({ data: [
-            makeSession({ id: 'first', time: { created: 1, updated: 20 } }),
-            makeSession({ id: 'second', time: { created: 1, updated: 10 } }),
-          ], cursor: { next: 'opaque-8' } })
-          : Response.json({ data: [makeSession({ id: 'last', time: { created: 1, updated: 5 } })], cursor: {} })
-      },
-    })
+    // Plain transport double: the lister reads the page and the cursor the
+    // server answered with, and nothing derives an order from timestamps.
+    const fetchPage = async (request: URL) => {
+      const cursor = request.searchParams.get('cursor')
+      cursors.push(cursor)
+      return cursor === null
+        ? Response.json({ data: [
+          makeSession({ id: 'first', time: { created: 1, updated: 20 } }),
+          makeSession({ id: 'second', time: { created: 1, updated: 10 } }),
+        ], cursor: { next: 'opaque-8' } })
+        : Response.json({ data: [makeSession({ id: 'last', time: { created: 1, updated: 5 } })], cursor: {} })
+    }
     const sessions = await listGlobalSessionPages(async ({ cursor, limit }) => {
-      const response = await apiClient.session.list({ cursor, limit })
-      return { sessions: response.data.map((session) => makeSession(session)), cursor: { next: response.cursor.next ?? undefined } }
+      const request = new URL('https://sessions.test/session')
+      request.searchParams.set('limit', String(limit ?? 20))
+      if (cursor !== undefined) request.searchParams.set('cursor', cursor)
+      const response = await fetchPage(request)
+      const body = await response.json() as { data: Array<Partial<Session> & { id: string }>; cursor: { next?: string } }
+      return { sessions: body.data.map((session) => makeSession(session)), cursor: { next: body.cursor.next } }
     }, { pageSize: 2 })
     expect(cursors).toEqual([null, 'opaque-8'])
     expect(sessions.map((session) => session.id)).toEqual(['first', 'second', 'last'])
@@ -177,7 +178,7 @@ describe('splitGlobalSessionsByArchived', () => {
   })
 })
 
-const originalHomeInfo = opencodeClient.getFilesystemHomeInfo;
-opencodeClient.getFilesystemHomeInfo = async () => ({ home: '/home/user' });
+const originalHomeInfo = openChamberClient.getFilesystemHomeInfo;
+openChamberClient.getFilesystemHomeInfo = async () => ({ home: '/home/user' });
 await ensureChatsRootDirectory();
-opencodeClient.getFilesystemHomeInfo = originalHomeInfo;
+openChamberClient.getFilesystemHomeInfo = originalHomeInfo;

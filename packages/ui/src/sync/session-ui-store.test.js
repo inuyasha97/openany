@@ -1,6 +1,6 @@
 import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSessionWorktreeStore } from './session-worktree-store';
@@ -19,7 +19,7 @@ import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { createContextPart } from '@/lib/messages/contextParts';
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+import { createOpenCodeStubRuntime, setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime';
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.
@@ -28,6 +28,19 @@ registerAgentRuntime(createOpenCodeStubRuntime());
 // registry answers an unregistered id with the real OMP client, so register the
 // double under that id too.
 registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
+
+// The runtime operations the store makes used to be the OpenChamber client's
+// own methods, and these fixtures still stage them by assignment on
+// `openChamberClient`. The surface the double reads is a live view of that
+// object, so each assignment *is* what the runtime answers — no fixture has to
+// move. Legacy names resolve through the double's aliases (`sendPrompt` →
+// `sendMessage`, `getActiveStatus` → `getActiveSessionStatuses`, ...).
+setOpenCodeStubSurface(new Proxy({}, {
+  get: (_target, operation) => {
+    const impl = openChamberClient[operation];
+    return typeof impl === 'function' ? impl.bind(openChamberClient) : undefined;
+  },
+}));
 
 /**
  * Unit tests for session worktree routing through the authoritative store.
@@ -258,44 +271,13 @@ describe('draft materialization transition identity', () => {
   });
 });
 
-describe('routeMessage directory scoping', () => {
-  test('runs sends in the provided session directory', async () => {
-    // The session directory travels as an explicit request param (not via
-    // client-wide directory scoping), so concurrent sends can't cross-talk.
-    const calls = [];
-    const originalShellSession = opencodeClient.shellSession;
-
-    opencodeClient.shellSession = async (params) => {
-      calls.push(params);
-      return { info: {}, parts: [] };
-    };
-
-    try {
-      await routeMessage({
-        sessionId: 'session-a',
-        directory: '/session/project',
-        content: 'pwd',
-        providerID: 'provider-a',
-        modelID: 'model-a',
-        inputMode: 'shell',
-      });
-    } finally {
-      opencodeClient.shellSession = originalShellSession;
-    }
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0].sessionId).toBe('session-a');
-    expect(calls[0].directory).toBe('/session/project');
-  });
-});
-
 describe('routeMessage inline skills', () => {
   test('the command route names inline skills in an instruction after the attached context', async () => {
     const calls = [];
-    const originalListCommands = opencodeClient.listCommands;
-    const originalSendCommand = opencodeClient.sendCommand;
-    opencodeClient.listCommands = async () => [{ name: 'review-skills-test' }];
-    opencodeClient.sendCommand = async (params) => {
+    const originalListCommands = openChamberClient.listCommands;
+    const originalSendCommand = openChamberClient.sendCommand;
+    openChamberClient.listCommands = async () => [{ name: 'review-skills-test' }];
+    openChamberClient.sendCommand = async (params) => {
       calls.push(params);
     };
 
@@ -310,8 +292,8 @@ describe('routeMessage inline skills', () => {
         skills: { names: ['deploy'], instructionFor: (names) => `use: ${names.join(',')}` },
       });
     } finally {
-      opencodeClient.listCommands = originalListCommands;
-      opencodeClient.sendCommand = originalSendCommand;
+      openChamberClient.listCommands = originalListCommands;
+      openChamberClient.sendCommand = originalSendCommand;
     }
 
     expect(calls).toHaveLength(1);
@@ -343,15 +325,15 @@ describe('sendMessage captured target', () => {
       newSessionDraft: { open: false, directoryOverride: null, parentID: null },
     });
 
-    originalSendMessage = opencodeClient.sendMessage;
-    opencodeClient.sendMessage = async (params) => {
+    originalSendMessage = openChamberClient.sendMessage;
+    openChamberClient.sendMessage = async (params) => {
       calls.push(params);
       return 'msg';
     };
   });
 
   afterEach(() => {
-    opencodeClient.sendMessage = originalSendMessage;
+    openChamberClient.sendMessage = originalSendMessage;
   });
 
   const sendToTarget = (target) => useSessionUIStore.getState().sendMessage(
@@ -363,7 +345,6 @@ describe('sendMessage captured target', () => {
     undefined,
     undefined,
     undefined,
-    'normal',
     { target },
   );
 
@@ -639,12 +620,12 @@ describe('createSession draft lifecycle', () => {
   let originalLastDirectory;
 
   beforeEach(() => {
-    originalCreateSession = opencodeClient.createSession;
-    originalGetDirectoryAvailability = opencodeClient.getDirectoryAvailability;
+    originalCreateSession = openChamberClient.createSession;
+    originalGetDirectoryAvailability = openChamberClient.getDirectoryAvailability;
     originalProjects = useProjectsStore.getState().projects;
     originalActiveProjectId = useProjectsStore.getState().activeProjectId;
     originalDirectoryState = useDirectoryStore.getState();
-    originalClientDirectory = opencodeClient.getDirectory();
+    originalClientDirectory = openChamberClient.getDirectory();
     originalLastDirectory = getDeferredSafeStorage().getItem('lastDirectory');
     useSessionUIStore.setState({
       currentSessionId: null,
@@ -654,11 +635,11 @@ describe('createSession draft lifecycle', () => {
   });
 
   afterEach(() => {
-    opencodeClient.createSession = originalCreateSession;
-    opencodeClient.getDirectoryAvailability = originalGetDirectoryAvailability;
+    openChamberClient.createSession = originalCreateSession;
+    openChamberClient.getDirectoryAvailability = originalGetDirectoryAvailability;
     useProjectsStore.setState({ projects: originalProjects, activeProjectId: originalActiveProjectId });
     useDirectoryStore.setState(originalDirectoryState, true);
-    opencodeClient.setDirectory(originalClientDirectory ?? undefined);
+    openChamberClient.setDirectory(originalClientDirectory ?? undefined);
     if (originalLastDirectory === null) {
       getDeferredSafeStorage().removeItem('lastDirectory');
     } else {
@@ -667,7 +648,7 @@ describe('createSession draft lifecycle', () => {
   });
 
   test('keeps the draft open when session creation fails', async () => {
-    opencodeClient.createSession = async () => {
+    openChamberClient.createSession = async () => {
       throw new Error('offline');
     };
 
@@ -684,7 +665,7 @@ describe('createSession draft lifecycle', () => {
       activeProjectId: 'project-main',
     });
     useDirectoryStore.getState().setDirectory('/private/deleted-worktree', { showOverlay: false });
-    opencodeClient.getDirectoryAvailability = async () => 'missing';
+    openChamberClient.getDirectoryAvailability = async () => 'missing';
 
     useSessionUIStore.getState().openNewSessionDraft({ directoryOverride: '/private/deleted-worktree' });
     await Bun.sleep(0);
@@ -705,8 +686,8 @@ describe('createSession draft lifecycle', () => {
     });
     useDirectoryStore.getState().setDirectory('/private/deleted-worktree', { showOverlay: false });
     useSessionUIStore.getState().openNewSessionDraft({ directoryOverride: '/private/deleted-worktree' });
-    opencodeClient.getDirectoryAvailability = async () => 'missing';
-    opencodeClient.createSession = async (_params, directory) => {
+    openChamberClient.getDirectoryAvailability = async () => 'missing';
+    openChamberClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
       return { id: 'session-fallback', directory };
     };
@@ -726,8 +707,8 @@ describe('createSession draft lifecycle', () => {
     });
     useSessionUIStore.getState().openNewSessionDraft({ directoryOverride: '/private/deleted-worktree', preserveDirectoryOverride: true });
     expect(useSessionUIStore.getState().newSessionDraft.preserveDirectoryOverride).toBe(true);
-    opencodeClient.getDirectoryAvailability = async () => 'missing';
-    opencodeClient.createSession = async (_params, directory) => {
+    openChamberClient.getDirectoryAvailability = async () => 'missing';
+    openChamberClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
       return { id: 'session-pinned', directory };
     };
@@ -746,8 +727,8 @@ describe('createSession draft lifecycle', () => {
     useDirectoryStore.getState().setDirectory('/private/deleted-worktree', { showOverlay: false });
     useSessionUIStore.getState().openNewSessionDraft({ directoryOverride: '/private/deleted-worktree' });
     expect(useSessionUIStore.getState().newSessionDraft.preserveDirectoryOverride).not.toBe(true);
-    opencodeClient.getDirectoryAvailability = async () => 'missing';
-    opencodeClient.createSession = async (_params, directory) => {
+    openChamberClient.getDirectoryAvailability = async () => 'missing';
+    openChamberClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
       return { id: 'session-chat-input', directory };
     };
@@ -765,8 +746,8 @@ describe('createSession draft lifecycle', () => {
     });
     useDirectoryStore.getState().setDirectory('/private/unavailable-worktree', { showOverlay: false });
     useSessionUIStore.getState().openNewSessionDraft({ directoryOverride: '/private/unavailable-worktree' });
-    opencodeClient.getDirectoryAvailability = async () => 'unknown';
-    opencodeClient.createSession = async (_params, directory) => {
+    openChamberClient.getDirectoryAvailability = async () => 'unknown';
+    openChamberClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
       return { id: 'session-unavailable', directory };
     };
@@ -785,10 +766,10 @@ describe('createSession draft lifecycle', () => {
       activeProjectId: 'project-main',
     });
     useDirectoryStore.getState().setDirectory('/private/deleted-worktree', { showOverlay: false });
-    opencodeClient.getDirectoryAvailability = () => new Promise((resolve) => {
+    openChamberClient.getDirectoryAvailability = () => new Promise((resolve) => {
       availabilityResolvers.push(resolve);
     });
-    opencodeClient.createSession = async (_params, directory) => {
+    openChamberClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
       return { id: 'session-race', directory };
     };
@@ -815,8 +796,8 @@ describe('createSession draft lifecycle', () => {
     });
     useDirectoryStore.getState().setDirectory('/private/deleted-worktree', { showOverlay: false });
     useSessionUIStore.getState().openNewSessionDraft();
-    opencodeClient.getDirectoryAvailability = async () => 'missing';
-    opencodeClient.createSession = async () => {
+    openChamberClient.getDirectoryAvailability = async () => 'missing';
+    openChamberClient.createSession = async () => {
       throw new Error('offline');
     };
 
@@ -856,21 +837,21 @@ describe('sendMessage draft snapshot (issues #2222 / #2315)', () => {
     setOptimisticRefs(() => {}, () => {});
     useConfigStore.setState({ isConnected: true });
 
-    originalSendMessage = opencodeClient.sendMessage;
-    originalCreateSession = opencodeClient.createSession;
-    opencodeClient.sendMessage = async (params) => {
+    originalSendMessage = openChamberClient.sendMessage;
+    originalCreateSession = openChamberClient.createSession;
+    openChamberClient.sendMessage = async (params) => {
       sendMessageCalls.push(params);
       return 'msg';
     };
-    opencodeClient.createSession = async (_params, directory) => {
+    openChamberClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
       return { id: 'session-materialized', directory: directory ?? '/projects/alpha' };
     };
   });
 
   afterEach(() => {
-    opencodeClient.sendMessage = originalSendMessage;
-    opencodeClient.createSession = originalCreateSession;
+    openChamberClient.sendMessage = originalSendMessage;
+    openChamberClient.createSession = originalCreateSession;
     useSessionUIStore.setState({
       currentSessionId: null,
       currentSessionDirectory: null,
@@ -910,7 +891,6 @@ describe('sendMessage draft snapshot (issues #2222 / #2315)', () => {
       undefined,
       undefined,
       undefined,
-      'normal',
       { draftSnapshot },
     );
 
@@ -944,7 +924,6 @@ describe('sendMessage draft snapshot (issues #2222 / #2315)', () => {
       undefined,
       undefined,
       undefined,
-      'normal',
       { target: { runtimeKey: getRuntimeKey(), sessionId: 'session-project-a', directory: '/projects/alpha' } },
     );
 
@@ -1001,30 +980,30 @@ describe('routeMessage skill invocation', () => {
     useCommandsStore.setState({ commands: [], commandsByDirectory: {} });
     useSkillsStore.setState({ skills: [], skillsByDirectory: {} });
 
-    originalSendCommand = opencodeClient.sendCommand;
-    originalSendMessage = opencodeClient.sendMessage;
+    originalSendCommand = openChamberClient.sendCommand;
+    originalSendMessage = openChamberClient.sendMessage;
     originalLoadSkills = useSkillsStore.getState().loadSkills;
     liveSkillsLoad = async () => true;
     useSkillsStore.setState({ loadSkills: (directory) => liveSkillsLoad(directory) });
-    originalListCommands = opencodeClient.listCommands;
-    opencodeClient.listCommands = async (directory) => {
+    originalListCommands = openChamberClient.listCommands;
+    openChamberClient.listCommands = async (directory) => {
       liveLookupCalls.push(directory);
       return liveLookup(directory);
     };
-    opencodeClient.sendCommand = async (params) => {
+    openChamberClient.sendCommand = async (params) => {
       sendCommandCalls.push(params);
       return 'msg';
     };
-    opencodeClient.sendMessage = async (params) => {
+    openChamberClient.sendMessage = async (params) => {
       sendMessageCalls.push(params);
       return 'msg';
     };
   });
 
   afterEach(() => {
-    opencodeClient.sendCommand = originalSendCommand;
-    opencodeClient.sendMessage = originalSendMessage;
-    opencodeClient.listCommands = originalListCommands;
+    openChamberClient.sendCommand = originalSendCommand;
+    openChamberClient.sendMessage = originalSendMessage;
+    openChamberClient.listCommands = originalListCommands;
     useSkillsStore.setState({ skills: [], skillsByDirectory: {}, loadSkills: originalLoadSkills });
     useCommandsStore.setState({ commands: [], commandsByDirectory: {} });
   });
@@ -1450,7 +1429,6 @@ describe('goal objective directory scoping', () => {
   let originalSendMessage;
   let originalSendCommand;
   let originalGetSession;
-  let originalUpdateSession;
   let originalFetch;
   const metadataWrites = [];
 
@@ -1482,18 +1460,13 @@ describe('goal objective directory scoping', () => {
     });
     useSessionGoalArmStore.getState().setArmed(true, null);
 
-    originalSendMessage = opencodeClient.sendMessage;
-    originalSendCommand = opencodeClient.sendCommand;
-    originalGetSession = opencodeClient.getSession;
-    originalUpdateSession = opencodeClient.updateSession;
+    originalSendMessage = openChamberClient.sendMessage;
+    originalSendCommand = openChamberClient.sendCommand;
+    originalGetSession = openChamberClient.getSession;
     originalFetch = globalThis.fetch;
-    opencodeClient.sendMessage = async () => 'msg';
-    opencodeClient.sendCommand = async () => {};
-    opencodeClient.getSession = async () => ({ id: 'session-worktree', metadata: {} });
-    opencodeClient.updateSession = async (sessionId, patch, directory) => {
-      metadataWrites.push({ sessionId, patch, directory });
-      return { id: sessionId, ...patch };
-    };
+    openChamberClient.sendMessage = async () => 'msg';
+    openChamberClient.sendCommand = async () => {};
+    openChamberClient.getSession = async () => ({ id: 'session-worktree', metadata: {} });
     // Session metadata is OpenChamber-owned on v2: it travels through the
     // server's metadata route, not OpenCode. Every other fetch fails, so the
     // file-backed objective write falls back to the inline objective.
@@ -1508,10 +1481,9 @@ describe('goal objective directory scoping', () => {
   });
 
   afterEach(() => {
-    opencodeClient.sendMessage = originalSendMessage;
-    opencodeClient.sendCommand = originalSendCommand;
-    opencodeClient.getSession = originalGetSession;
-    opencodeClient.updateSession = originalUpdateSession;
+    openChamberClient.sendMessage = originalSendMessage;
+    openChamberClient.sendCommand = originalSendCommand;
+    openChamberClient.getSession = originalGetSession;
     globalThis.fetch = originalFetch;
     useSessionGoalArmStore.getState().setArmed(false, null);
     useCommandsStore.setState({ commands: [], commandsByDirectory: {} });
@@ -1527,7 +1499,6 @@ describe('goal objective directory scoping', () => {
       undefined,
       undefined,
       undefined,
-      'normal',
       { target: { runtimeKey: getRuntimeKey(), sessionId: 'session-worktree', directory: '/repo/worktree' } },
     );
 
@@ -1538,32 +1509,34 @@ describe('goal objective directory scoping', () => {
 });
 
 describe('archiveSessions option forwarding', () => {
-  let originalUpdateSession;
-  let updateSessionCalls;
+  let originalFetch;
+  let archiveRequests;
 
   beforeEach(() => {
-    updateSessionCalls = [];
-    originalUpdateSession = opencodeClient.updateSession;
-    opencodeClient.updateSession = (sessionId) => {
-      updateSessionCalls.push(sessionId);
-      return Promise.resolve(null);
+    archiveRequests = 0;
+    originalFetch = globalThis.fetch;
+    // Archive and unarchive travel through the server's batch route, so any
+    // call this records is a request the guard was supposed to prevent.
+    globalThis.fetch = async () => {
+      archiveRequests += 1;
+      return new Response('', { status: 500 });
     };
   });
 
   afterEach(() => {
-    opencodeClient.updateSession = originalUpdateSession;
+    globalThis.fetch = originalFetch;
   });
 
   // The store used to accept an options object and silently drop it, so a
   // caller-supplied runtime key had no effect. Passing a key that cannot match
-  // the active runtime must abort the batch before any SDK call.
+  // the active runtime must abort the batch before any server call.
   test('honors expectedRuntimeKey instead of discarding the options object', async () => {
     const result = await useSessionUIStore.getState().archiveSessions(['session-x', 'session-y'], {
       expectedRuntimeKey: 'runtime-that-is-not-active',
     });
 
     expect(result).toEqual({ archivedIds: [], failedIds: ['session-x', 'session-y'] });
-    expect(updateSessionCalls).toEqual([]);
+    expect(archiveRequests).toBe(0);
   });
 
   test('unarchiveSessions honors expectedRuntimeKey instead of discarding the options object', async () => {
@@ -1572,7 +1545,7 @@ describe('archiveSessions option forwarding', () => {
     });
 
     expect(result).toEqual({ restoredIds: [], failedIds: ['session-x', 'session-y'] });
-    expect(updateSessionCalls).toEqual([]);
+    expect(archiveRequests).toBe(0);
   });
 });
 
@@ -1582,15 +1555,15 @@ describe('deleteSessions option forwarding', () => {
 
   beforeEach(() => {
     deleteSessionCalls = [];
-    originalDeleteSession = opencodeClient.deleteSession;
-    opencodeClient.deleteSession = (sessionId) => {
+    originalDeleteSession = openChamberClient.deleteSession;
+    openChamberClient.deleteSession = (sessionId) => {
       deleteSessionCalls.push(sessionId);
       return Promise.resolve(true);
     };
   });
 
   afterEach(() => {
-    opencodeClient.deleteSession = originalDeleteSession;
+    openChamberClient.deleteSession = originalDeleteSession;
   });
 
   // The store accepted an options object and dropped it on both the single and
@@ -1652,17 +1625,17 @@ describe('sendMessage effort record', () => {
       currentSessionDirectory: '/current/project',
       newSessionDraft: { open: false, directoryOverride: null, parentID: null },
     });
-    originalSendMessage = opencodeClient.sendMessage;
-    opencodeClient.sendMessage = async () => 'msg';
+    originalSendMessage = openChamberClient.sendMessage;
+    openChamberClient.sendMessage = async () => 'msg';
   });
 
   afterEach(() => {
-    opencodeClient.sendMessage = originalSendMessage;
+    openChamberClient.sendMessage = originalSendMessage;
     useSelectionStore.getState().saveAgentModelVariantForSession(SESSION, AGENT, PROVIDER, MODEL, undefined);
   });
 
   const send = (variant) => useSessionUIStore.getState().sendMessage(
-    'hello', PROVIDER, MODEL, AGENT, undefined, undefined, undefined, variant, 'normal',
+    'hello', PROVIDER, MODEL, AGENT, undefined, undefined, undefined, variant,
   );
 
   test('keeps an explicit Default across the send that follows it', async () => {
@@ -1696,10 +1669,10 @@ describe('sendMessage effort record', () => {
   });
 });
 
-const originalHomeInfo = opencodeClient.getFilesystemHomeInfo;
-opencodeClient.getFilesystemHomeInfo = async () => ({ home: '/Users/tester' });
+const originalHomeInfo = openChamberClient.getFilesystemHomeInfo;
+openChamberClient.getFilesystemHomeInfo = async () => ({ home: '/Users/tester' });
 await ensureChatsRootDirectory();
-opencodeClient.getFilesystemHomeInfo = originalHomeInfo;
+openChamberClient.getFilesystemHomeInfo = originalHomeInfo;
 
 describe('missing session directory recovery', () => {
   const missingWorktree = '/projects/main/.worktrees/gone';
@@ -1734,12 +1707,12 @@ describe('missing session directory recovery', () => {
     moves.length = 0;
     probes.length = 0;
     availability = 'missing';
-    originalGetDirectoryAvailability = opencodeClient.getDirectoryAvailability;
-    originalMoveSession = opencodeClient.moveSession;
+    originalGetDirectoryAvailability = openChamberClient.getDirectoryAvailability;
+    originalMoveSession = openChamberClient.moveSession;
     originalProjects = useProjectsStore.getState().projects;
     originalActiveProjectId = useProjectsStore.getState().activeProjectId;
     originalDirectoryState = useDirectoryStore.getState();
-    originalClientDirectory = opencodeClient.getDirectory();
+    originalClientDirectory = openChamberClient.getDirectory();
     originalGlobalState = useGlobalSessionsStore.getState();
 
     const childStore = {
@@ -1749,10 +1722,10 @@ describe('missing session directory recovery', () => {
     const childStores = { children: new Map(), ensureChild: () => childStore, getChild: () => childStore };
     setActionRefs(childStores, () => projectDirectory);
     setOptimisticRefs(() => {}, () => {});
-    opencodeClient.moveSession = async (sessionID, directory) => {
+    openChamberClient.moveSession = async (sessionID, directory) => {
       moves.push({ sessionID, directory });
     };
-    opencodeClient.getDirectoryAvailability = async (directory) => {
+    openChamberClient.getDirectoryAvailability = async (directory) => {
       probes.push(directory);
       return availability;
     };
@@ -1769,12 +1742,12 @@ describe('missing session directory recovery', () => {
   });
 
   afterEach(() => {
-    opencodeClient.getDirectoryAvailability = originalGetDirectoryAvailability;
-    opencodeClient.moveSession = originalMoveSession;
+    openChamberClient.getDirectoryAvailability = originalGetDirectoryAvailability;
+    openChamberClient.moveSession = originalMoveSession;
     useProjectsStore.setState({ projects: originalProjects, activeProjectId: originalActiveProjectId });
     useDirectoryStore.setState(originalDirectoryState, true);
     useGlobalSessionsStore.setState(originalGlobalState, true);
-    opencodeClient.setDirectory(originalClientDirectory ?? undefined);
+    openChamberClient.setDirectory(originalClientDirectory ?? undefined);
     useSessionUIStore.setState({ currentSessionId: null, currentSessionDirectory: null, worktreeMetadata: new Map() });
   });
 

@@ -7,7 +7,7 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { ChildStoreManager } from '@/sync/child-store';
 import { setSyncRefs } from '@/sync/sync-refs';
-import { createRuntimeOpencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { applyGlobalSessionStatusEvent, replaceGlobalSessionStatusById } from '@/sync/global-session-status';
 import { readGuestWorkspace, observeGuestWorkspace } from './workspace';
 import { guestMay } from './capabilities';
@@ -20,7 +20,7 @@ const session = (id: string, directory: string): Session => ({
 let manager: ChildStoreManager;
 beforeEach(() => {
   manager = new ChildStoreManager();
-  setSyncRefs(createRuntimeOpencodeClient({ baseUrl: 'http://localhost' }), manager, '/a');
+  setSyncRefs(manager, '/a');
   useProjectsStore.setState({ hasServerSnapshot: true, serverSnapshotFailed: false, projects: [
     { id: 'a', path: '/a', label: 'A', addedAt: 1 }, { id: 'b', path: '/b', label: 'B', addedAt: 1 },
   ] });

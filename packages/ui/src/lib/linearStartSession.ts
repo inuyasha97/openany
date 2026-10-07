@@ -222,7 +222,6 @@ export async function startLinearIssueSession(args: {
         { text: contextText, synthetic: true },
       ],
       variant,
-      undefined,
       { sessionId, directory: sessionDirectory },
     ).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);

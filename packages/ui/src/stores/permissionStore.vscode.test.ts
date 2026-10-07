@@ -16,8 +16,8 @@ mock.module("@/sync/sync-refs", () => ({ getAllSyncSessionMap: () => new Map() }
 mock.module("@/sync/session-ui-store", () => ({
   useSessionUIStore: { getState: () => ({ getDirectoryForSession: () => "/repo" }) },
 }))
-mock.module("@/lib/opencode/client", () => ({
-  opencodeClient: { getDirectory: () => "/fallback" },
+mock.module("@/lib/openchamber/client", () => ({
+  openChamberClient: { getDirectory: () => "/fallback" },
 }))
 mock.module("@/sync/vscode-permission-auto-accept", () => ({
   reconcileVSCodePendingPermissions: async (directory?: string) => {

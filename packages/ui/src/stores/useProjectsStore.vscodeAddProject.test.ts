@@ -49,7 +49,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 });
 
 const noop = () => {};
-const opencodeClientStub = new Proxy(
+const openChamberClientStub = new Proxy(
   {
     setDirectory: noop,
     getDirectory: () => null,
@@ -70,10 +70,10 @@ const opencodeClientStub = new Proxy(
     },
   },
 );
-mock.module('@/lib/opencode/client', () => ({
+mock.module('@/lib/openchamber/client', () => ({
   OpencodeApiError: Error,
   normalizeOpencodeError: (operation: string, error: unknown) => new Error(`${operation}: ${String(error)}`),
-  opencodeClient: opencodeClientStub,
+  openChamberClient: openChamberClientStub,
 }));
 mock.module('@/lib/persistence', () => ({
   updateDesktopSettings: async () => ({ ok: true }),

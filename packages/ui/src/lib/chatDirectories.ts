@@ -1,4 +1,4 @@
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { normalizePath } from '@/lib/pathNormalization';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { getRuntimeKey } from '@/lib/runtime-switch';
@@ -54,7 +54,7 @@ async function getChatRoots(): Promise<ChatRoots> {
   const runtimeKey = getRuntimeKey();
   const existing = chatsRootByRuntime.get(runtimeKey);
   if (existing) return existing;
-  const pending = opencodeClient.getFilesystemHomeInfo().then(({ home, chatsRoot, canonicalChatsRoot, canonicalLegacyChatsRoot }) => {
+  const pending = openChamberClient.getFilesystemHomeInfo().then(({ home, chatsRoot, canonicalChatsRoot, canonicalLegacyChatsRoot }) => {
     const legacy = legacyRootForHome(home);
     const configured = normalizePath(chatsRoot) ?? legacy;
     if (!legacy || !configured) throw new Error('Unable to resolve chat directories');
@@ -90,7 +90,7 @@ export async function createChatDirectory(now = new Date()): Promise<string> {
   const date = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
   const id = globalThis.crypto?.randomUUID?.() ?? `${now.getTime()}-${Math.random().toString(36).slice(2)}`;
   const directory = joinPath(roots.configured, date, `session-${id}`);
-  await opencodeClient.createDirectory(directory);
+  await openChamberClient.createDirectory(directory);
   return directory;
 }
 

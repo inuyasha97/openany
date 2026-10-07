@@ -2,7 +2,7 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import { getSyncSessions } from '@/sync/sync-refs';
 import { useUIStore } from '@/stores/useUIStore';
 import { getRuntimeUrlResolver } from './runtime-url';
-import { opencodeClient } from './opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { runtimeFetch } from './runtime-fetch';
 import { getRecentSendFailures } from '@/sync/send-failure-log';
 import { getRecentSessionErrors } from '@/sync/session-error-log';
@@ -253,7 +253,7 @@ export const buildOpenCodeStatusReport = async (): Promise<string> => {
 
   // OpenCode 2.x serves no home directory of its own, so the log path below is
   // anchored on the home the client derives from the directories it knows.
-  const opencodeHome = await opencodeClient
+  const opencodeHome = await openChamberClient
     .getSystemInfo()
     .then((info) => (info.homeDirectory && info.homeDirectory !== '/' ? info.homeDirectory : ''))
     .catch(() => '');
@@ -287,7 +287,7 @@ export const buildOpenCodeStatusReport = async (): Promise<string> => {
   lines.push(`Time: ${now.toISOString()}`);
   lines.push(`OpenChamber version: ${appVersion}`);
   lines.push(`Runtime: ${origin || '(unknown)'} (api=${apiBase || '(unknown)'})`);
-  lines.push(`OpenCode SDK base: ${opencodeClient.getBaseUrl()}`);
+  lines.push(`OpenCode SDK base: ${openChamberClient.getBaseUrl()}`);
   lines.push(`Event stream: ${eventStreamStatus}`);
   lines.push(`Directory: ${directory || '(none)'}`);
   lines.push(`Platform: ${platform}`);

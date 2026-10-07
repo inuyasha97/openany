@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import type { MessagePage } from "@/lib/opencode/client"
+import type { MessagePage } from "@/lib/agent/contract"
 import type { Message } from "@/lib/opencode/model"
 import { getRuntimeKey } from "@/lib/runtime-switch"
 import { ChildStoreManager } from "./child-store"

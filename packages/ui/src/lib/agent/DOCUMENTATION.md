@@ -6,7 +6,7 @@ Fork-owned agent runtime seam. See `docs/agent-host/DESIGN.md` and `docs/agent-h
 
 - `contract.ts` holds `AgentRuntime`, `AgentCapabilities`, and the parameter types. Runtime-neutral. It also defines `AgentSession`, a `Session` that names its runtime and native session id.
 - `events.ts` holds the canonical event vocabulary: `AgentEvent` (alias `SyncEvent`) and the payload types. Runtime-neutral; the OpenCode adapter translates wire events into these in `lib/opencode/events.ts`.
-- `opencode-runtime.ts` holds `OpenCodeRuntime`, the adapter over `opencodeClient`, and `SessionClient`, the structural client type it depends on.
+- `omp-runtime.ts` holds `OmpRuntimeClient`, the adapter over the OMP server routes, and `contract.ts` the `AgentRuntime` interface callers depend on.
 - `omp-runtime.ts` holds `OmpRuntimeClient`, the OMP adapter over the server's `/api/agents/omp/*` routes. It has `id = "omp"`, no optional capabilities, and rejects every unsupported operation. Sessions (create/list/get), messages and prompts are implemented; `sendPrompt` forwards the client's `messageId` so the optimistic message reconciles. OMP events reach the UI already projected on the `openchamber:omp` bridge frame, so its `translateEvent` returns nothing.
 - `acp-runtime.ts` holds `AcpRuntimeClient`, the ACP adapter over the server's `/api/agents/acp/*` routes. It has `id = "acp"`, supports sessions, prompts, cancels and the permission reply, and declares `permissions` and `attachments` true with the rest false. ACP v1 has no history, so `getMessages` answers an empty page; events arrive on the `openchamber:acp` bridge frame, so its `translateEvent` returns nothing.
 - `omp-availability.ts` / `acp-availability.ts` probe the runtime's `status` route (404 means the server has it off) and expose `use*RuntimeAvailable(enabled)` so an affordance only appears when the runtime can be served. `additional-sessions.ts` lists the mounted non-default runtimes for the global session list.
@@ -16,12 +16,12 @@ Fork-owned agent runtime seam. See `docs/agent-host/DESIGN.md` and `docs/agent-h
 
 ## Rules
 
-- Callers use `getAgentRuntime()`, not `opencodeClient`, for agent-domain operations.
-- The adapter is the only file here that imports `opencodeClient`.
+- Callers use `getAgentRuntime()` for agent-domain operations and `@/lib/openchamber/client` for the OpenChamber-owned surface.
+- The adapter is the only file here that talks to a runtime; OpenChamber-owned calls never pass through it.
 - The event vocabulary is defined here and re-exported from `lib/opencode/events.ts`. Do not define event types in the OpenCode module.
 - The runtime owns wire translation: the adapter exposes `translateEvent`, and the sync pipeline calls it instead of importing `lib/opencode/events`.
 - `contract.ts` carries the session, message, permission, form, revert and catalog operations. Every method is required; `AgentCapabilities` gates which ones a caller uses.
-- React callers use `useAgentRuntime()`; plain modules use `getAgentRuntime()`. Agent-domain calls go through the runtime; OpenChamber-owned and OpenCode-specific calls stay on `opencodeClient`.
+- React callers use `useAgentRuntime()`; plain modules use `getAgentRuntime()`. Agent-domain calls go through the runtime; OpenChamber-owned calls stay on `openChamberClient`.
 - A projected session carries `runtimeId` and `nativeSessionId`. Stores keep the base `Session` type; code that needs the runtime identity types as `AgentSession`.
 - `AgentMessage` and `AgentPart` are the contract's names for messages and parts. They equal the domain model while one runtime exists.
 - The contract grows only when a caller migrates; do not add methods no one uses.

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test"
 import { cyclePermissionMode } from "../../components/chat/permissionAutoAccept"
+import { setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime'
 
 const storage = new Map<string, string>()
 const createSessionCalls: Array<{ title?: string; directory: string | null; metadata?: unknown }> = []
@@ -107,14 +108,28 @@ mock.module("@/stores/utils/safeStorage", () => ({
   }),
 }))
 
-mock.module("@/lib/opencode/client", () => ({
-  opencodeClient: {
+const stubClient = {
     getDirectory: () => null,
     getFilesystemHome: mock(async () => "/home/test"),
     getFilesystemHomeInfo: async () => ({ home: "/home/test" }),
     createDirectory: mock(async (path: string) => ({ success: true, path })),
     setDirectory: mock(() => undefined),
-  },
+    getRuntimeIdentity: () => 'test-runtime',
+    getDirectoryAvailability: async () => 'unknown' as const,
+    probeDirectory: async () => true,
+    cloneRepository: async (input: { destinationPath: string }) => ({ success: true, path: input.destinationPath }),
+    listLocalDirectory: async () => [],
+    getHostSessionStatusSnapshot: async () => null,
+    getWebServerSessionActivity: async () => null,
+    getBaseUrl: () => '/api',
+    reconnectToRuntimeBaseUrl: () => undefined,
+    checkHealth: async () => true,
+    probeHealth: async () => 'healthy' as const,
+    getSystemInfo: async () => ({ homeDirectory: '/' }),
+}
+setOpenCodeStubSurface(stubClient)
+mock.module("@/lib/openchamber/client", () => ({
+    openChamberClient: stubClient,
 }))
 
 mock.module("@/stores/permissionStore", () => ({

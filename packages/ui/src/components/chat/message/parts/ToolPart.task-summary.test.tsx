@@ -4,7 +4,6 @@ import { plugin } from 'bun';
 import { pathToFileURL } from 'node:url';
 import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
-import { OpenCode } from '@opencode/client';
 import type { ToolPart as ToolPartData } from '@/lib/opencode/model';
 import { SyncProvider, useChildStoreManager } from '@/sync/sync-context';
 import { I18nProvider } from '@/lib/i18n';
@@ -101,10 +100,6 @@ const withHarness = async (
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
-  const sdk = OpenCode.make({
-    baseUrl: 'http://localhost',
-    fetch: async () => new Response('[]', { headers: { 'Content-Type': 'application/json' } }),
-  });
 
   const previousDirectory = useDirectoryStore.getState().currentDirectory;
   let manager: ReturnType<typeof useChildStoreManager> | undefined;
@@ -114,7 +109,7 @@ const withHarness = async (
     useGuestsStore.setState({ status: 'ready', guests: [], runtimeKey: 'test' });
     await act(async () => {
       root.render(
-        <SyncProvider sdk={sdk} directory="/workspace">
+        <SyncProvider runtimeIdentity="test-runtime" directory="/workspace">
           <CaptureManager />
           <I18nProvider>
             <ThemeSystemContext.Provider value={themeContext}>

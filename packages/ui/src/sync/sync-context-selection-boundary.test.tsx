@@ -1,18 +1,29 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { OpenCode } from '@opencode/client'
-import { opencodeClient } from '@/lib/opencode/client'
+import { openChamberClient } from '@/lib/openchamber/client'
 import { SyncProvider, useChildStoreManager, useSyncDirectory } from './sync-context'
 import { usePrefetchSessionMessages } from './use-sync'
 import { installHookTestDom } from '../components/session/sidebar/test-utils/testDom'
 import { useSessionUIStore } from './session-ui-store'
 import type { Message, Part } from '@/lib/opencode/model'
 
-// The provider's own data access goes through the `opencodeClient` singleton;
+// The provider's own data access goes through the `openChamberClient` singleton;
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
 import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+import { createOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime';
+const agentSurface = createOpenCodeStubSurface()
+
+// The mounted provider drives its runtime reads through this surface. The
+// session-page retry/backoff harness below needs `listSessionsPage` to exist
+// before it can install a spy over it, and the provider's other background
+// reads (status snapshot, permissions, pending forms) answer instead of
+// rejecting, so a mount does not log a storm of missing-fixture failures.
+agentSurface.listSessionsPage = async () => ({ sessions: [], cursor: {} })
+agentSurface.getActiveStatus = async () => ({})
+agentSurface.listPermissions = async () => []
+agentSurface.listPendingForms = async () => []
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.
@@ -21,22 +32,6 @@ registerAgentRuntime(createOpenCodeStubRuntime());
 // registry answers an unregistered id with the real OMP client, so register the
 // double under that id too.
 registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
-// this client only satisfies the prop and absorbs the event stream, so the
-// assertion below measures render boundaries and nothing else.
-const createSdk = () => OpenCode.make({
-  baseUrl: 'https://sync.test',
-  fetch: async (request) => {
-    const path = new URL(request instanceof Request ? request.url : request.toString()).pathname
-    if (path.endsWith('/event')) {
-      return new Response(new ReadableStream(), { headers: { 'content-type': 'text/event-stream' } })
-    }
-    const body = path.endsWith('/location')
-      ? { directory: '/workspace', project: { id: 'project', directory: '/workspace', canonical: '/workspace' } }
-      : path.endsWith('/session/active') ? {}
-      : { data: [] }
-    return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
-  },
-})
 
 describe('SyncProvider selection boundary', () => {
   for (const mode of ['confirmed', 'adopted'] as const) {
@@ -50,7 +45,7 @@ describe('SyncProvider selection boundary', () => {
       const sessionID = `selected-${mode}`
       const directory = `/workspace/actual-${mode}`
       try {
-        await act(async () => root.render(<SyncProvider sdk={createSdk()} directory="/workspace/guess"><Probe /></SyncProvider>))
+        await act(async () => root.render(<SyncProvider runtimeIdentity="test-runtime" directory="/workspace/guess"><Probe /></SyncProvider>))
         if (!manager) throw new Error('Directory manager was not mounted')
         const store = manager.ensureChild(directory, { bootstrap: false })
         const messages: Message[] = Array.from({ length: 10 }, (_, index) => ({
@@ -60,7 +55,7 @@ describe('SyncProvider selection boundary', () => {
           id: `part-${message.id}`, sessionID, messageID: message.id, type: 'text', text: 'prompt',
         }]]))
         await act(async () => {
-          opencodeClient.setDirectory('/workspace/guess')
+          openChamberClient.setDirectory('/workspace/guess')
           useSessionUIStore.getState().setCurrentSession(sessionID, mode === 'confirmed' ? '/workspace/guess' : undefined)
           store.setState({
             session: [{
@@ -102,17 +97,16 @@ describe('SyncProvider selection boundary', () => {
     // Providers unmounted by earlier tests keep retrying their own directory's
     // bootstrap in the background (their `session.active` read never succeeds
     // here); only this directory's requests measure the retry bound.
-    const list = spyOn(opencodeClient, 'listSessionsPage').mockImplementation(async (options) => {
+    const list = spyOn(agentSurface, 'listSessionsPage').mockImplementation(async (options?: { directory?: string }) => {
       if (fail) {
         if (options?.directory === '/workspace/a') failedPageRequests += 1
         throw Object.assign(new Error('OpenCode API unavailable'), { status: 503 })
       }
       return { sessions: [], cursor: {} }
     })
-    const sdk = createSdk()
 
     try {
-      await act(async () => root.render(<SyncProvider sdk={sdk} directory="/workspace/a"><Probe /></SyncProvider>))
+      await act(async () => root.render(<SyncProvider runtimeIdentity="test-runtime" directory="/workspace/a"><Probe /></SyncProvider>))
       if (!manager) throw new Error('Bootstrap manager was not mounted')
       const mountedManager = manager
       const waitForState = (expected: 'complete' | 'failed') => new Promise<void>((resolve) => {
@@ -165,18 +159,17 @@ describe('SyncProvider selection boundary', () => {
       directoryRenders += 1
       return null
     }
-    const sdk = createSdk()
 
     try {
       await act(async () => root.render(
-        <SyncProvider sdk={sdk} directory="/workspace/a">
+        <SyncProvider runtimeIdentity="test-runtime" directory="/workspace/a">
           <RuntimeConsumer />
           <DirectoryConsumer />
         </SyncProvider>,
       ))
       const initialCallback = callback
       await act(async () => root.render(
-        <SyncProvider sdk={sdk} directory="/workspace/b">
+        <SyncProvider runtimeIdentity="test-runtime" directory="/workspace/b">
           <RuntimeConsumer />
           <DirectoryConsumer />
         </SyncProvider>,

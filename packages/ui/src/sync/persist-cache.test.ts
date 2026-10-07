@@ -1,4 +1,4 @@
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import type { Session } from "@/lib/opencode/model"
@@ -76,10 +76,10 @@ beforeEach(async () => {
   storage = new TestStorage()
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage })
   switchRuntimeEndpoint({ apiBaseUrl: "https://runtime-default.test", runtimeKey: "runtime-default" })
-  const originalHomeInfo = opencodeClient.getFilesystemHomeInfo
-  opencodeClient.getFilesystemHomeInfo = async () => ({ home: '/home/user' })
+  const originalHomeInfo = openChamberClient.getFilesystemHomeInfo
+  openChamberClient.getFilesystemHomeInfo = async () => ({ home: '/home/user' })
   await ensureChatsRootDirectory()
-  opencodeClient.getFilesystemHomeInfo = originalHomeInfo
+  openChamberClient.getFilesystemHomeInfo = originalHomeInfo
 })
 
 afterEach(() => {

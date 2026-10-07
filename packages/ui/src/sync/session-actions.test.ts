@@ -1,10 +1,11 @@
+import { createOpenCodeStubRuntime, setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime'
 import { describe, expect, test, beforeEach, afterEach, mock } from "bun:test"
 import type { PermissionRequest } from "@/types/permission"
 import type { FormRequest } from "@/lib/opencode/model"
 import type { InputState } from "./input-store"
 
 // Records the client calls the actions make. The actions talk to
-// `opencodeClient` only: OpenCode's own SDK never reaches this layer.
+// the mocked `openChamberClient` and the runtime double: no SDK reaches this layer.
 const replyCalls: Array<{ method: string; params: Record<string, unknown> }> = []
 const registeredSessionDirectories: Array<{ sessionID: string; directory: string }> = []
 let formReplyError: unknown | null = null
@@ -52,9 +53,7 @@ const AMBIGUOUS_TRANSPORT_FAILURE = Symbol("ambiguous-transport-failure")
 
 const notFound = (kind: string) => Object.assign(new Error(`${kind}NotFoundError`), { status: 404 })
 
-mock.module("@/lib/opencode/client", () => ({
-  ascendingId: (prefix: string) => `${prefix}_${(idCounter += 1).toString(16).padStart(12, "0")}`,
-  opencodeClient: {
+const stubClient = {
     getDirectory: () => "/test/project",
     getActiveSessionStatuses: mock((directory?: string | null) => readActiveStatusSnapshot(directory)),
     getSession: mock(async (sessionId: string, directory?: string | null): Promise<Session> => {
@@ -154,7 +153,27 @@ mock.module("@/lib/opencode/client", () => ({
       if (formCancelError) throw formCancelError
       return true
     }),
-  },
+    setDirectory: () => undefined,
+    getRuntimeIdentity: () => 'test-runtime',
+    getDirectoryAvailability: async () => 'unknown' as const,
+    probeDirectory: async () => true,
+    getFilesystemHome: async () => null,
+    getFilesystemHomeInfo: async () => ({ home: '/home' }),
+    createDirectory: async (path: string) => ({ success: true, path }),
+    cloneRepository: async (input: { destinationPath: string }) => ({ success: true, path: input.destinationPath }),
+    listLocalDirectory: async () => [],
+    getHostSessionStatusSnapshot: async () => null,
+    getWebServerSessionActivity: async () => null,
+    getBaseUrl: () => '/api',
+    reconnectToRuntimeBaseUrl: () => undefined,
+    checkHealth: async () => true,
+    probeHealth: async () => 'healthy' as const,
+    getSystemInfo: async () => ({ homeDirectory: '/' }),
+}
+setOpenCodeStubSurface(stubClient)
+mock.module("@/lib/openchamber/client", () => ({
+    openChamberClient: stubClient,
+  ascendingId: (prefix: string) => `${prefix}_${(idCounter += 1).toString(16).padStart(12, "0")}`,
 }))
 
 let idCounter = 0
@@ -3020,7 +3039,6 @@ describe("setSessionWorkState", () => {
 });
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.

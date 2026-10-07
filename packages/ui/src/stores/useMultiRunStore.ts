@@ -3,7 +3,6 @@ import type { Session } from '@/lib/opencode/model';
 import { routeMessage, useSessionUIStore } from '@/sync/session-ui-store';
 import { devtools } from 'zustand/middleware';
 import type { CreateMultiRunParams, CreateMultiRunResult } from '@/types/multirun';
-import { opencodeClient } from '@/lib/opencode/client';
 import { fetchSessionKnowledge, reportSessionKnowledgeDelivered } from '@/lib/sessionKnowledgeApi';
 import { getWorktreeSetupWaitEnabled, saveWorktreeSetupCommands } from '@/lib/openchamberConfig';
 import type { ProjectRef } from '@/lib/worktrees/worktreeManager';
@@ -107,7 +106,7 @@ export async function dispatchRunPrompt(input: {
     fetchSessionKnowledge(input.directory, input.sessionId),
   ]);
   input.assertCurrent();
-  const route = await routeMessage({
+  await routeMessage({
     runtimeKey: input.runtimeKey,
     sessionId: input.sessionId,
     directory: input.directory,
@@ -121,7 +120,7 @@ export async function dispatchRunPrompt(input: {
       ? [{ text: knowledge.text, synthetic: true, systemContext: 'session-knowledge' }]
       : undefined,
   });
-  if (knowledge.text && route !== 'shell') {
+  if (knowledge.text) {
     void reportSessionKnowledgeDelivered(input.directory, input.sessionId, knowledge.signature);
   }
 }
@@ -164,9 +163,8 @@ export const useMultiRunStore = create<MultiRunStore>()(
 
       createMultiRun: async (params: CreateMultiRunParams) => {
         const runtimeKey = getRuntimeKey();
-        const client = opencodeClient.getSdkClient();
         const assertCurrent = () => {
-          if (getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== client) throw new Error('Runtime changed');
+          if (getRuntimeKey() !== runtimeKey) throw new Error('Runtime changed');
         };
         const groupName = params.name.trim();
         const runTitle = (params.title ?? params.name).trim().slice(0, 200);
@@ -380,7 +378,7 @@ export const useMultiRunStore = create<MultiRunStore>()(
           const failedCount = groups.reduce((total, group) => total + group.models.length, 0) - sessionIds.length;
           return { groupSlug, groupKey: multiRunGroupKey(membershipGroup, groupSlug), sessionIds, firstSessionId, failedCount };
         } catch (error) {
-          if (getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== client) return null;
+          if (getRuntimeKey() !== runtimeKey) return null;
           set({
             error: error instanceof Error ? error.message : 'Failed to create Multi-Run',
             isLoading: false,

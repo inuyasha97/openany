@@ -12,7 +12,7 @@ import { runtimeFetch } from "@/lib/runtime-fetch";
 import { runBackgroundNetworkTask } from "@/lib/background-network";
 import { useProjectsStore } from "@/stores/useProjectsStore";
 
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { filterSkillsByRuntimeFlags } from './skillVisibility';
 
 // Prefer the active project path so Settings/Skills discovery matches the
@@ -41,7 +41,7 @@ const getRequestDirectory = (): string | null => {
       return activeProject.path.trim();
     }
 
-    const clientDir = opencodeClient.getDirectory();
+    const clientDir = openChamberClient.getDirectory();
     if (clientDir?.trim()) {
       return clientDir.trim();
     }
@@ -748,7 +748,7 @@ async function waitForOpenCodeConnection(delayMs?: number) {
     updateConfigUpdateMessage(`Waiting for OpenCode… (attempt ${attempt})`);
 
     try {
-      const isHealthy = await opencodeClient.checkHealth();
+      const isHealthy = await openChamberClient.checkHealth();
       if (isHealthy) {
         return;
       }

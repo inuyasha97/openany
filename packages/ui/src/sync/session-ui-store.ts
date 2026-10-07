@@ -18,7 +18,7 @@ import type { Metadata, ModelRef, Part, Session, TextPart } from "@/lib/opencode
 import type { AttachedFile, SessionContextUsage, SessionWorktreeAttachment } from "@/stores/types/sessionTypes"
 import type { PermissionMode } from "@/stores/utils/permissionAutoAccept"
 import type { WorktreeMetadata } from "@/types/worktree"
-import { opencodeClient } from "@/lib/opencode/client"
+import { openChamberClient } from "@/lib/openchamber/client"
 import { getAgentRuntimeForSession } from "@/lib/agent/registry"
 import type { SkillMentions } from "@/lib/agent/contract"
 import { buildSkillMentionInstruction } from "@/lib/skillMentionInstruction"
@@ -177,13 +177,12 @@ export async function routeMessage(params: {
   agent?: string
   agentMentionName?: string
   variant?: string
-  inputMode?: "normal" | "shell"
   files?: Array<{ type: "file"; mime: string; url: string; filename: string }>
   additionalParts?: Array<{ text: string; synthetic?: boolean; metadata?: ContextPartMetadata; files?: Array<{ type: "file"; mime: string; url: string; filename: string }>; systemContext?: 'session-knowledge' }>
   appendSubmissions?: () => void
   delivery?: 'steer'
   skills?: SkillMentions
-}): Promise<'command' | 'prompt' | 'shell'> {
+}): Promise<'command' | 'prompt'> {
   const requestDirectory = params.directory ?? undefined
   // The session carries its own model and agent server-side. Sending them on
   // every turn would switch the session to whatever the composer happens to
@@ -209,16 +208,6 @@ export async function routeMessage(params: {
   }
   const contextFiles = (params.additionalParts ?? []).flatMap((part) => part.files ?? [])
   const sendFiles = [...(params.files ?? []), ...contextFiles]
-
-  if (params.inputMode === "shell") {
-    await opencodeClient.shellSession({
-      runtimeKey: params.runtimeKey,
-      sessionId: params.sessionId,
-      directory: requestDirectory,
-      command: params.content,
-    })
-    return 'shell'
-  }
 
   let skills = params.skills
   // Slash commands use the command route; skills attach to a normal prompt.
@@ -495,7 +484,6 @@ export type SessionUIState = {
     agentMentionName?: string,
     additionalParts?: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' }>,
     variant?: string,
-    inputMode?: "normal" | "shell",
     options?: SendMessageOptions,
   ) => Promise<void>
 
@@ -873,7 +861,7 @@ const resolveCreatableDraftDirectory = async (
   draft: NewSessionDraftState,
   requestedDirectory: string | null | undefined,
 ): Promise<{ status: "ok"; directory: string | null | undefined } | { status: "aborted" }> => {
-  const directory = requestedDirectory ?? opencodeClient.getDirectory() ?? null
+  const directory = requestedDirectory ?? openChamberClient.getDirectory() ?? null
   const isRecoverableDraftDirectory =
     draft.open
     && draft.preserveDirectoryOverride !== true
@@ -892,7 +880,7 @@ const resolveCreatableDraftDirectory = async (
 
   const runtimeKey = getRuntimeKey()
   const draftDirectory = draft.directoryOverride
-  const availability = await opencodeClient.getDirectoryAvailability(directory)
+  const availability = await openChamberClient.getDirectoryAvailability(directory)
   const currentDraft = useSessionUIStore.getState().newSessionDraft
   const currentDirectory = normalizePath(currentDraft.directoryOverride)
   const capturedDirectory = normalizePath(draftDirectory)
@@ -1191,7 +1179,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       id,
       (sid) => get().worktreeMetadata.get(sid),
     )
-    const fallbackDir = opencodeClient.getDirectory() ?? directoryState.currentDirectory ?? null
+    const fallbackDir = openChamberClient.getDirectory() ?? directoryState.currentDirectory ?? null
     const knownDir = (directoryHint ? normalizePath(directoryHint) : null) ?? sessionDir
     const resolvedDir = knownDir ?? fallbackDir
     // `fallbackDir` is the active directory, not this session's directory. It
@@ -1244,7 +1232,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       if (id && !isGuessedDir && sessionProject) {
         useSessionDisplayStore.getState().setSingleProjectId(sessionProject.id)
       }
-      opencodeClient.setDirectory(resolvedDir ?? undefined)
+      openChamberClient.setDirectory(resolvedDir ?? undefined)
     } catch (e) {
       console.warn("Failed to set OpenCode directory for session switch:", e)
     }
@@ -1332,7 +1320,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       sessionAbortFlags: new Map(),
         })
     if (restoredSessionId) {
-      setActiveSession(restoredDirectory ?? opencodeClient.getDirectory() ?? "", restoredSessionId)
+      setActiveSession(restoredDirectory ?? openChamberClient.getDirectory() ?? "", restoredSessionId)
     } else {
       setActiveSession("", "")
     }
@@ -1754,7 +1742,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     agentMentionName?: string,
     additionalParts?: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' }>,
     variant?: string,
-    inputMode?: "normal" | "shell",
     options?: SendMessageOptions,
   ) => {
     const capturedTarget = options?.target
@@ -1766,7 +1753,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     const draft = options?.draftSnapshot ?? get().newSessionDraft
     const trimmedAgent = typeof agent === "string" && agent.trim().length > 0 ? agent.trim() : undefined
 
-    const goalArm = inputMode !== "shell" && content.trim().length > 0
+    const goalArm = content.trim().length > 0
       ? useSessionGoalArmStore.getState().consume()
       : { armed: false, objectiveOverride: null }
     const goalArmed = goalArm.armed
@@ -1863,7 +1850,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         agent: createdDraftSession.agent,
         agentMentionName,
         variant,
-        inputMode,
         files,
         appendSubmissions,
         delivery: options?.delivery,
@@ -1883,7 +1869,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       })
       // Recorded only after the send resolves: a failed send must carry the
       // pinned context again rather than assume the agent already saw it.
-      if (draftKnowledge.text && messageRoute !== 'shell') {
+      if (draftKnowledge.text && messageRoute === 'prompt') {
         void reportSessionKnowledgeDelivered(
           createdDraftSession.directory,
           createdDraftSession.sessionId,
@@ -1984,7 +1970,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       agent: effectiveAgent,
       agentMentionName,
       variant,
-      inputMode,
       files,
       appendSubmissions,
       delivery: options?.delivery,
@@ -2002,7 +1987,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         })),
       })),
     })
-    if (knowledge.text && messageRoute !== 'shell') {
+    if (knowledge.text && messageRoute === 'prompt') {
       void reportSessionKnowledgeDelivered(currentSessionDirectory, targetSessionId || "", knowledge.signature)
     }
   },
@@ -2249,7 +2234,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       undefined,
       undefined,
       execution.variant || undefined,
-      undefined,
       { sessionId: session.id },
     )
   },

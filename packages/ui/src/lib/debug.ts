@@ -2,7 +2,7 @@
 import { useSessionUIStore, getRememberedSessionDirectory } from '@/sync/session-ui-store';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { checkIsGitRepository } from '@/lib/gitApi';
 import { streamDebugEnabled } from '@/stores/utils/streamDebug';
 import { copyTextToClipboard as copyPlainTextToClipboard } from '@/lib/clipboard';
@@ -201,7 +201,7 @@ export const debugUtils = {
     const sessionState = useSessionUIStore.getState();
     const projectsState = useProjectsStore.getState();
     const currentDirectory = directoryState.currentDirectory || null;
-    const opencodeDirectory = opencodeClient.getDirectory() ?? null;
+    const runtimeDirectory = openChamberClient.getDirectory() ?? null;
 
     const sessions = getSyncSessions();
     const sessionDirectories = new Set<string>();
@@ -263,22 +263,8 @@ export const debugUtils = {
       }
     };
 
-    let pathInfo: unknown = null;
-    let projectInfo: unknown = null;
     let settingsInfo: unknown = null;
     let opencodeHealth: unknown = null;
-
-    try {
-      pathInfo = await opencodeClient.getLocation(currentDirectory);
-    } catch (error) {
-      pathInfo = { error: error instanceof Error ? error.message : String(error) };
-    }
-
-    try {
-      projectInfo = await opencodeClient.getCurrentProject(currentDirectory);
-    } catch (error) {
-      projectInfo = { error: error instanceof Error ? error.message : String(error) };
-    }
 
     settingsInfo = await safeFetchJson('/api/config/settings');
 
@@ -343,6 +329,7 @@ export const debugUtils = {
         isVSCode: Boolean(runtimeApis?.runtime?.isVSCode),
         hasRuntimeApis: Boolean(runtimeApis),
         desktopServerOrigin: null,
+        health: opencodeHealth,
       },
       location: typeof window !== 'undefined'
         ? {
@@ -352,9 +339,6 @@ export const debugUtils = {
         : null,
       directories: {
         currentDirectory,
-        opencodeDirectory: (pathInfo as { directory?: string; worktree?: string } | null)?.directory
-          || (pathInfo as { worktree?: string } | null)?.worktree
-          || opencodeDirectory,
         homeDirectory: directoryState.homeDirectory || null,
         isHomeReady: directoryState.isHomeReady,
         hasPersistedDirectory: directoryState.hasPersistedDirectory,
@@ -379,11 +363,6 @@ export const debugUtils = {
       },
       git: gitCheck,
       localStorage: localStorageSnapshot,
-      opencode: {
-        pathInfo,
-        projectInfo,
-        health: opencodeHealth,
-      },
       openchamber: {
         settingsInfo,
       },
@@ -486,7 +465,6 @@ export const debugUtils = {
         rememberedForRuntime: remembered.runtime,
         persistedAcrossRestarts: remembered.persisted,
         activeDirectory: useDirectoryStore.getState().currentDirectory ?? null,
-        opencodeClientDirectory: opencodeClient.getDirectory() ?? null,
       },
     };
 

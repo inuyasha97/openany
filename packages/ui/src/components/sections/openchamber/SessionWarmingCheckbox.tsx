@@ -1,14 +1,13 @@
 import React from 'react';
 import { SettingsCheckboxRow } from '@/components/sections/shared/SettingsSection';
 import { useI18n } from '@/lib/i18n';
-import { opencodeClient } from '@/lib/opencode/client';
 import { reportSettingsSaveState } from '@/lib/persistence';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 
 /**
- * OpenCode's `warming` config key: keeps an idle session's prompt cache alive
- * with small keep-alive requests. The checkbox shows the effective value
- * OpenCode reports and writes through `PUT /api/config/warming`.
+ * The `warming` setting: keeps an idle session's prompt cache alive with small
+ * keep-alive requests. The effective value is read from the OpenChamber
+ * settings and written through `PUT /api/config/warming`.
  */
 export const SessionWarmingCheckbox: React.FC = () => {
   const { t } = useI18n();
@@ -17,12 +16,12 @@ export const SessionWarmingCheckbox: React.FC = () => {
 
   React.useEffect(() => {
     let cancelled = false;
-    opencodeClient.getConfig(null).then(
-      (config) => {
-        if (!cancelled && latestWrite.current === 0) setEnabled(Boolean(config.warming));
-      },
-      (error) => console.warn('[session-warming] failed to read config', error),
-    );
+    runtimeFetch('/api/config/settings', { headers: { Accept: 'application/json' } })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((settings: { warming?: unknown } | null) => {
+        if (!cancelled && latestWrite.current === 0) setEnabled(settings?.warming === true);
+      })
+      .catch((error) => console.warn('[session-warming] failed to read settings', error));
     return () => {
       cancelled = true;
     };
@@ -41,7 +40,6 @@ export const SessionWarmingCheckbox: React.FC = () => {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       reportSettingsSaveState('saved');
-      opencodeClient.clearConfigCache();
     } catch (error) {
       console.warn('[session-warming] failed to save', error);
       reportSettingsSaveState('error');

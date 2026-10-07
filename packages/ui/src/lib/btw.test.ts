@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Message, Part, Session } from '@/lib/opencode/model';
-import type { MessagePage } from '@/lib/opencode/client';
+import type { MessagePage } from '@/lib/agent/contract';
 import type { StartBtwInput } from './btw';
 import { normalizePath } from '@/lib/pathNormalization';
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
+import { createOpenCodeStubRuntime, setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime'
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.
@@ -34,15 +34,34 @@ const metadataPatches: Array<{ sessionId: string; result: Record<string, unknown
 const parentSyncMessages: Message[] = [];
 const sessionMessageReads: string[] = [];
 
-mock.module('@/lib/opencode/client', () => ({
-  opencodeClient: {
+const stubClient = {
     forkSession: (sessionId: string, options?: ForkOptions) => forkSessionImpl(sessionId, options),
     getSessionMessages: (id: string, options?: { limit?: number }, directory?: string | null) => {
       sessionMessageReads.push(id);
       return getSessionMessagesImpl(id, options, directory);
     },
-  },
-}));
+    getDirectory: () => null,
+    setDirectory: () => undefined,
+    getRuntimeIdentity: () => 'test-runtime',
+    getDirectoryAvailability: async () => 'unknown' as const,
+    probeDirectory: async () => true,
+    getFilesystemHome: async () => null,
+    getFilesystemHomeInfo: async () => ({ home: '/home' }),
+    createDirectory: async (path: string) => ({ success: true, path }),
+    cloneRepository: async (input: { destinationPath: string }) => ({ success: true, path: input.destinationPath }),
+    listLocalDirectory: async () => [],
+    getHostSessionStatusSnapshot: async () => null,
+    getWebServerSessionActivity: async () => null,
+    getBaseUrl: () => '/api',
+    reconnectToRuntimeBaseUrl: () => undefined,
+    checkHealth: async () => true,
+    probeHealth: async () => 'healthy' as const,
+    getSystemInfo: async () => ({ homeDirectory: '/' }),
+}
+setOpenCodeStubSurface(stubClient)
+mock.module("@/lib/openchamber/client", () => ({
+    openChamberClient: stubClient,
+}))
 mock.module('@/sync/session-actions', () => ({
   waitForConnectionOrThrow: () => Promise.resolve(),
   deleteSession: (sessionId: string) => deleteSessionImpl(sessionId),
@@ -194,7 +213,7 @@ describe('startBtwSession', () => {
     let sentOptions: unknown = null;
     sendMessageImpl = (...args) => {
         sentText = args[0];
-        sentOptions = args[9];
+        sentOptions = args[8];
         expect(args[7]).toBe(undefined);
         return Promise.resolve();
     };

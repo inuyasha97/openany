@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { FileDiffInfo } from '@opencode/client'
+import type { FileDiffInfo } from '@/lib/opencode/wire'
 import type { Session } from '@/lib/opencode/model'
 
 import { stripSessionDiffSnapshots, stripSessionListDetails } from './sanitize'

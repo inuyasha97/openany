@@ -6,7 +6,6 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
-import { OpenCode } from '@opencode/client';
 import type { Part, AssistantMessage } from '@/lib/opencode/model';
 import { I18nProvider, useI18nStore } from '@/lib/i18n';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
@@ -57,7 +56,6 @@ const runtimeApis: RuntimeAPIs = {
     get permissions() { return unavailable(); },
     get notifications() { return unavailable(); },
 };
-const sdk = OpenCode.make({ baseUrl: 'http://localhost', fetch: async () => new Response('[]', { headers: { 'Content-Type': 'application/json' } }) });
 // The answer's action bar also has an aria-expanded button, the branch menu
 // trigger, so the changed-file disclosure is the one that opens no popup.
 const changedFilesDisclosure = () => document.querySelector<HTMLButtonElement>('[data-fixture-message="final"] button[aria-expanded]:not([aria-haspopup])');
@@ -110,7 +108,7 @@ function Harness({ record, retired = false, changedFiles, isLatestTurn = true }:
         </div>
     );
     return <RuntimeAPIContext.Provider value={runtimeApis}>
-        <SyncProvider sdk={sdk} directory="/project">
+        <SyncProvider runtimeIdentity="test-runtime" directory="/project">
             <I18nProvider>
                 <LiveTurnActivity turn={record} hasLaterAssistant={retired} expanded={expanded}
                     onToggle={() => setExpanded((value) => !value)} renderMessage={renderMessage} />

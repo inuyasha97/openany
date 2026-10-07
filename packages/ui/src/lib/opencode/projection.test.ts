@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { ConfigEntry, SessionInfo, SessionMessageAssistant, SessionMessageInfo } from "@opencode/client"
+import type { ConfigEntry, SessionInfo, SessionMessageAssistant, SessionMessageInfo } from "./wire"
 
 import { partIds, type ConfigDocument } from "./model"
 import {

@@ -1996,7 +1996,6 @@ export const settingsDict = {
   "settings.openchamber.visual.section.chatDisplay": "Exibição",
   "settings.openchamber.visual.section.chatMessageOptions": "Opções de mensagem",
   "settings.openchamber.visual.section.chatFeatures": "Recursos",
-  "settings.openchamber.visual.section.messageStreamTransport": "Transporte do fluxo de mensagens",
   "settings.openchamber.visual.section.activityDefault": "Modo padrão de atividade",
   "settings.openchamber.visual.section.activityDefaultAria": "Modo padrão de atividade",
   "settings.openchamber.visual.section.sessionActivity": "Atividade da sessão",

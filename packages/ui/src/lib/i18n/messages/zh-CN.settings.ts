@@ -1996,7 +1996,6 @@ export const settingsDict = {
   'settings.openchamber.visual.section.chatDisplay': '显示',
   'settings.openchamber.visual.section.chatMessageOptions': '消息选项',
   'settings.openchamber.visual.section.chatFeatures': '功能',
-  'settings.openchamber.visual.section.messageStreamTransport': '消息流传输方式',
   'settings.openchamber.visual.section.activityDefault': '活动默认状态',
   'settings.openchamber.visual.section.activityDefaultAria': '活动默认模式',
   'settings.openchamber.visual.section.sessionActivity': '会话活动',

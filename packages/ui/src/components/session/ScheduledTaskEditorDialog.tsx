@@ -15,7 +15,6 @@ import { ModelSelector } from '@/components/sections/agents/ModelSelector';
 import { AgentSelector } from '@/components/sections/commands/AgentSelector';
 import { isPrimaryMode } from '@/components/chat/mobileControlsUtils';
 import { CommandAutocomplete, type CommandAutocompleteHandle, type CommandInfo } from '@/components/chat/CommandAutocomplete';
-import { FileMentionAutocomplete, type FileMentionHandle } from '@/components/chat/FileMentionAutocomplete';
 import { SnippetAutocomplete, type SnippetAutocompleteHandle } from '@/components/chat/SnippetAutocomplete';
 import { Icon } from "@/components/icon/Icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -753,8 +752,6 @@ export function ScheduledTaskEditorDialog(props: {
   );
   const [saving, setSaving] = React.useState(false);
   const [isDatePickerOpen, setIsDatePickerOpen] = React.useState(false);
-  const [showFileMention, setShowFileMention] = React.useState(false);
-  const [mentionQuery, setMentionQuery] = React.useState('');
   const [showCommandAutocomplete, setShowCommandAutocomplete] = React.useState(false);
   const [commandQuery, setCommandQuery] = React.useState('');
   const [showSnippetAutocomplete, setShowSnippetAutocomplete] = React.useState(false);
@@ -765,7 +762,6 @@ export function ScheduledTaskEditorDialog(props: {
   });
   const datePickerRef = React.useRef<HTMLDivElement>(null);
   const promptTextareaRef = React.useRef<HTMLTextAreaElement>(null);
-  const mentionRef = React.useRef<FileMentionHandle>(null);
   const commandRef = React.useRef<CommandAutocompleteHandle>(null);
   const snippetRef = React.useRef<SnippetAutocompleteHandle>(null);
   const localeUse24Hour = React.useMemo(() => getUses24Hour(locale), [locale]);
@@ -820,9 +816,7 @@ export function ScheduledTaskEditorDialog(props: {
     setCalendarMonth(new Date(sourceDate.getFullYear(), sourceDate.getMonth(), 1));
     setIsDatePickerOpen(false);
     setShowCommandAutocomplete(false);
-    setShowFileMention(false);
     setCommandQuery('');
-    setMentionQuery('');
   }, [open, task, currentProviderID, currentModelID, currentVariant, currentAgentName]);
 
   React.useEffect(() => {
@@ -969,7 +963,6 @@ export function ScheduledTaskEditorDialog(props: {
       if (cursorPosition <= commandEnd && firstSpace === -1) {
         setCommandQuery(value.substring(1, commandEnd));
         setShowCommandAutocomplete(true);
-        setShowFileMention(false);
         setShowSnippetAutocomplete(false);
         return;
       }
@@ -986,28 +979,11 @@ export function ScheduledTaskEditorDialog(props: {
       if (isWordBoundary && !textAfterHash.includes(' ') && !textAfterHash.includes('\n')) {
         setSnippetQuery(textAfterHash);
         setShowSnippetAutocomplete(true);
-        setShowFileMention(false);
         return;
       }
     }
 
     setShowSnippetAutocomplete(false);
-
-    const lastAtSymbol = textBeforeCursor.lastIndexOf('@');
-    if (lastAtSymbol !== -1) {
-      const charBefore = lastAtSymbol > 0 ? textBeforeCursor[lastAtSymbol - 1] : null;
-      const textAfterAt = textBeforeCursor.substring(lastAtSymbol + 1);
-      const isWordBoundary = !charBefore || /\s/.test(charBefore);
-      if (isWordBoundary && !textAfterAt.includes(' ') && !textAfterAt.includes('\n')) {
-        setMentionQuery(textAfterAt);
-        setShowFileMention(true);
-      } else {
-        setShowFileMention(false);
-      }
-      return;
-    }
-
-    setShowFileMention(false);
   }, []);
 
   const setPromptValue = React.useCallback((value: string) => {
@@ -1019,60 +995,6 @@ export function ScheduledTaskEditorDialog(props: {
       },
     }));
   }, []);
-
-  const handleFileSelect = React.useCallback((file: { name: string; path: string; relativePath?: string }) => {
-    const promptValue = draft.execution.prompt;
-    const textarea = promptTextareaRef.current;
-    const cursorPosition = textarea?.selectionStart ?? promptValue.length;
-    const textBeforeCursor = promptValue.substring(0, cursorPosition);
-    const lastAtSymbol = textBeforeCursor.lastIndexOf('@');
-    const mentionPath = (file.relativePath && file.relativePath.trim().length > 0)
-      ? file.relativePath.trim()
-      : (file.path || file.name);
-
-    const startIndex = lastAtSymbol !== -1 ? lastAtSymbol : cursorPosition;
-    const nextPrompt = `${promptValue.substring(0, startIndex)}@${mentionPath} ${promptValue.substring(cursorPosition)}`;
-    const nextCursor = startIndex + mentionPath.length + 2;
-
-    setPromptValue(nextPrompt);
-    setShowFileMention(false);
-    setMentionQuery('');
-
-    requestAnimationFrame(() => {
-      const currentTextarea = promptTextareaRef.current;
-      if (currentTextarea) {
-        currentTextarea.selectionStart = nextCursor;
-        currentTextarea.selectionEnd = nextCursor;
-        currentTextarea.focus();
-      }
-      updateAutocompleteState(nextPrompt, nextCursor);
-    });
-  }, [draft.execution.prompt, setPromptValue, updateAutocompleteState]);
-
-  const handleAgentSelect = React.useCallback((agentName: string) => {
-    const promptValue = draft.execution.prompt;
-    const textarea = promptTextareaRef.current;
-    const cursorPosition = textarea?.selectionStart ?? promptValue.length;
-    const textBeforeCursor = promptValue.substring(0, cursorPosition);
-    const lastAtSymbol = textBeforeCursor.lastIndexOf('@');
-    const startIndex = lastAtSymbol !== -1 ? lastAtSymbol : cursorPosition;
-    const nextPrompt = `${promptValue.substring(0, startIndex)}@${agentName} ${promptValue.substring(cursorPosition)}`;
-    const nextCursor = startIndex + agentName.length + 2;
-
-    setPromptValue(nextPrompt);
-    setShowFileMention(false);
-    setMentionQuery('');
-
-    requestAnimationFrame(() => {
-      const currentTextarea = promptTextareaRef.current;
-      if (currentTextarea) {
-        currentTextarea.selectionStart = nextCursor;
-        currentTextarea.selectionEnd = nextCursor;
-        currentTextarea.focus();
-      }
-      updateAutocompleteState(nextPrompt, nextCursor);
-    });
-  }, [draft.execution.prompt, setPromptValue, updateAutocompleteState]);
 
   const handleCommandSelect = React.useCallback((command: CommandInfo) => {
     const nextPrompt = `/${command.name} `;
@@ -1126,20 +1048,13 @@ export function ScheduledTaskEditorDialog(props: {
       }
     }
 
-    if (showFileMention && mentionRef.current) {
-      if (event.key === 'Enter' || event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'Escape' || event.key === 'Tab') {
-        event.preventDefault();
-        mentionRef.current.handleKeyDown(event.key);
-      }
-    }
-
     if (showSnippetAutocomplete && snippetRef.current) {
       if (event.key === 'Enter' || event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'Escape' || event.key === 'Tab') {
         event.preventDefault();
         snippetRef.current.handleKeyDown(event.key);
       }
     }
-  }, [showCommandAutocomplete, showFileMention, showSnippetAutocomplete]);
+  }, [showCommandAutocomplete, showSnippetAutocomplete]);
 
   const handleSubmit = React.useCallback(async () => {
     const validationError = validateDraft(draft, t);
@@ -1589,23 +1504,6 @@ export function ScheduledTaskEditorDialog(props: {
                   searchQuery={commandQuery}
                   onCommandSelect={handleCommandSelect}
                   onClose={() => setShowCommandAutocomplete(false)}
-                  style={{
-                    left: 0,
-                    top: 'auto',
-                    bottom: 'calc(100% + 6px)',
-                    marginBottom: 0,
-                    maxWidth: '100%',
-                  }}
-                />
-              ) : null}
-
-              {showFileMention ? (
-                <FileMentionAutocomplete
-                  ref={mentionRef}
-                  searchQuery={mentionQuery}
-                  onFileSelect={handleFileSelect}
-                  onAgentSelect={handleAgentSelect}
-                  onClose={() => setShowFileMention(false)}
                   style={{
                     left: 0,
                     top: 'auto',

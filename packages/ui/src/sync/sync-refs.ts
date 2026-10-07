@@ -5,8 +5,6 @@
  * session-actions) use them to read child-store domain data without hooks.
  */
 
-import type { OpenCodeClient } from "@opencode/client"
-import type { Config } from "@/lib/opencode/model"
 import type { ChildStoreManager } from "./child-store"
 import { getSessionMaterializationStatus } from "./materialization"
 import type { State } from "./types"
@@ -14,14 +12,12 @@ import type { State } from "./types"
 let _childStores: ChildStoreManager | null = null
 let _directory: string = ""
 let _registerSessionDirectory: ((sessionID: string, directory: string) => void) | null = null
-const configListeners = new Set<(directory: string, config: Config) => void>()
 let cachedSessionManager: ChildStoreManager | null = null
 let cachedSessionSlices = new Map<string, State["session"]>()
 let cachedSessionsById = new Map<string, State["session"][number]>()
 let cachedSessionDirectoryById = new Map<string, string>()
 
 export function setSyncRefs(
-  _sdk: OpenCodeClient,
   childStores: ChildStoreManager,
   directory: string,
   registerSessionDirectory?: (sessionID: string, directory: string) => void,
@@ -58,26 +54,6 @@ export function getDirectoryState(directory?: string): State | undefined {
   const dir = directory || _directory
   if (!dir) return undefined
   return stores.getState(dir)
-}
-
-/** Read resolved OpenCode config from a directory child store, if bootstrapped. */
-export function getSyncConfig(directory?: string): Config | undefined {
-  const config = getDirectoryState(directory)?.config
-  return config && Object.keys(config).length > 0 ? config : undefined
-}
-
-export function subscribeToSyncConfigChanges(listener: (directory: string, config: Config) => void): () => void {
-  configListeners.add(listener)
-  return () => {
-    configListeners.delete(listener)
-  }
-}
-
-export function emitSyncConfigChanged(directory: string, config: Config): void {
-  if (!directory) return
-  for (const listener of configListeners) {
-    listener(directory, config)
-  }
 }
 
 /** Read sessions from current directory's child store */

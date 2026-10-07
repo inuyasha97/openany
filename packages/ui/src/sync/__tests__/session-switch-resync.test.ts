@@ -1,22 +1,14 @@
 import { describe, expect, test, beforeEach, mock } from "bun:test"
 import { create, type StoreApi } from "zustand"
 import type { SyncEvent, ToolTransition } from "@/lib/opencode/events"
-import type { FormRequest, PermissionRequest } from "@/lib/opencode/model"
+import type { PermissionRequest } from "@/lib/opencode/model"
+import { createOpenCodeStubRuntime, setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime'
 
-const listPendingFormsCalls: Array<{ directories?: Array<string | null | undefined> }> = []
 const listPendingPermissionsCalls: Array<{ directories?: Array<string | null | undefined> }> = []
-let pendingFormsResponse: FormRequest[] = []
 let pendingPermissionsResponse: PermissionRequest[] = []
-let pendingFormsShouldThrow = false
 let pendingPermissionsShouldThrow = false
 
-mock.module("@/lib/opencode/client", () => ({
-  opencodeClient: {
-    listPendingForms: mock(async (opts?: { directories?: Array<string | null | undefined> }) => {
-      listPendingFormsCalls.push(opts ?? {})
-      if (pendingFormsShouldThrow) throw new Error("form.list failed: simulated")
-      return pendingFormsResponse
-    }),
+const stubClient = {
     listPendingPermissions: mock(async (opts?: { directories?: Array<string | null | undefined> }) => {
       listPendingPermissionsCalls.push(opts ?? {})
       if (pendingPermissionsShouldThrow) throw new Error("permission.list failed: simulated")
@@ -25,7 +17,25 @@ mock.module("@/lib/opencode/client", () => ({
     getDirectory: () => "/repo",
     getScopedSdkClient: () => ({}),
     setDirectory: () => undefined,
-  },
+    getRuntimeIdentity: () => 'test-runtime',
+    getDirectoryAvailability: async () => 'unknown' as const,
+    probeDirectory: async () => true,
+    getFilesystemHome: async () => null,
+    getFilesystemHomeInfo: async () => ({ home: '/home' }),
+    createDirectory: async (path: string) => ({ success: true, path }),
+    cloneRepository: async (input: { destinationPath: string }) => ({ success: true, path: input.destinationPath }),
+    listLocalDirectory: async () => [],
+    getHostSessionStatusSnapshot: async () => null,
+    getWebServerSessionActivity: async () => null,
+    getBaseUrl: () => '/api',
+    reconnectToRuntimeBaseUrl: () => undefined,
+    checkHealth: async () => true,
+    probeHealth: async () => 'healthy' as const,
+    getSystemInfo: async () => ({ homeDirectory: '/' }),
+}
+setOpenCodeStubSurface(stubClient)
+mock.module("@/lib/openchamber/client", () => ({
+    openChamberClient: stubClient,
 }))
 
 const autoAcceptSnapshots: Array<{ snapshot: { modes: Record<string, string>; revision?: number }; runtimeKey?: string }> = []
@@ -92,16 +102,6 @@ const {
   setActiveSession,
 } = await import("../sync-context")
 
-function buildForm(overrides: Partial<FormRequest> = {}): FormRequest {
-  return {
-    id: "frm_1",
-    sessionID: "ses_a",
-    title: "Continue?",
-    fields: [],
-    ...overrides,
-  } as FormRequest
-}
-
 function buildPermission(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
   return {
     id: "perm_1",
@@ -125,24 +125,18 @@ function createDirectoryStore(initial: Partial<State>): StoreApi<DirectoryStore>
 
 describe("resyncBlockingRequestsForDirectory", () => {
   beforeEach(() => {
-    listPendingFormsCalls.length = 0
     listPendingPermissionsCalls.length = 0
-    pendingFormsResponse = []
     pendingPermissionsResponse = []
-    pendingFormsShouldThrow = false
     pendingPermissionsShouldThrow = false
     setActiveSession("", "")
   })
 
-  test("calls listPendingForms and listPendingPermissions exactly once for the directory", async () => {
+  test("calls listPendingPermissions exactly once for the directory", async () => {
     const store = createDirectoryStore({})
-    pendingFormsResponse = [buildForm()]
     pendingPermissionsResponse = [buildPermission()]
 
     await resyncBlockingRequestsForDirectory("/repo", store)
 
-    expect(listPendingFormsCalls).toHaveLength(1)
-    expect(listPendingFormsCalls[0]).toEqual({ directories: ["/repo"] })
     expect(listPendingPermissionsCalls).toHaveLength(1)
     expect(listPendingPermissionsCalls[0]).toEqual({ directories: ["/repo"] })
   })
@@ -155,14 +149,13 @@ describe("resyncBlockingRequestsForDirectory", () => {
     childStores.ensureChild("/resume-inactive", { bootstrap: false }).setState({
       session: [{ id: "ses_b", title: "ses_b", time: { created: 1, updated: 1 } } as State["session"][number]],
     })
-    pendingFormsResponse = [buildForm()]
+    pendingPermissionsResponse = [buildPermission()]
 
     await resyncBlockingRequestsForActiveDirectory("/resume-active", childStores)
 
-    expect(listPendingFormsCalls).toEqual([{ directories: ["/resume-active"] }])
     expect(listPendingPermissionsCalls).toEqual([{ directories: ["/resume-active"] }])
-    expect(childStores.getChild("/resume-active")?.getState().form.ses_a?.[0]?.id).toBe("frm_1")
-    expect(childStores.getChild("/resume-inactive")?.getState().form.ses_b).toBe(undefined)
+    expect(childStores.getChild("/resume-active")?.getState().permission.ses_a?.[0]?.id).toBe("perm_1")
+    expect(childStores.getChild("/resume-inactive")?.getState().permission.ses_b).toBe(undefined)
   })
 
   test("resume recovery does not materialize or fetch an unopened directory", async () => {
@@ -171,113 +164,59 @@ describe("resyncBlockingRequestsForDirectory", () => {
     await resyncBlockingRequestsForActiveDirectory("/unopened", childStores)
 
     expect(childStores.getChild("/unopened")).toBe(undefined)
-    expect(listPendingFormsCalls).toHaveLength(0)
     expect(listPendingPermissionsCalls).toHaveLength(0)
   })
 
-  test("merges newly fetched forms/permissions into the directory store", async () => {
+  test("merges newly fetched permissions into the directory store", async () => {
     const store = createDirectoryStore({})
-    pendingFormsResponse = [buildForm()]
     pendingPermissionsResponse = [buildPermission()]
 
     await resyncBlockingRequestsForDirectory("/repo", store)
 
-    expect(store.getState().form["ses_a"]).toHaveLength(1)
-    expect(store.getState().form["ses_a"]?.[0]?.id).toBe("frm_1")
     expect(store.getState().permission["ses_a"]).toHaveLength(1)
     expect(store.getState().permission["ses_a"]?.[0]?.id).toBe("perm_1")
   })
 
-  test("preserves an in-flight SSE-delivered form whose signature changed during the fetch", async () => {
+  test("preserves an in-flight SSE-delivered permission whose signature changed during the fetch", async () => {
     const store = createDirectoryStore({
-      form: { ses_a: [{ ...buildForm(), id: "frm_initial" }] },
+      permission: { ses_a: [{ ...buildPermission(), id: "perm_initial" }] },
     })
-    pendingFormsResponse = []
+    pendingPermissionsResponse = []
 
     const promise = resyncBlockingRequestsForDirectory("/repo", store)
     store.setState({
-      form: { ses_a: [{ ...buildForm(), id: "frm_sse_arrived" }] },
+      permission: { ses_a: [{ ...buildPermission(), id: "perm_sse_arrived" }] },
     })
     await promise
 
-    expect(store.getState().form["ses_a"]).toHaveLength(1)
-    expect(store.getState().form["ses_a"]?.[0]?.id).toBe("frm_sse_arrived")
+    expect(store.getState().permission["ses_a"]).toHaveLength(1)
+    expect(store.getState().permission["ses_a"]?.[0]?.id).toBe("perm_sse_arrived")
   })
 
   test("clears stale entries when API returns no pending requests and signature unchanged", async () => {
     const store = createDirectoryStore({
-      form: { ses_a: [{ ...buildForm(), id: "frm_stale" }] },
+      permission: { ses_a: [{ ...buildPermission(), id: "perm_stale" }] },
     })
-    pendingFormsResponse = []
     pendingPermissionsResponse = []
 
     await resyncBlockingRequestsForDirectory("/repo", store)
 
-    expect(store.getState().form["ses_a"]).toEqual(undefined)
+    expect(store.getState().permission["ses_a"]).toEqual(undefined)
   })
 
-  test("ignores forms for sessions the directory does not know about", async () => {
+  test("ignores permissions for sessions the directory does not know about", async () => {
     const store = createDirectoryStore({})
-    pendingFormsResponse = [{ ...buildForm(), sessionID: "ses_unknown" }]
+    pendingPermissionsResponse = [{ ...buildPermission(), sessionID: "ses_unknown" }]
 
     await resyncBlockingRequestsForDirectory("/repo", store)
 
-    expect(store.getState().form["ses_unknown"]).toEqual(undefined)
+    expect(store.getState().permission["ses_unknown"]).toEqual(undefined)
   })
 
   test("returns early without fetching when no candidate sessions are known", async () => {
     const store = createDirectoryStore({ session: [] })
     await resyncBlockingRequestsForDirectory("/repo", store)
-    expect(listPendingFormsCalls).toHaveLength(0)
     expect(listPendingPermissionsCalls).toHaveLength(0)
-  })
-
-  test("recovers an explicit session candidate before directory bootstrap materializes it", async () => {
-    const store = createDirectoryStore({ session: [] })
-    pendingFormsResponse = [buildForm()]
-
-    await resyncBlockingRequestsForDirectory("/repo", store, ["ses_a"], { includePermissions: false })
-
-    expect(listPendingFormsCalls).toEqual([{ directories: ["/repo"] }])
-    expect(listPendingPermissionsCalls).toHaveLength(0)
-    expect(store.getState().form.ses_a?.[0]?.id).toBe("frm_1")
-  })
-
-  test("limits explicit form-only recovery to the requested session", async () => {
-    const store = createDirectoryStore({
-      session: [
-        { id: "ses_a", title: "ses_a", time: { created: 1, updated: 1 } },
-        { id: "ses_b", title: "ses_b", time: { created: 1, updated: 1 } },
-      ] as State["session"],
-    })
-    pendingFormsResponse = [
-      buildForm(),
-      buildForm({ id: "frm_b", sessionID: "ses_b" }),
-    ]
-
-    await resyncBlockingRequestsForDirectory("/repo", store, ["ses_a"], { includePermissions: false })
-
-    expect(store.getState().form.ses_a?.[0]?.id).toBe("frm_1")
-    expect(store.getState().form.ses_b).toBe(undefined)
-    expect(listPendingPermissionsCalls).toHaveLength(0)
-  })
-
-  // Regression: prior to the fix, listPendingForms silently returned [] on
-  // fetch failure, indistinguishable from a successful empty server response.
-  // The resync then walked the candidate set and deleted any form that
-  // wasn't in the (empty) result — wiping legitimate in-flight prompts on a
-  // transient network blip. The client method now throws on failure and the
-  // outer try/catch preserves existing state.
-  test("preserves existing forms when listPendingForms throws (transient fetch failure)", async () => {
-    const store = createDirectoryStore({
-      form: { ses_a: [{ ...buildForm(), id: "frm_in_flight" }] },
-    })
-    pendingFormsShouldThrow = true
-
-    await resyncBlockingRequestsForDirectory("/repo", store)
-
-    expect(store.getState().form["ses_a"]).toHaveLength(1)
-    expect(store.getState().form["ses_a"]?.[0]?.id).toBe("frm_in_flight")
   })
 
   test("preserves existing permissions when listPendingPermissions throws (transient fetch failure)", async () => {
@@ -290,19 +229,6 @@ describe("resyncBlockingRequestsForDirectory", () => {
 
     expect(store.getState().permission["ses_a"]).toHaveLength(1)
     expect(store.getState().permission["ses_a"]?.[0]?.id).toBe("perm_in_flight")
-  })
-
-  test("permission fetch failure does not block form resync (and vice versa)", async () => {
-    const store = createDirectoryStore({})
-    pendingFormsResponse = [buildForm()]
-    pendingPermissionsShouldThrow = true
-
-    await resyncBlockingRequestsForDirectory("/repo", store)
-
-    // Form block ran successfully despite permission block failing.
-    expect(store.getState().form["ses_a"]).toHaveLength(1)
-    expect(store.getState().form["ses_a"]?.[0]?.id).toBe("frm_1")
-    expect(listPendingPermissionsCalls).toHaveLength(1)
   })
 
   test("refreshes Git once when a mutating tool settles, from a snapshot or a live transition", () => {
@@ -435,7 +361,6 @@ describe("OpenChamber-native frames", () => {
 
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.

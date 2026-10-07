@@ -2,7 +2,6 @@
 import React, { createContext, useContext, useEffect, useRef, useCallback, useMemo } from "react"
 import type { StoreApi } from "zustand"
 import { useStore } from "zustand"
-import type { OpenCodeClient } from "@opencode/client"
 import { syncEventMessageID, syncEventSessionID, type CatalogKind, type OpenchamberNotification, type SyncEvent } from "@/lib/opencode/events"
 import type {
   FormRequest,
@@ -44,7 +43,7 @@ import { countSyncPerformance } from "./performance-diagnostics"
 import { runBackgroundNetworkTask } from "@/lib/background-network"
 import { recordDirectoryRecoveryEvent } from "./directory-recovery-snapshots"
 import { setActionRefs } from "./session-actions"
-import { setSyncRefs, getAllSyncSessions, emitSyncConfigChanged, getDirectoryState } from "./sync-refs"
+import { setSyncRefs, getAllSyncSessions, getDirectoryState } from "./sync-refs"
 import { useSessionUIStore } from "./session-ui-store"
 import { stripSessionDiffSnapshots } from "./sanitize"
 import { upsertSessionRecord } from "./session-records"
@@ -60,7 +59,7 @@ import { selectNewChildSessions } from "./child-session-discovery"
 import { syncDebug } from "./debug"
 import { getReconnectCandidateSessionIds, mergeBootstrapSessions } from "./reconnect-recovery"
 import { messagesBefore } from "./message-ordering"
-import { opencodeClient } from "@/lib/opencode/client"
+import { openChamberClient } from "@/lib/openchamber/client"
 import { getAgentRuntime, getAgentRuntimeForSession } from "@/lib/agent/registry"
 import { usePermissionStore } from "@/stores/permissionStore"
 import { policySnapshotFromWire } from "@/stores/utils/permissionAutoAccept"
@@ -149,7 +148,6 @@ type SyncRuntime = {
   childStores: ChildStoreManager
   messageLoader: SessionMessageLoader
   runtimeKey: string
-  sdk: OpenCodeClient
   currentDirectory: CurrentDirectorySource
 }
 
@@ -474,9 +472,9 @@ async function materializeSessionFromServer(
   options?: SessionMaterializationRequest & { isStale?: () => boolean },
 ) {
   const runtimeKey = getRuntimeKey()
-  const sdk = opencodeClient.getSdkClient()
+  const runtimeIdentity = openChamberClient.getRuntimeIdentity()
   const isStale = () => options?.isStale?.() || getRuntimeKey() !== runtimeKey
-    || opencodeClient.getSdkClient() !== sdk
+    || openChamberClient.getRuntimeIdentity() !== runtimeIdentity
   const statusBeforeMaterialization = store.getState().session_status?.[sessionID]
   syncDebug.recovery.materializing({
     reason: options?.reason ?? "ensure-session-messages",
@@ -675,9 +673,7 @@ function getActiveSessionCandidateIds(directory: string, state: DirectoryStore):
   })
 }
 
-type DirectorySessionStatusSnapshot = NonNullable<
-  Awaited<ReturnType<typeof opencodeClient.getActiveSessionStatuses>>
->
+type DirectorySessionStatusSnapshot = Record<string, SessionStatus>
 
 // How a `/api/session/active` snapshot is reconciled into the store.
 //
@@ -1296,69 +1292,15 @@ export async function resyncBlockingRequestsForDirectory(
     ...before.session.map((session) => session.id),
     ...Object.keys(before.message ?? {}),
     ...Object.keys(before.session_status ?? {}),
-    ...Object.keys(before.form ?? {}),
     ...Object.keys(before.permission ?? {}),
   ])
   if (candidateIds.size === 0) return
   const candidates = Array.from(candidateIds)
 
-  // Re-fetch pending forms that may have been asked during an SSE gap,
-  // reconnect window, or directory materialization gap.
-  try {
-    const beforeSignatures = new Map(
-      candidates.map((sessionId) => [sessionId, requestSignature(before.form[sessionId])]),
-    )
-    const pendingForms = await getAgentRuntime().listPendingForms({ directories: [directory] })
-    const grouped: Record<string, FormRequest[]> = {}
-    for (const form of pendingForms) {
-      if (!form?.id || !form.sessionID) continue
-      if (!candidateIds.has(form.sessionID)) continue
-      const list = grouped[form.sessionID]
-      if (list) list.push(form)
-      else grouped[form.sessionID] = [form]
-    }
-    for (const sessionId of Object.keys(grouped)) {
-      grouped[sessionId].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    }
-
-    for (const [sessionId, forms] of Object.entries(grouped)) {
-      const knownIds = new Set((before.form[sessionId] ?? []).map((item) => item.id))
-      const isViewed = isViewedInCurrentSession(directory, sessionId)
-      if (isViewed) continue
-      for (const form of forms) {
-        if (knownIds.has(form.id)) continue
-        const toastKey = getFormToastKey(sessionId, form.id)
-        if (!toastKey || pendingFormToastIds.has(toastKey)) continue
-        pendingFormToastIds.add(toastKey)
-        toast.info(form.title, {
-          id: `form-${toastKey}`,
-          description: FORM_TOAST_DESCRIPTION,
-          action: formToastAction(sessionId, directory),
-        })
-      }
-    }
-
-    store.setState((state: DirectoryStore) => {
-      const merged = { ...state.form }
-      for (const [sessionId, forms] of Object.entries(grouped)) {
-        merged[sessionId] = forms
-      }
-      for (const sessionId of candidates) {
-        if (grouped[sessionId]) continue
-        const beforeSignature = beforeSignatures.get(sessionId) ?? ""
-        const currentSignature = requestSignature(state.form[sessionId])
-        if (currentSignature !== beforeSignature) continue
-        delete merged[sessionId]
-      }
-      return { form: merged }
-    })
-  } catch {
-    // Non-fatal: form resync best-effort
-  }
-
   if (options?.includePermissions === false) return
 
-  // Re-fetch pending permissions — same rationale as forms.
+  // Re-fetch pending permissions that may have been asked during a stream gap,
+  // reconnect window, or directory materialization gap.
   try {
     const beforeSignatures = new Map(
       candidates.map((sessionId) => [sessionId, requestSignature(before.permission[sessionId])]),
@@ -1496,60 +1438,12 @@ async function resyncDirectoryAfterReconnect(
 }
 
 /**
- * OpenCode reports a catalog change (`config.updated`, `agent.updated`, ...)
- * without saying what changed, so the affected slice is re-read rather than
- * patched. Agents, commands, config and providers resolve per directory, so
- * every open directory refreshes its own copy; projects are global.
+ * A catalog event (`command.updated`, `skill.updated`, ...) says a list changed
+ * without saying what changed. The sync stores hold no catalog slice of their
+ * own — their consumers read them on demand — so only the Settings lists and
+ * the composer's own stores need the re-read.
  *
- * The sync stores only hold what chat needs; the Settings lists and the
- * composer read their own stores, which `refreshStoresForCatalogKind` re-reads
- * for the same kind.
- */
-async function reloadCatalog(kind: CatalogKind, childStores: ChildStoreManager): Promise<void> {
-  // Before anything re-reads: a fresh GET must not be served the config the
-  // client cached seconds ago.
-  if (kind === "config") opencodeClient.clearConfigCache()
-
-  void refreshStoresForCatalogKind(kind)
-
-  if (kind === "project") {
-    const projects = await opencodeClient.listProjects().catch(() => null)
-    if (projects) useGlobalSyncStore.getState().actions.set({ projects })
-    return
-  }
-  // No sync-store slice of their own: their consumers read them on demand.
-  if (kind === "skill" || kind === "plugin" || kind === "websearch") return
-
-  await Promise.all([...childStores.children.entries()].map(async ([directory, store]) => {
-    try {
-      if (kind === "agent") {
-        store.setState({ agent: await getAgentRuntime().listAgents(directory) })
-      } else if (kind !== "command") {
-        // Commands have no sync-store slice: `refreshStoresForCatalogKind`
-        // re-reads `useCommandsStore`, the only consumer, on demand.
-        if (kind === "config") {
-          const config = await opencodeClient.getConfig(directory)
-          store.setState({ config })
-          emitSyncConfigChanged(directory, config)
-        }
-        // The provider slice follows everything that can change it:
-        // `provider.updated` / `model.updated` (2.0.8's own announcements), a
-        // credential change, and the config (which can declare providers).
-        const provider = await opencodeClient.getProvidersForConfig(directory)
-        // Same catalog, same object: a re-read that changes nothing must not
-        // re-render every provider consumer.
-        if (JSON.stringify(store.getState().provider) !== JSON.stringify(provider)) {
-          store.setState({ provider })
-        }
-      }
-    } catch {
-      // Best-effort: the next catalog event or bootstrap re-reads it.
-    }
-  }))
-}
-
-/**
- * One saved file makes v2 rebuild several catalogs, so the events arrive in a
+ * One saved file can rebuild several catalogs, so the events arrive in a
  * burst. Collect the kinds and re-read each one once the burst settles; the
  * lists are whole-slice reads, so a later event supersedes an earlier one of
  * the same kind anyway.
@@ -1558,14 +1452,14 @@ const CATALOG_RELOAD_DEBOUNCE_MS = 250
 const pendingCatalogKinds = new Set<CatalogKind>()
 let catalogReloadTimer: ReturnType<typeof setTimeout> | null = null
 
-function scheduleCatalogReload(kind: CatalogKind, childStores: ChildStoreManager): void {
+function scheduleCatalogReload(kind: CatalogKind): void {
   pendingCatalogKinds.add(kind)
-  if (catalogReloadTimer) clearTimeout(catalogReloadTimer)
+  clearTimeout(catalogReloadTimer ?? undefined)
   catalogReloadTimer = setTimeout(() => {
     catalogReloadTimer = null
     const kinds = [...pendingCatalogKinds]
     pendingCatalogKinds.clear()
-    for (const pending of kinds) void reloadCatalog(pending, childStores)
+    for (const pending of kinds) void refreshStoresForCatalogKind(pending)
   }, CATALOG_RELOAD_DEBOUNCE_MS)
 }
 
@@ -1704,7 +1598,7 @@ export function handleEvent(
       directory
       && directory !== "global"
       && expectedRuntimeKey === getRuntimeKey()
-      && directory === opencodeClient.getDirectory()
+      && directory === openChamberClient.getDirectory()
       && childStores.getChild(directory)
     ) {
       childStores.requestBootstrap({ directory, priority: "selected", reason: "location-shutdown", force: true })
@@ -1780,7 +1674,7 @@ export function handleEvent(
         useGlobalSyncStore.setState({ reload: "pending" })
       }
     } else if (result.type === "catalog") {
-      scheduleCatalogReload(result.kind, childStores)
+      scheduleCatalogReload(result.kind)
     }
     // On server.connected, re-bootstrap all directories
     // but only if not during recent boot
@@ -1791,7 +1685,7 @@ export function handleEvent(
           if (store && store.getState().status !== "loading") {
             childStores.requestBootstrap({
               directory: dir,
-              priority: dir === opencodeClient.getDirectory() ? "selected" : "background",
+              priority: dir === openChamberClient.getDirectory() ? "selected" : "background",
               reason: "server-connected",
               force: true,
             })
@@ -1830,7 +1724,7 @@ export function handleEvent(
     if (result?.type === "refresh") {
       useGlobalSyncStore.setState({ reload: "pending" })
     } else if (result?.type === "catalog") {
-      scheduleCatalogReload(result.kind, childStores)
+      scheduleCatalogReload(result.kind)
     }
     return
   }
@@ -1994,7 +1888,7 @@ export function handleEvent(
   // A catalog event names the location it was rebuilt in; for an open
   // directory it lands here rather than in the global branch above.
   const reducerResult = applyDirectoryEvent(draft, payload, {
-    onCatalogUpdated: (kind) => scheduleCatalogReload(kind, childStores),
+    onCatalogUpdated: (kind) => scheduleCatalogReload(kind),
   })
   const reducerChanged = typeof reducerResult === "boolean" ? reducerResult : reducerResult.changed
   const materializationResult = typeof reducerResult === "boolean" ? undefined : reducerResult.materialization
@@ -2276,7 +2170,7 @@ export async function recoverInterruptedTurnAfterMessageLoad(
 ): Promise<void> {
   if (isStale?.()) return
   const runtimeKey = getRuntimeKey()
-  const sdk = opencodeClient.getSdkClient()
+  const runtimeIdentity = openChamberClient.getRuntimeIdentity()
   const initial = store.getState()
   if (!hasUnfinishedAssistantTurn(initial, sessionID)) return
   if ((initial.form?.[sessionID] ?? []).length > 0) return
@@ -2285,7 +2179,7 @@ export async function recoverInterruptedTurnAfterMessageLoad(
   if (!initial.session_status?.[sessionID]) {
     const snapshot = await getAgentRuntime().getActiveStatus(directory)
     if (snapshot === null || isStale?.()
-      || getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== sdk) return
+      || getRuntimeKey() !== runtimeKey || openChamberClient.getRuntimeIdentity() !== runtimeIdentity) return
 
     // Do not overwrite a live status event that arrived while the snapshot was
     // in flight. The snapshot only fills the previously unknown state.
@@ -2307,7 +2201,7 @@ export async function recoverInterruptedTurnAfterMessageLoad(
     const loader = getImperativeSessionMessageLoader()
     if (loader) {
       await loader.refreshTail({ directory, sessionID }, SESSION_MATERIALIZATION_MESSAGE_LIMIT)
-      if (isStale?.() || getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== sdk) return
+      if (isStale?.() || getRuntimeKey() !== runtimeKey || openChamberClient.getRuntimeIdentity() !== runtimeIdentity) return
     }
   }
 
@@ -2327,17 +2221,16 @@ const dispatchOpenCodeUpdateAvailable = (payload: { version: string }) => {
 }
 
 export function SyncProvider(props: {
-  sdk: OpenCodeClient
+  /**
+   * Identity of the runtime binding the provider was mounted for, from
+   * `openChamberClient.getRuntimeIdentity()`. It changes when the runtime
+   * endpoint moves or the transport behind the same key is rebound, which is
+   * what re-runs the stream, bootstrap and resync effects below.
+   */
+  runtimeIdentity: string
   directory: string
   children: React.ReactNode
 }) {
-  // Capacitor apps were previously locked to SSE because Android WebSocket
-  // upgrades appeared broken. Root cause was server-side: the Android WebView
-  // origin (https://localhost, androidScheme 'https') was missing from the
-  // packaged-client origin allowlist, so every WS upgrade was rejected with
-  // 403. With the origin allowlisted, mobile uses the same transport
-  // selection as everywhere else ('auto' falls back to SSE on WS failure).
-  const messageStreamTransport = useConfigStore((state) => state.settingsMessageStreamTransport)
   const childStoresRef = useRef<ChildStoreManager | null>(null)
   if (!childStoresRef.current) childStoresRef.current = new ChildStoreManager()
   const childStores = childStoresRef.current
@@ -2381,8 +2274,8 @@ export function SyncProvider(props: {
   const pipelineDisconnectedBeforeFirstConnectRef = useRef(false)
 
   const runtime = useMemo<SyncRuntime>(
-    () => ({ childStores, messageLoader, runtimeKey, sdk: props.sdk, currentDirectory: currentDirectorySource }),
-    [childStores, currentDirectorySource, messageLoader, props.sdk, runtimeKey],
+    () => ({ childStores, messageLoader, runtimeKey, currentDirectory: currentDirectorySource }),
+    [childStores, currentDirectorySource, messageLoader, runtimeKey],
   )
   const system = useMemo<SyncSystem>(
     () => ({ ...runtime, directory: props.directory }),
@@ -2397,10 +2290,10 @@ export function SyncProvider(props: {
 
     lastFullResyncAtByDirectoryRef.current.set(directory, Date.now())
     resyncing.add(directory)
-    const sdk = opencodeClient.getSdkClient()
+    const runtimeIdentity = openChamberClient.getRuntimeIdentity()
     const expectedRuntimeKey = getRuntimeKey()
     const isStale = () => getRuntimeKey() !== expectedRuntimeKey
-      || opencodeClient.getSdkClient() !== sdk || childStores.children.get(directory) !== store
+      || openChamberClient.getRuntimeIdentity() !== runtimeIdentity || childStores.children.get(directory) !== store
     void resyncDirectoryAfterReconnect(directory, store, routingIndex, reason, isStale)
       .catch(() => {
         // Transient failure — the watchdog, next SSE event, or reconnect will catch up.
@@ -2432,14 +2325,14 @@ export function SyncProvider(props: {
   useEffect(() => {
     void usePermissionStore.getState().hydrate().catch(() => undefined)
     void useMessageQueueStore.getState().hydrate().catch(() => undefined)
-  }, [props.sdk])
+  }, [props.runtimeIdentity])
 
   useEffect(() => {
     const expectedRuntimeKey = getRuntimeKey()
-    const sdkEpoch = opencodeClient.getSdkClient()
+    const expectedIdentity = openChamberClient.getRuntimeIdentity()
     return childStores.configure({
       bootstrapConcurrency: 2,
-      isCurrentScope: () => getRuntimeKey() === expectedRuntimeKey && opencodeClient.getSdkClient() === sdkEpoch,
+      isCurrentScope: () => getRuntimeKey() === expectedRuntimeKey && openChamberClient.getRuntimeIdentity() === expectedIdentity,
       onBootstrap: async (context: DirectoryBootstrapContext) => {
         const { directory } = context
         const isCurrent = context.isCurrent
@@ -2465,7 +2358,6 @@ export function SyncProvider(props: {
         const runBootstrap = async (attempt: number): Promise<"complete" | "failed" | "stale"> => {
           if (!isCurrent()) return "stale"
           const currentAttempt = ++initializationAttempt
-          const globalState = useGlobalSyncStore.getState()
           const bootstrap = bootstrapDirectory({
             directory,
             store,
@@ -2480,11 +2372,6 @@ export function SyncProvider(props: {
               }
             },
             isStale: () => !isCurrent() || currentAttempt !== initializationAttempt,
-            global: {
-              config: globalState.config,
-              projects: globalState.projects,
-              path: globalState.path,
-            },
             // Each page owns its bounded retry. Replaying the whole list here
             // multiplies attempts and holds a bootstrap slot behind failures.
             loadSessions: async (dir) => {
@@ -2574,7 +2461,7 @@ export function SyncProvider(props: {
       },
       isLoadingSessions: () => false,
     })
-  }, [childStores, messageLoader, props.sdk, routingIndex])
+  }, [childStores, messageLoader, props.runtimeIdentity, routingIndex])
 
   // Bootstrap global state — set bootingRoot/bootedAt to suppress
   // redundant refresh events during startup
@@ -2602,7 +2489,7 @@ export function SyncProvider(props: {
         bootingRoot = false
       }
     }
-  }, [props.sdk])
+  }, [props.runtimeIdentity])
 
   // Event pipeline — created once per mount. No class, no start/stop.
   // Abort controller owned by the pipeline closure. Cleanup aborts + flushes.
@@ -2612,8 +2499,6 @@ export function SyncProvider(props: {
       for (const dir of childStores.children.keys()) triggerDirectoryResync(dir, reason)
     }
     const pipeline = createEventPipeline({
-      sdk: props.sdk,
-      transport: messageStreamTransport,
       routeDirectory: (directory, payload) => {
         return resolveDirectoryFromRoutingIndex(routingIndex, directory, payload, childStores)
       },
@@ -2622,9 +2507,9 @@ export function SyncProvider(props: {
       // a genuinely dead stream (no heartbeats for 20s) from a quiet-but-
       // connected session that is only receiving heartbeats. Excluding
       // heartbeats caused issue #1656: the stale timer fired for any quiet
-      // session, triggering redundant full resyncs every ~15s. OpenCode 2
-      // heartbeats never become events: OpenCode sends an SSE comment and the
-      // WS bridge an `openchamber:heartbeat` frame, so delivered events miss them.
+      // session, triggering redundant full resyncs every ~15s. Heartbeats
+      // never become events: the WS bridge sends an `openchamber:heartbeat`
+      // frame, so delivered events miss them.
       onStreamActivity: () => {
         lastStreamActivityAtRef.current = Date.now()
       },
@@ -2710,17 +2595,6 @@ export function SyncProvider(props: {
           lastDisconnectReason: reason,
         })
       },
-      onTransportSwitch: () => {
-        void useMessageQueueStore.getState().resync().catch(() => undefined)
-        // Transport changes are gap-prone in real networks. Treat them like a
-        // reconnect and refresh active session snapshots from HTTP.
-        useConfigStore.setState({
-          isConnected: true,
-          hasEverConnected: true,
-          connectionPhase: "connected",
-        })
-        resyncAfterStreamGap("transport-switch")
-      },
     })
     pipelineReconnectRef.current = pipeline.reconnect
     return () => {
@@ -2730,7 +2604,7 @@ export function SyncProvider(props: {
       pipeline.cleanup()
       unsubscribeQueueEvents()
     }
-  }, [props.sdk, childStores, routingIndex, messageStreamTransport, runtimeKey, triggerDirectoryResync])
+  }, [childStores, routingIndex, props.runtimeIdentity, runtimeKey, triggerDirectoryResync])
 
   useEffect(() => {
     let stopped = false
@@ -2858,7 +2732,7 @@ export function SyncProvider(props: {
       stopped = true
       clearInterval(interval)
     }
-  }, [childStores, props.sdk, triggerDirectoryResync])
+  }, [childStores, props.runtimeIdentity, triggerDirectoryResync])
 
   // Ensure current directory's child store exists
   useEffect(() => {
@@ -2915,12 +2789,12 @@ export function SyncProvider(props: {
 
   useEffect(() => {
     setImperativeSessionMessageLoader(messageLoader)
-    setSyncRefs(props.sdk, childStores, props.directory, (sessionID, dir) => {
+    setSyncRefs(childStores, props.directory, (sessionID, dir) => {
       setIndexedSessionDirectory(routingIndex, sessionID, dir)
     })
     setActionRefs(
       childStores,
-      () => opencodeClient.getDirectory() || props.directory,
+      () => openChamberClient.getDirectory() || props.directory,
       (directory, sessionID, messageID) => {
         enqueueSessionMaterialization(directory, sessionID, childStores, {
           reason: "settled-running-tool",
@@ -2933,7 +2807,7 @@ export function SyncProvider(props: {
         setImperativeSessionMessageLoader(null)
       }
     }
-  }, [props.sdk, props.directory, childStores, messageLoader, routingIndex])
+  }, [props.directory, childStores, messageLoader, routingIndex])
 
   useEffect(() => {
     if (messageLoaderDisposalTimerRef.current) {
@@ -3357,11 +3231,6 @@ export function useSession(sessionID?: string | null, directory?: string) {
 export function useSessionDirectory(sessionID?: string | null, directory?: string): string | undefined {
   const session = useSession(sessionID, directory)
   return (session as (typeof session & { directory?: string | null }) | undefined)?.directory ?? undefined
-}
-
-/** Get the SDK client */
-export function useSyncSDK() {
-  return useSyncRuntime().sdk
 }
 
 /** Get the current directory */

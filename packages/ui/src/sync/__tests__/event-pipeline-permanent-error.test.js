@@ -1,15 +1,10 @@
-import { afterEach, describe, expect, it } from 'bun:test';
-import { createEventPipeline } from '../event-pipeline';
+import { afterEach, beforeEach, describe, expect, it, jest, mock } from 'bun:test';
+import { clearRuntimeUrlAuthToken, setRuntimeUrlAuthToken } from '@/lib/runtime-auth';
+import { configureRuntimeUrlResolver } from '@/lib/runtime-url';
 
 const savedDocument = globalThis.document;
 const savedWindow = globalThis.window;
 const savedNavigator = globalThis.navigator;
-
-afterEach(() => {
-  globalThis.document = savedDocument;
-  globalThis.window = savedWindow;
-  globalThis.navigator = savedNavigator;
-});
 
 function createEventTarget(extras = {}) {
   const listeners = new Map();
@@ -33,140 +28,208 @@ function createEventTarget(extras = {}) {
   };
 }
 
+/** The transport's rejection: one HTTP status on the error, as the old path carried it. */
+const statusError = (status) => Object.assign(new Error(`HTTP ${status}`), { status });
+
+const streams = [];
+// One entry per connection attempt: an Error the opener throws (a rejected
+// upgrade) or `undefined` for a scripted socket that opens.
+let socketPlan = [];
+let openAttempts = 0;
+
+/**
+ * The transport double: frames are yielded by an async generator that ends
+ * when the pipeline tears the socket down, exactly as a real socket reader
+ * does when its attempt is aborted.
+ */
+const createScriptedStream = () => {
+  const pending = [];
+  let wake = null;
+  let closed = false;
+  const controller = new AbortController();
+
+  const socket = {
+    readyState: 1,
+    onopen: null,
+    onmessage: null,
+    onerror: null,
+    onclose: null,
+    send: () => undefined,
+    close: () => {
+      closed = true;
+      controller.abort();
+      wake?.();
+    },
+  };
+
+  const frames = async function* (signal) {
+    while (!signal.aborted) {
+      const frame = pending.shift();
+      if (frame === undefined) {
+        const waiting = Promise.withResolvers();
+        wake = waiting.resolve;
+        signal.addEventListener('abort', () => waiting.resolve(), { once: true });
+        await waiting.promise;
+        wake = null;
+        continue;
+      }
+      yield frame;
+    }
+  };
+
+  void (async () => {
+    socket.onopen?.();
+    for await (const frame of frames(controller.signal)) {
+      if (closed) return;
+      socket.onmessage?.({ data: JSON.stringify(frame) });
+      await Promise.resolve();
+    }
+  })();
+
+  const stream = { socket, push: (frame) => { pending.push(frame); wake?.(); } };
+  streams.push(stream);
+  return stream;
+};
+
+mock.module('@/lib/relay/runtime-socket', () => ({
+  openRuntimeWebSocket: () => {
+    openAttempts += 1;
+    const next = socketPlan.shift();
+    if (next instanceof Error) throw next;
+    return createScriptedStream().socket;
+  },
+}));
+
+const { createEventPipeline } = await import('../event-pipeline');
+
+/** Lets the pipeline's own microtasks run without advancing the clock. */
+const until = async (predicate) => {
+  for (let tick = 0; tick < 200; tick += 1) {
+    if (predicate()) return true;
+    await Promise.resolve();
+  }
+  return predicate();
+};
+
+/** Fires `online` until the pipeline has started `target` attempts. */
+const driveToAttempt = async (target) => {
+  for (let tick = 0; tick < 50 && openAttempts < target; tick += 1) {
+    globalThis.window.dispatch('online');
+    await until(() => false);
+  }
+  return openAttempts;
+};
+
+beforeEach(() => {
+  jest.useFakeTimers();
+  streams.length = 0;
+  socketPlan = [];
+  openAttempts = 0;
+  globalThis.document = createEventTarget({ visibilityState: 'visible' });
+  globalThis.window = createEventTarget({
+    location: { href: 'http://127.0.0.1:3000/', origin: 'http://127.0.0.1:3000' },
+  });
+  globalThis.navigator = { onLine: true };
+  // The socket upgrade authenticates with the url token; a valid token keeps
+  // the pipeline's pre-connect mint off the network.
+  setRuntimeUrlAuthToken('test-url-token', Date.now() + 60_000);
+  configureRuntimeUrlResolver({ apiBaseUrl: 'http://127.0.0.1:3000' });
+});
+
+afterEach(() => {
+  clearRuntimeUrlAuthToken();
+  jest.useRealTimers();
+  globalThis.document = savedDocument;
+  globalThis.window = savedWindow;
+  globalThis.navigator = savedNavigator;
+});
+
 describe('createEventPipeline — permanent server errors', () => {
   it('uses the long backoff cap for 4xx so we do not hammer at 5s intervals', async () => {
-    globalThis.document = createEventTarget({ visibilityState: 'visible' });
-    globalThis.window = createEventTarget({
-      location: { href: 'http://127.0.0.1:3000/', origin: 'http://127.0.0.1:3000' },
-    });
-    globalThis.navigator = { onLine: true };
+    // The first two attempts are rejected with a permanent 404. Under the
+    // exponential path the second retry would fire after 250ms; under the
+    // permanent-error override both land on the long (60s) cap, so only the
+    // `online` interrupt can advance the loop.
+    socketPlan = [statusError(404), statusError(404)];
 
-    let sdkCallIndex = 0;
-    const sdk = {
-      event: {
-        subscribe: () => {
-          const idx = sdkCallIndex++;
-          if (idx <= 1) {
-            // First two attempts: permanent 404. Under the old code these
-            // would have entered the exponential path and the second retry
-            // would fire after ~250-500ms. With the permanent-error override
-            // both go to the long (60s) cap, so the test should observe
-            // exactly one retry (after `online` interrupts) within its
-            // observation window.
-            const error = new Error('Not Found');
-            error.status = 404;
-            throw error;
-          }
-          return (async function* () {
-              yield { id: 'evt_1', created: 1000, location: { directory: '/repo' }, type: 'session.status', data: { sessionID: 's1', status: { type: 'idle' } } };
-              await new Promise(() => {});
-            })();
-        },
-      },
-    };
-
-    const startedAt = Date.now();
-    let cleanupFn = () => {};
-
-    // Phase 1: let the first 404 fire and verify the loop is NOT spinning.
-    // If the permanent-error override is broken, the loop would retry every
-    // 250-500ms and sdkCallIndex would climb past 1.
-    await new Promise((resolve) => {
-      const { cleanup } = createEventPipeline({
-        sdk,
-        transport: 'sse',
-        heartbeatTimeoutMs: 60_000,
-        reconnectDelayMs: 60_000,
-        onEvent: () => {},
-        onDisconnect: () => {
-          // Wait 250ms after disconnect — long enough that the broken
-          // exponential path would have retried at least once. If our
-          // override works, sdkCallIndex stays at 1.
-          setTimeout(resolve, 250);
-        },
-      });
-      cleanupFn = cleanup;
+    let advanced = 0;
+    const disconnects = [];
+    const reconnects = [];
+    const { cleanup } = createEventPipeline({
+      heartbeatTimeoutMs: 60_000,
+      reconnectDelayMs: 60_000,
+      onEvent: () => {},
+      onDisconnect: (reason) => disconnects.push(reason),
+      onReconnect: () => reconnects.push(1),
     });
 
-    expect(sdkCallIndex).toBe(1);
+    try {
+      await until(() => openAttempts === 1);
+      await until(() => disconnects.length === 1);
+      expect(streams).toHaveLength(0);
 
-    // Phase 2: fire `online` to interrupt the long wait. Loop should fire
-    // the second attempt (still 404) immediately, then the third attempt
-    // which succeeds.
-    const recovered = new Promise((resolve) => {
-      // Trigger an `online` event; waitForRetry's interrupter resolves and
-      // the next attempt fires. That attempt is also a 404 (idx=1), then
-      // another `online` advances us to the success path (idx=2).
-      const advance = () => {
-        globalThis.window.dispatch('online');
-      };
-      advance();
-      const t = setInterval(() => {
-        if (sdkCallIndex >= 3) {
-          clearInterval(t);
-          resolve();
-        } else {
-          advance();
-        }
-      }, 50);
-    });
+      // Phase 1: the whole visible exponential window (5s cap) elapses without
+      // the loop starting another attempt.
+      await until(() => false);
+      jest.advanceTimersByTime(5_000);
+      advanced += 5_000;
+      await until(() => false);
+      expect(openAttempts).toBe(1);
 
-    await recovered;
-    cleanupFn();
+      // Phase 2: `online` interrupts the long wait; the second attempt is also
+      // a 404 and again lands on the long cap.
+      expect(await driveToAttempt(2)).toBe(2);
+      await until(() => false);
+      jest.advanceTimersByTime(5_000);
+      advanced += 5_000;
+      await until(() => false);
+      expect(openAttempts).toBe(2);
 
-    expect(sdkCallIndex).toBeGreaterThanOrEqual(3);
-    // Total elapsed should be < 2s — well under the 60s cap that proves the
-    // interrupters work for permanent-error retries too.
-    expect(Date.now() - startedAt).toBeLessThan(5_000);
+      // A third `online` reaches the attempt that opens a socket.
+      expect(await driveToAttempt(3)).toBe(3);
+      await until(() => streams.length === 1);
+      streams[0].push({ type: 'ready' });
+      await until(() => reconnects.length === 1);
+
+      // Never needed anything close to the 60s cap: the interrupters recovered
+      // inside the 10s of clock this test advanced.
+      expect(advanced).toBeLessThan(15_000);
+      expect(openAttempts).toBe(3);
+      expect(reconnects).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
   });
 
   it('retries 408 and 429 on the normal exponential path (not the permanent cap)', async () => {
-    globalThis.document = createEventTarget({ visibilityState: 'visible' });
-    globalThis.window = createEventTarget({
-      location: { href: 'http://127.0.0.1:3000/', origin: 'http://127.0.0.1:3000' },
-    });
-    globalThis.navigator = { onLine: true };
+    socketPlan = [statusError(429)];
 
-    let sdkCallIndex = 0;
-    const sdk = {
-      event: {
-        subscribe: () => {
-          const idx = sdkCallIndex++;
-          if (idx === 0) {
-            const error = new Error('Rate limited');
-            error.status = 429;
-            throw error;
-          }
-          return (async function* () {
-              yield { id: 'evt_1', created: 1000, location: { directory: '/repo' }, type: 'session.status', data: { sessionID: 's1', status: { type: 'idle' } } };
-              await new Promise(() => {});
-            })();
-        },
-      },
-    };
-
-    const startedAt = Date.now();
-    const elapsed = await new Promise((resolve) => {
-      let connects = 0;
-      const { cleanup } = createEventPipeline({
-        sdk,
-        transport: 'sse',
-        heartbeatTimeoutMs: 60_000,
-        reconnectDelayMs: 60_000,
-        onEvent: () => {},
-        onReconnect: () => {
-          connects += 1;
-          if (connects === 1) {
-            cleanup();
-            resolve(Date.now() - startedAt);
-          }
-        },
-      });
+    let advanced = 0;
+    const reconnects = [];
+    const { cleanup } = createEventPipeline({
+      heartbeatTimeoutMs: 60_000,
+      reconnectDelayMs: 60_000,
+      onEvent: () => {},
+      onReconnect: () => reconnects.push(1),
     });
 
-    // 429 went through computeRetryDelay (consecutiveFailures=1) -> 250ms,
-    // not the 60s permanent cap. Recovery should be sub-second.
-    expect(sdkCallIndex).toBe(2);
-    expect(elapsed).toBeLessThan(2_000);
+    try {
+      await until(() => openAttempts === 1);
+      await until(() => false);
+
+      // 429 went through computeRetryDelay (consecutiveFailures=1) -> 250ms,
+      // not the 60s permanent cap: the next attempt fires on the timer alone.
+      jest.advanceTimersByTime(250);
+      advanced += 250;
+      await until(() => streams.length === 1);
+      streams[0].push({ type: 'ready' });
+      await until(() => reconnects.length === 1);
+
+      expect(advanced).toBeLessThan(2_000);
+      expect(openAttempts).toBe(2);
+      expect(reconnects).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
   });
 });

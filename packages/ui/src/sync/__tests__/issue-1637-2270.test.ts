@@ -3,6 +3,7 @@ import type { Session } from "@/lib/opencode/model"
 import type { ProjectEntry } from "@/lib/api/types"
 import type { WorktreeMetadata } from "@/types/worktree"
 import { resolveProjectForSessionDirectory } from "@/lib/projectResolution"
+import { createOpenCodeStubRuntime, setOpenCodeStubSurface } from '@/lib/agent/testing/opencode-stub-runtime'
 
 // Recorded call info
 const setCurrentSessionCalls: Array<{ id: string | null; directoryHint: string | null | undefined }> = []
@@ -10,7 +11,7 @@ const registerSessionDirectoryCalls: Array<{ sessionID: string; directory: strin
 const upsertSessionCalls: Session[] = []
 const markSessionAsOpenChamberCreatedCalls: string[] = []
 
-// Configurable opencodeClient.createSession — set per test
+// Configurable stubClient.createSession — set per test
 let nextCreateSessionResponse: Session = { id: "ses_default", time: { created: 1 } } as Session
 let nextCreateSessionCalls: Array<{ params: unknown; directory: string | null | undefined }> = []
 
@@ -20,17 +21,34 @@ let currentDirectory: string | null = null
 const runtimeSdkClient = {}
 
 let idCounter = 0
-mock.module("@/lib/opencode/client", () => ({
-  ascendingId: (prefix: string) => `${prefix}_${(idCounter += 1).toString(16).padStart(12, "0")}`,
-  opencodeClient: {
-    getSdkClient: () => runtimeSdkClient,
+const stubClient = {
+    getRuntimeIdentity: () => runtimeSdkClient,
     getDirectory: () => currentDirectory,
     setDirectory: mock(() => undefined),
     createSession: mock(async (params: unknown, directory?: string | null) => {
       nextCreateSessionCalls.push({ params, directory })
       return nextCreateSessionResponse
     }),
-  },
+    getDirectoryAvailability: async () => 'unknown' as const,
+    probeDirectory: async () => true,
+    getFilesystemHome: async () => null,
+    getFilesystemHomeInfo: async () => ({ home: '/home' }),
+    createDirectory: async (path: string) => ({ success: true, path }),
+    cloneRepository: async (input: { destinationPath: string }) => ({ success: true, path: input.destinationPath }),
+    listLocalDirectory: async () => [],
+    getHostSessionStatusSnapshot: async () => null,
+    getWebServerSessionActivity: async () => null,
+    getBaseUrl: () => '/api',
+    reconnectToRuntimeBaseUrl: () => undefined,
+    checkHealth: async () => true,
+    probeHealth: async () => 'healthy' as const,
+    getSystemInfo: async () => ({ homeDirectory: '/' }),
+  }
+setOpenCodeStubSurface(stubClient)
+mock.module("@/lib/openchamber/client", () => ({
+    openChamberClient: stubClient,
+  ascendingId: (prefix: string) => `${prefix}_${(idCounter += 1).toString(16).padStart(12, "0")}`,
+  
 }))
 
 mock.module("../session-ui-store", () => ({
@@ -155,7 +173,7 @@ describe("issue #1637 — no directoryOverride, no server directory", () => {
     const result = await createSession("test title", null)
 
     expect(result?.id).toBe("ses_1637_c")
-    // Without any directory source, the call to opencodeClient.createSession
+    // Without any directory source, the call to stubClient.createSession
     // is made with undefined (dir() returned undefined).
     // dir() returns undefined when no current directory is set and no override is provided
     expect(nextCreateSessionCalls[0].directory == null).toBe(true)
@@ -312,7 +330,6 @@ describe("issue #2270 — registerSessionDirectory called with effective directo
 
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
 
 // The registry's default runtime is the real OMP client; register a
 // client-backed double so this test drives app logic with its mocked client.

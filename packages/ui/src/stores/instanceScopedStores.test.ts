@@ -2,15 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { McpServerStatus } from '@/lib/opencode/model';
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
-import { createOpenCodeStubRuntime } from '@/lib/agent/testing/opencode-stub-runtime';
-
-// The registry's default runtime is the real OMP client; register a
-// client-backed double so this test drives app logic with its mocked client.
-registerAgentRuntime(createOpenCodeStubRuntime());
-// Sessions the OpenCode client created carry `runtimeId: "opencode"`; the
-// registry answers an unregistered id with the real OMP client, so register the
-// double under that id too.
-registerAgentRuntime(createOpenCodeStubRuntime('opencode'));
+import type { AgentRuntime } from '@/lib/agent/contract';
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
 const deferred = <T>(): Deferred<T> => {
@@ -20,15 +12,17 @@ const deferred = <T>(): Deferred<T> => {
 };
 
 let mcpStatusResponse: Deferred<McpServerStatus[]> = deferred();
-const opencodeModule = await import('@/lib/opencode/client');
-// Derived from the real client rather than spread from it: the client is a
-// class instance, so a spread drops every prototype method the other modules
-// loaded in this process call at import time.
-// SAFETY: `Object.create` returns `any`; the object delegates to the real
-// client for everything the two overrides below do not define.
-const opencodeClientStub = Object.create(opencodeModule.opencodeClient) as typeof opencodeModule.opencodeClient;
-opencodeClientStub.listMcpServers = () => mcpStatusResponse.promise;
-mock.module('@/lib/opencode/client', () => ({ ...opencodeModule, opencodeClient: opencodeClientStub }));
+
+// The store reads MCP status from the agent runtime; register a double whose
+// `listMcpServers` is this test's deferred response. Register it under the
+// default id and under `opencode`, the runtime id OpenCode-created sessions
+// carry.
+const createFakeRuntime = (id: string): AgentRuntime => ({
+  id,
+  listMcpServers: () => mcpStatusResponse.promise,
+} as unknown as AgentRuntime);
+registerAgentRuntime(createFakeRuntime('omp'));
+registerAgentRuntime(createFakeRuntime('opencode'));
 
 let skillsResponse: Deferred<Response> = deferred();
 const runtimeFetchModule = await import('@/lib/runtime-fetch');

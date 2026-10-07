@@ -1308,7 +1308,6 @@ export const settingsDict = {
   'settings.openchamber.visual.section.localization': 'Lokalizacja',
   'settings.openchamber.visual.section.mermaidRendering': 'Renderowanie Mermaid',
   'settings.openchamber.visual.section.mermaidRenderingAria': 'Tryb renderowania Mermaid',
-  'settings.openchamber.visual.section.messageStreamTransport': 'Transport strumienia wiadomości',
   'settings.openchamber.visual.section.sessionActivity': 'Aktywność sesji',
   'settings.openchamber.visual.section.navigation': 'Nawigacja',
   'settings.openchamber.visual.section.privacy': 'Prywatność',

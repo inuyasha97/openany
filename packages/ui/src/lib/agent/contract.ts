@@ -1,4 +1,4 @@
-import type { FileDiffInfo, FormAnswer, FormInfo, SessionInboxDelivery, SessionRevert } from "@opencode/client"
+import type { FileDiffInfo, FormAnswer, FormInfo, SessionInboxDelivery, SessionRevert } from "@/lib/opencode/wire"
 import type { ContextPartMetadata } from "@/lib/messages/contextParts"
 import type {
   Agent,

@@ -1,4 +1,4 @@
-import { opencodeClient } from '@/lib/opencode/client';
+import { openChamberClient } from '@/lib/openchamber/client';
 import { getAgentRuntime } from '@/lib/agent/registry';
 import type { Session } from '@/lib/opencode/model';
 import type { GitWorktreeSnapshotResult } from '@/lib/api/types';
@@ -138,9 +138,9 @@ export async function startRunFusion(input: {
 }): Promise<{ sessionId: string; directory: string; mode: FusionMode }> {
   const { run, judge } = input;
   const runtimeKey = getRuntimeKey();
-  const client = opencodeClient.getSdkClient();
+  const runtimeIdentity = openChamberClient.getRuntimeIdentity();
   const assertCurrent = () => {
-    if (getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== client) throw new Error('Runtime changed');
+    if (getRuntimeKey() !== runtimeKey || openChamberClient.getRuntimeIdentity() !== runtimeIdentity) throw new Error('Runtime changed');
   };
 
   const sources = await loadFusionSources(run, input.sourceIds, input.sessionById, assertCurrent);

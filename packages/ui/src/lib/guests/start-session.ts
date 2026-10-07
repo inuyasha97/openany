@@ -208,7 +208,6 @@ const sendGuestFirstMessage = async (
       undefined,
       undefined,
       selection.variant,
-      undefined,
       { sessionId, directory },
     );
     return 'sent';

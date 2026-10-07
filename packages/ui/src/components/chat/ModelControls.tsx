@@ -4,8 +4,7 @@ import { focusChatInput } from './composer/editor/dom';
 import { MobileModelButton } from './MobileModelButton';
 import type { EditPermissionMode } from '@/stores/types/sessionTypes';
 import type { ModelMetadata } from '@/types';
-import type { Agent, PermissionRuleset } from '@/lib/opencode/model';
-import type { PermissionEffect } from '@opencode/client';
+import type { Agent, PermissionEffect, PermissionRuleset } from '@/lib/opencode/model';
 import {
     DropdownMenu,
     DropdownMenuContent,

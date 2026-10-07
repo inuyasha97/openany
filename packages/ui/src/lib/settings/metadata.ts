@@ -7,13 +7,11 @@ export type SettingsPageSlug =
   | 'projects'
   | 'remote-instances'
   | 'providers'
-  | 'web-search'
   | 'usage'
   | 'agents'
   | 'behavior'
   | 'commands'
   | 'mcp'
-  | 'plugins'
   | 'skills.installed'
   | 'skills.catalog'
   | 'git'
@@ -99,13 +97,6 @@ export const SETTINGS_PAGE_METADATA: readonly SettingsPageMeta[] = [
     keywords: ['provider', 'providers', 'models', 'model', 'api key', 'api keys', 'openai', 'anthropic', 'ollama', 'credentials'],
   },
   {
-    slug: 'web-search',
-    title: 'Web search',
-    group: 'opencode',
-    kind: 'single',
-    keywords: ['web search', 'websearch', 'search', 'internet', 'exa', 'tavily', 'firecrawl', 'parallel', 'tinyfish'],
-  },
-  {
     slug: 'usage',
     title: 'Usage',
     group: 'general',
@@ -139,13 +130,6 @@ export const SETTINGS_PAGE_METADATA: readonly SettingsPageMeta[] = [
     group: 'opencode',
     kind: 'single',
     keywords: ['mcp', 'model context protocol', 'servers', 'tools', 'remote', 'stdio'],
-  },
-  {
-    slug: 'plugins',
-    title: 'Plugins',
-    group: 'opencode',
-    kind: 'single',
-    keywords: ['plugin', 'plugins', 'addons', 'npm', 'opencode-wakatime'],
   },
   {
     slug: 'skills.installed',
@@ -304,8 +288,6 @@ export function getSettingsNavIcon(slug: SettingsPageSlug): IconName | null {
 
     case 'providers':
       return 'cloud';
-    case 'web-search':
-      return 'global';
     case 'agents':
       return 'ai-agent';
     case 'behavior':
@@ -314,8 +296,6 @@ export function getSettingsNavIcon(slug: SettingsPageSlug): IconName | null {
       return 'slash-commands-2';
     case 'mcp':
       return null;
-    case 'plugins':
-      return 'plug-2';
 
     case 'skills.installed':
       return 'book-open';

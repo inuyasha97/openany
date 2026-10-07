@@ -2029,7 +2029,6 @@ export const settingsDict = {
   'settings.openchamber.visual.section.chatDisplay': '表示',
   'settings.openchamber.visual.section.chatMessageOptions': 'メッセージオプション',
   'settings.openchamber.visual.section.chatFeatures': '機能',
-  'settings.openchamber.visual.section.messageStreamTransport': 'メッセージストリーム転送',
   'settings.openchamber.visual.section.activityDefault': 'アクティビティデフォルト',
   'settings.openchamber.visual.section.activityDefaultAria': 'アクティビティデフォルトモード',
   'settings.openchamber.visual.section.sessionActivity': 'セッションアクティビティ',

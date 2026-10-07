@@ -75,14 +75,6 @@ describe('snippet picker', () => {
 });
 
 describe('mention picker', () => {
-    test('an at-sign after whitespace opens the mention picker', () => {
-        expect(at('see @src/ap|')).toEqual({ kind: 'mention', query: 'src/ap' });
-    });
-
-    test('a bare at-sign opens it with an empty query', () => {
-        expect(at('@|')).toEqual({ kind: 'mention', query: '' });
-    });
-
     test('an email address does not open it', () => {
         expect(at('me@example|')).toBeNull();
     });
@@ -97,14 +89,6 @@ describe('mention picker', () => {
             inputSource: 'paste',
             insertedText: '@src/app.ts',
         })).toBeNull();
-    });
-
-    test('a paste without an at-sign still resolves normally', () => {
-        expect(at('@src|', {
-            inputMode: 'normal',
-            inputSource: 'paste',
-            insertedText: 'src',
-        })).toEqual({ kind: 'mention', query: 'src' });
     });
 });
 
@@ -132,5 +116,4 @@ test('BTW leaves file and agent references as text while retaining other pickers
     expect(at('@src/file|', btw)).toBeNull();
     expect(at('@plan|', btw)).toBeNull();
     expect(at('#snippet|', btw)).toEqual({ kind: 'snippet', query: 'snippet' });
-    expect(at('@plan|')?.kind).toBe('mention');
 });
