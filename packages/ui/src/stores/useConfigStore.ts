@@ -2401,6 +2401,13 @@ export const useConfigStore = create<ConfigStore>()(
                         markStartupTrace('loadAgents:skippedUnknownDirectory', { requestedDirectory, source: options?.source ?? 'unknown' });
                         return false;
                     }
+                    // No runtime agent list to read (see `capabilities.agents`):
+                    // skip before the retry loop so startup does not spend three
+                    // rejected attempts per store on an empty capability.
+                    if (!getAgentRuntime().capabilities.agents) {
+                        markStartupTrace('loadAgents:skippedNoAgentList', { requestedDirectory, source: options?.source ?? 'unknown' });
+                        return false;
+                    }
                     const effectiveDirectory = configDirectory ?? openChamberClient.getDirectory() ?? null;
                     const directoryKey = toDirectoryKey(configDirectory);
                     const inFlightKey = getConfigLoadKey(runtimeContext, directoryKey);

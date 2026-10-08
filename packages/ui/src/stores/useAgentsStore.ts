@@ -6,7 +6,6 @@ import { openChamberClient } from "@/lib/openchamber/client";
 import { getAgentRuntime } from "@/lib/agent/registry";
 import { emitConfigChange, scopeMatches, subscribeToConfigChanges, type ConfigChangeScope } from "@/lib/configSync";
 import {
-  startConfigUpdate,
   finishConfigUpdate,
   updateConfigUpdateMessage,
 } from "@/lib/configUpdate";
@@ -429,6 +428,11 @@ export const useAgentsStore = create<AgentsStore>()(
         },
 
         loadAgents: async (requestedDirectory?: string | null) => {
+          // The runtime exposes no agent list (`capabilities.agents`), so there
+          // is nothing to read and nothing to refresh: OMP picks subagents
+          // inside the model's own `task` call. Answer like a skipped load so
+          // no caller emits a config change for an empty result.
+          if (!getAgentRuntime().capabilities.agents) return false;
           const configDirectory = resolveDirectory(requestedDirectory);
           const cacheKey = getAgentsCacheKey(configDirectory);
           const isAmbient = cacheKey === getAgentsCacheKey(getConfigDirectory());
