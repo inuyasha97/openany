@@ -36,7 +36,7 @@ const ASKABLE_METHODS = new Set(['confirm', 'select', 'input', 'editor'])
 const FORM_METHODS = new Set(['select', 'editor'])
 
 /** The one field key a projected form carries; the reply reads it back. */
-export const OMP_FORM_FIELD_KEY = 'value'
+const OMP_FORM_FIELD_KEY = 'value'
 
 const isFormMethod = (method) => FORM_METHODS.has(method)
 
