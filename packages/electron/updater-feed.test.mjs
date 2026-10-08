@@ -14,10 +14,12 @@ const overrideEnvironment = {
 
 test('production updater feed is immutable GitHub configuration', () => {
   assert.equal(Object.isFrozen(PRODUCTION_UPDATER_FEED), true);
+  // The fork's own releases. Pointing this at another product's repository is
+  // how an install gets offered an update that replaces it.
   assert.deepEqual(PRODUCTION_UPDATER_FEED, {
     provider: 'github',
-    owner: 'openchamber',
-    repo: 'openchamber',
+    owner: 'inuyasha97',
+    repo: 'openany',
   });
 });
 

@@ -12,15 +12,20 @@ const __dirname = path.dirname(__filename);
 
 const PACKAGE_NAME = '@openchamber/web';
 const PACKAGE_PATH_SEGMENTS = PACKAGE_NAME.split('/');
-const NPM_REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
-const GITHUB_RELEASES_URL = 'https://github.com/openchamber/openchamber/releases';
-const GITHUB_RELEASES_API_URL = 'https://api.github.com/repos/openchamber/openchamber/releases';
+// This fork's own releases. The npm registry entry for `@openchamber/web`
+// belongs to the upstream project, so consulting it here would offer — and
+// `openchamber update` would install — a different product over this one.
+const GITHUB_RELEASES_URL = 'https://github.com/inuyasha97/openany/releases';
+const GITHUB_RELEASES_API_URL = 'https://api.github.com/repos/inuyasha97/openany/releases';
+const GITHUB_RELEASE_TAG_PREFIX = 'openany-v';
 let cachedDetectedPm = null;
 
 function getSpawnSyncBaseOptions() {
   return process.platform === 'win32' ? { windowsHide: true } : {};
 }
-const UPDATE_CHECK_URL = process.env.OPENCHAMBER_UPDATE_API_URL || 'https://api.openchamber.dev/v1/update/check';
+// Empty unless a deployment runs its own update service: the default the
+// upstream project used was its own website, which is not this build's feed.
+const UPDATE_CHECK_URL = process.env.OPENCHAMBER_UPDATE_API_URL || '';
 
 function getOpenChamberConfigDir() {
   if (process.platform === 'win32') {
@@ -97,10 +102,10 @@ async function resolveAndroidApkUrl(version, candidateUrl) {
   }
 
   try {
-    const response = await fetch(`${GITHUB_RELEASES_API_URL}/tags/v${version}`, {
+    const response = await fetch(`${GITHUB_RELEASES_API_URL}/tags/${GITHUB_RELEASE_TAG_PREFIX}${version}`, {
       headers: {
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'openchamber-update-check',
+        'User-Agent': 'openany-update-check',
       },
       signal: AbortSignal.timeout(10000),
     });
@@ -114,7 +119,7 @@ async function resolveAndroidApkUrl(version, candidateUrl) {
         && typeof asset.browser_download_url === 'string'
       ))
       : [];
-    const canonicalAsset = apkAssets.find((asset) => /^OpenChamber-.+-android\.apk$/i.test(asset.name));
+    const canonicalAsset = apkAssets.find((asset) => /^OpenAny-.+-android\.apk$/i.test(asset.name));
     return (canonicalAsset || apkAssets[0])?.browser_download_url;
   } catch {
     return undefined;
@@ -122,6 +127,9 @@ async function resolveAndroidApkUrl(version, candidateUrl) {
 }
 
 async function checkForUpdatesFromApi(currentVersion, options = {}) {
+  // No deployment-configured update service: this build reads its releases from
+  // GitHub instead (see `getLatestVersion`).
+  if (!UPDATE_CHECK_URL) return null;
   try {
     const appType = normalizeAppType(options.appType);
     const hostPlatform = mapPlatform(process.platform);
@@ -161,7 +169,7 @@ async function checkForUpdatesFromApi(currentVersion, options = {}) {
     const versionComparison = compareVersions(data.latestVersion, currentVersion);
     if (versionComparison < 0) return null;
 
-    const releaseUrl = `${GITHUB_RELEASES_URL}/tag/v${data.latestVersion}`;
+    const releaseUrl = `${GITHUB_RELEASES_URL}/tag/${GITHUB_RELEASE_TAG_PREFIX}${data.latestVersion}`;
     const downloadUrl = typeof data.downloadUrl === 'string'
       ? data.downloadUrl
       : typeof data.download?.url === 'string'
@@ -685,21 +693,27 @@ export function getCurrentVersion() {
 }
 
 /**
- * Fetch latest version from npm registry
+ * Latest released version, from this fork's GitHub releases (`openany-v*`).
  */
 async function getLatestVersion() {
   try {
-    const response = await fetch(NPM_REGISTRY_URL, {
-      headers: { Accept: 'application/json' },
+    const response = await fetch(`${GITHUB_RELEASES_API_URL}/latest`, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'openany-update-check',
+      },
       signal: AbortSignal.timeout(10000),
     });
 
     if (!response.ok) {
-      throw new Error(`Registry responded with ${response.status}`);
+      throw new Error(`Release feed responded with ${response.status}`);
     }
 
     const data = await response.json();
-    return data['dist-tags']?.latest || null;
+    const tag = typeof data?.tag_name === 'string' ? data.tag_name.trim() : '';
+    if (!tag.startsWith(GITHUB_RELEASE_TAG_PREFIX)) return null;
+    const version = tag.slice(GITHUB_RELEASE_TAG_PREFIX.length).trim();
+    return version || null;
   } catch (error) {
     return null;
   }
@@ -751,15 +765,21 @@ export async function checkForUpdates(options = {}) {
   const appType = normalizeAppType(options.appType);
   const platform = normalizePlatform(options.platform);
 
+  // A web or extension install has no channel this fork can update from: the
+  // package manager would fetch upstream's package, which is a different
+  // product. Say so instead of offering that update. The desktop updates
+  // through electron-updater, so its check still answers.
+  if (appType === 'web' || appType === 'vscode') {
+    return {
+      available: false,
+      currentVersion,
+      error: `This build is not installed from a package registry. Install updates from ${GITHUB_RELEASES_URL}.`,
+    };
+  }
+
   if (currentVersion !== 'unknown') {
     const remote = await checkForUpdatesFromApi(currentVersion, options);
     if (remote) {
-      if (remote.available && appType === 'web') {
-        const npmLatest = await getLatestVersion();
-        if (!npmLatest || compareVersions(npmLatest, remote.version) < 0) {
-          remote.available = false;
-        }
-      }
       return {
         ...remote,
         packageManager: pm,
@@ -793,7 +813,7 @@ export async function checkForUpdates(options = {}) {
     version: latestVersion,
     currentVersion,
     body: changelog,
-    releaseUrl: `${GITHUB_RELEASES_URL}/tag/v${latestVersion}`,
+    releaseUrl: `${GITHUB_RELEASES_URL}/tag/${GITHUB_RELEASE_TAG_PREFIX}${latestVersion}`,
     downloadUrl,
     packageManager: pm,
     // Show our CLI command, not raw package manager command
@@ -802,23 +822,16 @@ export async function checkForUpdates(options = {}) {
 }
 
 /**
- * Execute the update (used by CLI)
+ * Execute the update (used by CLI).
+ *
+ * This build is not published to a package registry, so there is no package for
+ * a package manager to install: running the install command would fetch
+ * upstream's `@openchamber/web` — a different product — over this one.
  */
-export function executeUpdate(pm = detectPackageManager(), options = {}) {
-  const command = getUpdateCommand(pm);
-  if (!options?.silent) {
-    console.log(`Updating ${PACKAGE_NAME} using ${pm}...`);
-    console.log(`Running: ${command}`);
-  }
-
-  const result = spawnSync(command, {
-    stdio: 'inherit',
-    shell: true,
-    ...getSpawnSyncBaseOptions(),
-  });
-
+export function executeUpdate() {
   return {
-    success: result.status === 0,
-    exitCode: result.status,
+    success: false,
+    exitCode: 1,
+    error: `This build is not installed from a package registry. Install updates from ${GITHUB_RELEASES_URL}.`,
   };
 }
