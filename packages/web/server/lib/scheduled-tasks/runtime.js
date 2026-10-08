@@ -499,13 +499,23 @@ export const createScheduledTasksRuntime = (deps) => {
     // prompt instead of being parked ahead of it as separate messages: the model
     // still reads the prompt against them, and no extra turn starts.
     const blocks = [];
+    // A prompt that starts with `/name args` is expanded by OMP itself, so it has
+    // to lead the text: context placed in front of it would hide the slash and
+    // the task would be sent as literal text.
+    const taskPrompt = expandSnippets(task.execution.prompt, projectPath);
+    const leads = taskPrompt.trimStart().startsWith('/');
+    if (leads) {
+      blocks.push(taskPrompt);
+    }
     if (knowledge.text) {
       blocks.push(knowledge.text);
     }
     if (task.execution.goalEnabled) {
       blocks.push(buildGoalIntroText(task.execution.goalTokenBudget));
     }
-    blocks.push(expandSnippets(task.execution.prompt, projectPath));
+    if (!leads) {
+      blocks.push(taskPrompt);
+    }
 
     const accepted = await promptSession(sessionID, blocks.join('\n\n'));
     if (accepted !== true) {
@@ -616,12 +626,6 @@ export const createScheduledTasksRuntime = (deps) => {
       });
     }
 
-    if (scheduledCommand) {
-      // A slash command used to be dispatched through OpenCode's own command
-      // route; OMP's prompt carries one authored text and has no command route,
-      // so the command cannot be run and its raw text must not be sent instead.
-      throw unsupportedOnOmp(`the "/${scheduledCommand.command}" command`);
-    }
     await runPrompt({ sessionID, projectPath, task });
 
     const finishedAt = Date.now();

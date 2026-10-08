@@ -348,7 +348,7 @@ describe('scheduled-tasks runtime prompt dispatch', () => {
     expect(result).toMatchObject({ ok: true, status: 'success', sessionID: 'ses_run' });
   });
 
-  it('fails a slash-command task instead of sending the raw command text', async () => {
+  it('runs a slash-command task by sending the command text first, where OMP expands it', async () => {
     const host = createHost();
     host.listCommands = vi.fn(async () => [{ name: 'review' }]);
     configureOmpRuntimeHost(() => host);
@@ -358,10 +358,12 @@ describe('scheduled-tasks runtime prompt dispatch', () => {
     const result = await runtime.runNow('proj', 'task-1');
     runtime.stop();
 
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe('error');
-    expect(result.error).toMatch(/cannot use the "\/review" command: the OMP runtime has no equivalent/);
-    expect(host.prompt).not.toHaveBeenCalled();
+    expect(host.prompt).toHaveBeenCalledTimes(1);
+    const text = host.prompt.mock.calls[0][1];
+    // The command has to lead the text: OMP expands a prompt that starts with
+    // `/name args`, so anything in front of it would hide the slash.
+    expect(text.startsWith('/review src/components')).toBe(true);
+    expect(result).toMatchObject({ ok: true, status: 'success' });
   });
 
   it('fails a task pinned to an agent or a model variant the runtime cannot apply', async () => {
