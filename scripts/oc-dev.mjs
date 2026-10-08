@@ -196,14 +196,14 @@ function step(label, fn) {
 const RELEASE_CHANGELOG_FILES = ['changelog', 'packages/vscode/CHANGELOG.md', ...(existsSync(path.join(repoRoot, 'CHANGELOG.md')) ? ['CHANGELOG.md'] : [])];
 
 function printReleaseNextSteps(version) {
-  log.success(`Release v${version} prepared locally`);
+  log.success(`Release openany-v${version} prepared locally`);
   log.info('Next steps (only the release files are staged, unrelated changes stay out):');
   console.log(`  git add ${[...RELEASE_PACKAGE_FILES, 'bun.lock', ...RELEASE_CHANGELOG_FILES].join(' ')}`);
-  console.log(`  git commit -m "release v${version}"`);
-  console.log(`  git tag v${version}`);
-  console.log(`  git push origin main v${version}`);
+  console.log(`  git commit -m "release openany-v${version}"`);
+  console.log(`  git tag openany-v${version}`);
+  console.log(`  git push origin main openany-v${version}`);
   console.log('');
-  console.log('Pushing the tag is what starts the GitHub Actions release; pushing main alone does not.');
+  console.log('Pushing the tag is what starts the OpenAny release workflow (openany-release.yml); pushing main alone does not.');
 }
 
 function normalizeAction(action = '') {

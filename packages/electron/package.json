@@ -86,6 +86,14 @@
       }
     ],
     "afterPack": "scripts/after-pack.cjs",
+    "protocols": [
+      {
+        "name": "OpenAny",
+        "schemes": [
+          "openany"
+        ]
+      }
+    ],
     "directories": {
       "buildResources": "resources/icons",
       "output": "dist"
@@ -124,14 +132,14 @@
       ],
       "category": "Development",
       "icon": "resources/icons/app-icon.svg",
-      "executableName": "openchamber",
+      "executableName": "openany",
       "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
       "desktop": {
         "entry": {
-          "Name": "OpenChamber",
-          "Comment": "Desktop runtime for OpenChamber",
-          "Icon": "openchamber",
-          "StartupWMClass": "openchamber"
+          "Name": "OpenAny",
+          "Comment": "OpenAny desktop runtime",
+          "Icon": "openany",
+          "StartupWMClass": "openany"
         }
       }
     },
@@ -168,8 +176,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "openchamber",
-      "repo": "openchamber"
+      "owner": "inuyasha97",
+      "repo": "openany"
     }
   }
 }
