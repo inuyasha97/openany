@@ -1,12 +1,13 @@
 # OpenAny release: build the desktop app on macOS, Windows and Linux, then
 # attach every artifact to a draft GitHub Release.
 #
-# Independent of upstream's `release.yml`, which triggers on `v*` and publishes
-# to npm. This one triggers on `openany-v*` and never publishes a package: each
-# OS builds its installer unsigned, and one release job collects them.
+# Independent of upstream's `release.yml` (which triggers on `v*` and publishes
+# packages). This one triggers on `openany-v*` and never publishes a package:
+# each OS builds its installer unsigned — the fork ships no signing
+# certificates — and one release job collects them.
 #
-# Unverified scaffold beyond macOS (the first macOS run needed a fix). Windows
-# and Linux may need iteration (native rebuild, artifact paths).
+# The update manifests are part of the upload: without `latest*.yml` the
+# packaged app can check for updates but can never find one.
 
 name: OpenAny Release
 
@@ -49,16 +50,18 @@ jobs:
           node-version: '22'
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Build web assets
-        run: bun run --cwd packages/electron build:web-assets
-      - name: Prepare bundled OpenCode CLI
-        run: bun run --cwd packages/electron prepare:opencode-cli
-      - name: Bundle Electron main
-        run: bun run --cwd packages/electron bundle:main
-      - name: Rebuild native modules
-        run: bun run --cwd packages/electron rebuild:native
+      # `package` runs the whole chain: build the web UI, verify the staged
+      # assets, build @openchamber/omp-adapter, stage the pinned OMP binary,
+      # bundle the Electron main process, rebuild native modules, then run
+      # electron-builder.
       - name: Package (unsigned)
         run: bun run --cwd packages/electron package -- ${{ matrix.package_args }}
+      # The AppImage is the one target whose payload this repo can check end to
+      # end: desktop identity, bundled OMP CLI version and architecture, and
+      # every native module.
+      - name: Verify Linux AppImage
+        if: runner.os == 'Linux'
+        run: bun run --cwd packages/electron verify:linux-appimage
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
@@ -69,6 +72,8 @@ jobs:
             packages/electron/dist/*.zip
             packages/electron/dist/*.exe
             packages/electron/dist/*.AppImage
+            packages/electron/dist/*.yml
+            packages/electron/dist/*.blockmap
 
   release:
     needs: build
