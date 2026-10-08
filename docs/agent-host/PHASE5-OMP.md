@@ -72,7 +72,7 @@ The projector's `default` branch drops them; none has a canonical `SyncEvent` to
 Fork-owned `packages/web/server/lib/agents/` holds three modules, all unit-tested against a fake adapter (`bunx vitest run server/lib/agents`):
 
 - `omp-runtime-host.js` (`createOmpRuntimeHost`): owns one `OmpRuntime` and one projector per session, and broadcasts each projected batch as a single `openchamber:omp` frame `{ sessionID, directory, events }` on the shared control stream. `directory` is the session cwd when known.
-- `omp-routes.js` (`registerOmpRoutes`): `GET /api/agents/omp/sessions`, `POST /api/agents/omp/sessions`, `POST /api/agents/omp/sessions/:id/prompt`, `POST /api/agents/omp/sessions/:id/abort`. Bodies are parsed per route, and an unknown session is a 404.
+- `omp-routes.js` (`registerOmpRoutes`): the session family — `GET/POST /api/agents/omp/sessions`, `GET/PATCH/DELETE /sessions/:id`, `POST /sessions/:id/prompt|abort|move|model|thinking|fast-mode|branch`, `GET /sessions/:id/messages|status|permissions|forms`, `POST /sessions/:id/permissions/:requestId|forms/:requestId` — plus `GET /api/agents/omp/status|models|commands|mcp|login/providers` and the MCP and login mutations. Bodies are parsed per route, an unknown session is a 404, an unknown form or branch entry id is a 400 naming what OMP said.
 - `index.js` (`installOmpAgentRuntime`): the flag gate and the lazy adapter import.
 
 The adapter's `OmpRuntime.subscribe` now passes `(sessionId, event)`; the projector is stateful per session and OMP events carry no session id, so the runtime supplies it.
@@ -147,17 +147,21 @@ Landed and verified:
   `switch_session` when the working directory would change, so
   `OmpRuntime.getSession` starts the process in the session's own `cwd`.
 - **Server host** (`packages/web/server/lib/agents/`): `omp-routes.js` (sessions,
-  prompt, abort, messages, rename, delete, move, model, status, models,
-  commands, permissions, MCP), `omp-runtime-host.js` (per-session projector,
-  `openchamber:omp` frames, idle sweep), `omp-approvals.js` (OMP
-  `extension_ui_request` ↔ `permission.asked`/`permission.replied`),
-  `omp-config.js` (MCP `mcp.json` read/write, at the path OMP itself reads —
-  its agent directory — and cross-checked against OMP's own reader and
-  `mcp-schema.json`). The routes are always registered; there is no flag or
-  setting gate.
-- **UI client**: `OmpRuntimeClient` capabilities now `commands`, `skills`,
-  `rename`, `delete`, `move`, `permissions`, `mcp`, `modelSelection` (model
-  roles stay off — see the note above).
+  prompt, abort, messages, rename, delete, move, model, thinking, fast mode,
+  status, models, commands, permissions, forms, branch, MCP, login),
+  `omp-runtime-host.js` (per-session projector, `openchamber:omp` frames, idle
+  sweep), `omp-approvals.js` (OMP `extension_ui_request` ↔
+  `permission.asked`/`permission.replied`, and `select`/`editor` frames ↔ the
+  form path), `omp-config.js` (MCP `mcp.json` read/write, at the path OMP
+  itself reads — its agent directory — and cross-checked against OMP's own
+  reader and `mcp-schema.json`). The routes are always registered; there is no
+  flag or setting gate.
+- **UI client**: `OmpRuntimeClient` capabilities are `commands`, `skills`,
+  `rename`, `delete`, `move`, `permissions`, `mcp`, `modelSelection`,
+  `attachments`, `forms` and `fork`. `agents`, `agentSelection`, `revert` and
+  `turnDiff` stay false, each with the reason in a comment beside it: OMP picks
+  subagents inside the model's own `task` call and exposes no session agent to
+  select, and it keeps no file snapshots and no per-turn diff API.
 - **Module split**: the OpenChamber-owned server modules moved from
   `lib/opencode/` to `lib/openchamber/`; the OpenCode-specific modules stayed
   behind pending removal.
@@ -278,3 +282,50 @@ already used.
 already ran the OpenChamber server, which hosts OMP in process, so the port
 replaced the stale OpenCode artifacts (provider config, plugin link, inert
 env vars, readiness key, restart error code) rather than the runtime.
+
+## The agent surface closed on OMP (2026-10-08)
+
+Phase 6 (`docs/superpowers/plans/2026-10-08-p6-close-omp-gaps-web-electron.md`)
+took the capabilities every remaining affordance needs and either backed it
+with a real OMP mechanism or stopped offering it.
+
+**Backed, verified against the installed OMP:**
+
+- **Commands**: OMP expands `/name args` inside its own `prompt` — file
+  commands, extension commands, MCP prompts and, with `enableSkillCommands`,
+  `/skill:<name>`. The client sends the text; there is no command RPC. Live
+  check: `/ping hello` returned the command's template with the argument
+  substituted.
+- **Thinking**: `set_thinking_level` / `cycle_thinking_level` / `set_fast_mode`;
+  the model catalog carries each model's `reasoning`, `efforts` and
+  `defaultLevel`, and the picker offers an effort control only when the model
+  reports any.
+- **Status**: `get_state` reports `isStreaming`, `isCompacting`,
+  `queuedMessageCount`, `tokensPerSecond` and `contextUsage`; busy is the OR of
+  the first two, so a compacting turn no longer reads idle. OMP reports a
+  failed turn as an event, not a status.
+- **Forms**: the model's `ask` tool asks through `extension_ui_request`
+  (`select` with options, `editor` for free text) — the same channel
+  permissions use. `confirm` and `input` stay permissions (the provider login's
+  manual-code prompt is an `input`).
+- **Fork**: `branch { entryId }` plus `new_session { parentSession }`. OMP
+  creates a **new** session only when branching at the first user message; a
+  deeper branch rewrites the conversation in place, which the UI detects and
+  reports instead of navigating to an unchanged id. Only user-message entry ids
+  are valid; anything else is refused with the original session untouched.
+- **Cache retention**: OMP keeps prompt caches warm itself; the knob is
+  `providers.cacheRetention` (`auto|short|long|none`) in the agent dir's
+  `config.yml`, served by `GET/PUT /api/config/cache-retention`. The session
+  warming row is gone — an external keep-alive was always redundant.
+
+**Deliberately not offered, with the reason in the code:**
+
+- Revert and per-turn diff: OMP keeps no file snapshots and has no diff API;
+  `branch` rewrites the transcript instead. The revert actions, the diff view's
+  turn scope and the Agents settings list are gated on their capability flags,
+  so nothing is offered that would fail.
+- Session agent selection: OMP has no switchable session agent; subagents are
+  chosen by the model inside a `task` call.
+- Skipped config routes: websearch, plugins and custom providers are OMP's own
+  (`web_search.*`, `extensions`/`disabledExtensions` and its `plugin` CLI,
+  `models.yml`) and no UI calls an OpenChamber route for them.
