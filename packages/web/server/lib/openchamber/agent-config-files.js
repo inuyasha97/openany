@@ -64,6 +64,8 @@ const SKILL_DIR = path.join(OPENCODE_CONFIG_DIR, 'skills');
 // `config.yaml` is accepted as a legacy fallback (`MAIN_CONFIG_FILENAMES`).
 const CONFIG_FILE = path.join(OPENCODE_CONFIG_DIR, 'config.yml');
 const CONFIG_FILE_FALLBACK = path.join(OPENCODE_CONFIG_DIR, 'config.yaml');
+// The user config files OMP loads, most-preferred first.
+const USER_CONFIG_PATHS = [CONFIG_FILE, CONFIG_FILE_FALLBACK];
 // Provider credentials/base URLs configured on disk live in `models.yml`.
 const MODELS_FILE = path.join(OPENCODE_CONFIG_DIR, 'models.yml');
 const PROMPT_FILE_PATTERN = /^\{file:(.+)\}$/i;
@@ -213,7 +215,7 @@ function resolveCustomConfigPath() {
 
 function getConfigPaths(workingDirectory) {
   return {
-    userPaths: [CONFIG_FILE, CONFIG_FILE_FALLBACK],
+    userPaths: USER_CONFIG_PATHS,
     projectPath: getProjectConfigPath(workingDirectory),
     modelsPath: MODELS_FILE,
     // Resolve at call time so PI_CONFIG_FILES changes (and tests) take effect.
@@ -221,6 +223,12 @@ function getConfigPaths(workingDirectory) {
   };
 }
 
+/**
+ * The user config file whose values are in force: the first existing candidate
+ * of `userPaths`, or the first candidate when none exists yet (the canonical
+ * `config.yml`). OMP loads `config.yaml` only as the fallback for a missing
+ * `config.yml`, so exactly one of the two files is the read *and* write target.
+ */
 function getPrimaryUserConfigPath(userPaths) {
   for (const userPath of userPaths) {
     if (fs.existsSync(userPath)) {
@@ -228,7 +236,18 @@ function getPrimaryUserConfigPath(userPaths) {
     }
   }
 
-  return CONFIG_FILE;
+  return userPaths[0] ?? CONFIG_FILE;
+}
+
+/**
+ * The single user config file OMP actually loads: the first existing of
+ * `[config.yml, config.yaml]`, falling back to the canonical `config.yml`.
+ * Callers that read or write one settings file directly (rather than the merged
+ * layer view) MUST target this file — writing a fresh `config.yml` while OMP is
+ * loading a `config.yaml` shadows it and silently drops its settings.
+ */
+function getUserConfigPath() {
+  return getPrimaryUserConfigPath(USER_CONFIG_PATHS);
 }
 
 const INVALID_CONFIG = 'INVALID_CONFIG';
@@ -782,6 +801,8 @@ export {
   ensureDirs,
   parseMdFile,
   writeMdFile,
+  getPrimaryUserConfigPath,
+  getUserConfigPath,
   readConfigFile,
   readConfigLayer,
   isPlainObject,

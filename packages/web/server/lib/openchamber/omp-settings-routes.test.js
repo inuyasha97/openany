@@ -4,9 +4,6 @@ import path from 'path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { readConfigFile, writeConfig } from './agent-config-files.js';
-import { registerOmpSettingsRoutes } from './omp-settings-routes.js';
-
 const createRouteRegistry = () => {
   const routes = new Map();
 
@@ -50,11 +47,25 @@ const createRequest = ({ body } = {}) => ({ body });
 
 const createTempAgentDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'omp-settings-routes-'));
 
-const mount = (agentDir) => {
-  const configFile = path.join(agentDir, 'config.yml');
+const ENV_KEYS = ['PI_CONFIG_DIR', 'PI_CODING_AGENT_DIR', 'OMP_PROFILE', 'PI_PROFILE', 'PI_CONFIG_FILES'];
+const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+
+/**
+ * Import the route module fresh so the agent dir it resolves the target file
+ * from is the temp directory, exactly as production wires it (the route takes
+ * no path dependency; it resolves `config.yml`/`config.yaml` itself).
+ */
+const mount = async () => {
+  vi.resetModules();
+  const agentConfigFiles = await import('./agent-config-files.js');
+  const { registerOmpSettingsRoutes } = await import('./omp-settings-routes.js');
   const { app, getRoute } = createRouteRegistry();
-  registerOmpSettingsRoutes(app, { readConfigFile, writeConfig, configFile });
-  return { getRoute, configFile };
+  registerOmpSettingsRoutes(app);
+  return {
+    getRoute,
+    readConfigFile: agentConfigFiles.readConfigFile,
+    writeConfig: agentConfigFiles.writeConfig,
+  };
 };
 
 beforeEach(() => {
@@ -68,17 +79,27 @@ afterEach(() => {
 
 describe('omp settings routes', () => {
   let agentDir;
+  let configYml;
+  let configYaml;
 
   beforeEach(() => {
     agentDir = createTempAgentDir();
+    configYml = path.join(agentDir, 'config.yml');
+    configYaml = path.join(agentDir, 'config.yaml');
+    for (const key of ENV_KEYS) delete process.env[key];
+    process.env.PI_CODING_AGENT_DIR = agentDir;
   });
 
   afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
   it('reads and writes providers.cacheRetention', async () => {
-    const { getRoute, configFile } = mount(agentDir);
+    const { getRoute, readConfigFile } = await mount();
 
     const putRes = createMockResponse();
     await getRoute('PUT', '/api/config/cache-retention')(
@@ -88,7 +109,7 @@ describe('omp settings routes', () => {
 
     expect(putRes.statusCode).toBe(200);
     expect(putRes.body).toEqual({ retention: 'short', changed: true });
-    expect(readConfigFile(configFile).providers.cacheRetention).toBe('short');
+    expect(readConfigFile(configYml).providers.cacheRetention).toBe('short');
 
     const getRes = createMockResponse();
     await getRoute('GET', '/api/config/cache-retention')(createRequest(), getRes);
@@ -98,7 +119,7 @@ describe('omp settings routes', () => {
   });
 
   it('answers the OMP default when the key is absent', async () => {
-    const { getRoute } = mount(agentDir);
+    const { getRoute } = await mount();
 
     const res = createMockResponse();
     await getRoute('GET', '/api/config/cache-retention')(createRequest(), res);
@@ -107,14 +128,14 @@ describe('omp settings routes', () => {
   });
 
   it('preserves every other key in config.yml', async () => {
-    const { getRoute, configFile } = mount(agentDir);
+    const { getRoute, readConfigFile, writeConfig } = await mount();
     writeConfig(
       {
         model: 'anthropic/claude',
         providers: { anthropic: { apiKey: 'secret' }, cacheRetention: 'long' },
         nested: { keep: [1, 2, 3] },
       },
-      configFile,
+      configYml,
     );
 
     const res = createMockResponse();
@@ -124,16 +145,40 @@ describe('omp settings routes', () => {
     );
 
     expect(res.body).toEqual({ retention: 'none', changed: true });
-    expect(readConfigFile(configFile)).toEqual({
+    expect(readConfigFile(configYml)).toEqual({
       model: 'anthropic/claude',
       providers: { anthropic: { apiKey: 'secret' }, cacheRetention: 'none' },
       nested: { keep: [1, 2, 3] },
     });
   });
 
+  it('reads and updates config.yaml in place when OMP falls back to it', async () => {
+    const { getRoute, readConfigFile, writeConfig } = await mount();
+    writeConfig({ model: 'anthropic/claude', providers: { cacheRetention: 'long' } }, configYaml);
+
+    const getRes = createMockResponse();
+    await getRoute('GET', '/api/config/cache-retention')(createRequest(), getRes);
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.body).toEqual({ retention: 'long' });
+
+    const putRes = createMockResponse();
+    await getRoute('PUT', '/api/config/cache-retention')(
+      createRequest({ body: { retention: 'short' } }),
+      putRes,
+    );
+
+    expect(putRes.body).toEqual({ retention: 'short', changed: true });
+    expect(readConfigFile(configYaml)).toEqual({
+      model: 'anthropic/claude',
+      providers: { cacheRetention: 'short' },
+    });
+    // A new config.yml would shadow the file OMP is actually loading.
+    expect(fs.existsSync(configYml)).toBe(false);
+  });
+
   it('reports changed: false when the value already matches', async () => {
-    const { getRoute, configFile } = mount(agentDir);
-    writeConfig({ providers: { cacheRetention: 'auto' } }, configFile);
+    const { getRoute, writeConfig } = await mount();
+    writeConfig({ providers: { cacheRetention: 'auto' } }, configYml);
 
     const res = createMockResponse();
     await getRoute('PUT', '/api/config/cache-retention')(
@@ -146,7 +191,7 @@ describe('omp settings routes', () => {
   });
 
   it('rejects a value OMP does not accept with the accepted ones named', async () => {
-    const { getRoute, configFile } = mount(agentDir);
+    const { getRoute } = await mount();
 
     const res = createMockResponse();
     await getRoute('PUT', '/api/config/cache-retention')(
@@ -159,11 +204,11 @@ describe('omp settings routes', () => {
     expect(res.body.error).toContain('short');
     expect(res.body.error).toContain('long');
     expect(res.body.error).toContain('none');
-    expect(fs.existsSync(configFile)).toBe(false);
+    expect(fs.existsSync(configYml)).toBe(false);
   });
 
   it('rejects a missing or non-string retention', async () => {
-    const { getRoute } = mount(agentDir);
+    const { getRoute } = await mount();
 
     for (const body of [undefined, {}, { retention: 5 }]) {
       const res = createMockResponse();
@@ -174,10 +219,8 @@ describe('omp settings routes', () => {
 
   it('answers 500 when the config file cannot be written', async () => {
     // A directory where the config file should be makes the write fail.
-    const unwritable = path.join(agentDir, 'config.yml');
-    fs.mkdirSync(unwritable);
-    const { app, getRoute } = createRouteRegistry();
-    registerOmpSettingsRoutes(app, { readConfigFile, writeConfig, configFile: unwritable });
+    fs.mkdirSync(configYml);
+    const { getRoute } = await mount();
 
     const res = createMockResponse();
     await getRoute('PUT', '/api/config/cache-retention')(
@@ -190,8 +233,8 @@ describe('omp settings routes', () => {
   });
 
   it('answers 500 when an unparseable config file cannot be read safely', async () => {
-    const { getRoute, configFile } = mount(agentDir);
-    fs.writeFileSync(configFile, 'providers: [unclosed\n', 'utf8');
+    const { getRoute } = await mount();
+    fs.writeFileSync(configYml, 'providers: [unclosed\n', 'utf8');
 
     const getRes = createMockResponse();
     await getRoute('GET', '/api/config/cache-retention')(createRequest(), getRes);

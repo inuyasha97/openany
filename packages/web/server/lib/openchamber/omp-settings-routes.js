@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import {
-  CONFIG_FILE,
+  getUserConfigPath,
   readConfigFile as defaultReadConfigFile,
   isPlainObject,
   writeConfig as defaultWriteConfig,
@@ -11,7 +11,7 @@ import {
  * `GET|PUT /api/config/cache-retention`.
  *
  * OMP keeps Anthropic's prompt cache warm itself; the knob is
- * `providers.cacheRetention` in the agent directory's `config.yml`
+ * `providers.cacheRetention` in the agent directory's user config file
  * (`auto|short|long|none`, OMP's `default` is `auto`). This replaced the old
  * session-warming row: there is no warm-up loop left to configure, only this
  * retention value, which OMP forwards to providers that support it.
@@ -36,11 +36,19 @@ export const registerOmpSettingsRoutes = (app, dependencies = {}) => {
   const {
     readConfigFile = defaultReadConfigFile,
     writeConfig = defaultWriteConfig,
-    configFile = CONFIG_FILE,
   } = dependencies;
 
+  /**
+   * The file OMP actually loads is the first existing of `config.yml` and the
+   * legacy `config.yaml` (falling back to the canonical `config.yml`). Resolve
+   * at call time so a machine whose settings live in `config.yaml` is read and
+   * updated in place — writing a fresh `config.yml` would shadow the file OMP
+   * loads and silently drop every setting it holds.
+   */
+  const resolveConfigFile = () => getUserConfigPath();
+
   const readRetention = () => {
-    const config = readConfigFile(configFile) ?? {};
+    const config = readConfigFile(resolveConfigFile()) ?? {};
     const stored = isPlainObject(config.providers) ? config.providers.cacheRetention : undefined;
     return cacheRetentionSchema.safeParse(stored).success ? stored : CACHE_RETENTION_DEFAULT;
   };
@@ -62,6 +70,7 @@ export const registerOmpSettingsRoutes = (app, dependencies = {}) => {
     }
 
     try {
+      const configFile = resolveConfigFile();
       const config = readConfigFile(configFile) ?? {};
       if (config.providers !== undefined && !isPlainObject(config.providers)) {
         throw new Error('the providers section is not a mapping');
