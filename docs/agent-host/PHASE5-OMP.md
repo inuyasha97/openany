@@ -151,8 +151,10 @@ Landed and verified:
   commands, permissions, MCP), `omp-runtime-host.js` (per-session projector,
   `openchamber:omp` frames, idle sweep), `omp-approvals.js` (OMP
   `extension_ui_request` ↔ `permission.asked`/`permission.replied`),
-  `omp-config.js` (MCP `mcp.json` read/write, cross-checked against OMP's own
-  reader). The routes are always registered; there is no flag or setting gate.
+  `omp-config.js` (MCP `mcp.json` read/write, at the path OMP itself reads —
+  its agent directory — and cross-checked against OMP's own reader and
+  `mcp-schema.json`). The routes are always registered; there is no flag or
+  setting gate.
 - **UI client**: `OmpRuntimeClient` capabilities now `commands`, `skills`,
   `rename`, `delete`, `move`, `permissions`, `mcp`, `modelSelection` (model
   roles stay off — see the note above).
@@ -224,3 +226,55 @@ ACP was the second non-OpenCode runtime the agent host contract targeted
   `docs/agent-host/PHASE6-ACP.md` is deleted.
 
 OMP is the only non-OpenCode runtime the contract targets.
+
+## Config surface restored, OpenCode UI and spaces cleaned (2026-10-08)
+
+An audit of the finished removal found the OpenCode **product** still
+present in two places the earlier phases missed.
+
+**The config-family routes were never re-registered.** Deleting the OpenCode
+server took the HTTP handlers with it — they lived in `lib/opencode/routes.js`,
+`config-entity-routes.js`, `skill-routes.js` and `plugin-routes.js` — while
+the storage ported to OMP (`settings-runtime.js`, `agent-config-files.js`,
+`skills.js`, `snippets.js`) was only reachable from internal services.
+Settings persistence was broken end to end: the running UI issued
+`404 GET/PUT /api/config/settings?surface=web`, and the skills, snippets,
+MCP, agent, command and AGENTS.md panels answered 404 too. They are back,
+unchanged in shape, in `lib/openchamber/config-{settings,snippet,skill,entity}-routes.js`,
+registered from `feature-routes-runtime.js`:
+
+- `GET/PUT /api/config/settings` over OMP settings;
+- the `/api/config/snippets*` routes over `snippets.js`;
+- the `/api/config/skills*` routes plus `catalog`, `catalog/source`, `scan`
+  and `install`, over `skills.js` and `lib/skills-catalog/*`;
+- the `/api/config/agents*` and `/api/config/commands*` routes over OMP's
+  markdown agent and command files — OMP has no per-entity JSON config
+  section, so that half answers the typed unsupported error rather than an
+  empty success;
+- the `/api/config/mcp*` routes over OMP's `mcp.json`;
+- `GET/PUT /api/behavior/agents-md` over the AGENTS.md OMP loads.
+
+Not restored, because no caller remains and OMP has no equivalent:
+`/api/config/websearch`, `/api/config/plugins*`, `/api/config/warming` and
+`/api/provider*`. The OpenCode process routes stay gone.
+
+`omp-config.js` also wrote the user MCP file to `~/.omp/mcp.json`, which OMP
+never reads: it builds its candidates from the agent directory. It now reads
+and writes `<agent dir>/mcp.json`, honours the `.mcp.json` spelling too, and
+edits whichever file a server actually lives in.
+
+**The UI still carried an OpenCode product.** A compatibility gate wrapped
+every app entry point and called a deleted route, a status dialog and update
+toast described a CLI the fork does not use, the OpenChamber settings page
+had an OpenCode CLI block, and the first-run flow told people to install
+OpenCode. All of it is deleted, the store state and i18n that existed only
+for it are gone, and the first run now installs OMP and names the `omp`
+binary (`opencodeBinary` → `ompBinary` in the settings registry).
+`createDirectory({ asProject: true })` posted to the deleted
+`/opencode/directory`; it now uses the same `/api/fs/mkdir` the other path
+already used.
+
+**Spaces now run OMP** — see `lib/spaces/DOCUMENTATION.md`: the container
+already ran the OpenChamber server, which hosts OMP in process, so the port
+replaced the stale OpenCode artifacts (provider config, plugin link, inert
+env vars, readiness key, restart error code) rather than the runtime.
