@@ -884,3 +884,42 @@ Ask a fresh reviewer to compare the branch against this plan and the spec, with 
 **3. Type consistency.** `sendCommand` keeps its existing `SendCommandParams`; `forkSession` returns a session like `createSession`; `getSessionStatus` widens the existing `SessionStatus` rather than replacing it; the new routes extend `/api/agents/omp/sessions/:id/*`, matching the existing family; `cache-retention` writes the same `config.yml` the other OMP settings do.
 
 **4. Review Focus.** Each of the six inputs listed is pinned by a task: 1 → Task 1 Step 8; 2 → Task 4 Steps 1 and 7; 3 → Task 2 Steps 6-7; 4 → Task 3 Step 1; 5 → Task 5 Step 4; 6 → Task 9 Steps 1-3.
+
+---
+
+## Review outcome (Task 13 Step 5)
+
+An independent review of the range `f7804511a..HEAD` found five things; all five
+are fixed, each with the test that failed first.
+
+1. **P1 — every fork failed.** The cut the client sent was a UI message id
+   (`omp:<sessionId>:<role>:<timestamp>`, or the client's own optimistic id),
+   while OMP's `branch` resolves session-file entry ids. Nothing translated, so
+   OMP refused every request. The cut is now resolved in the adapter
+   (`resolveBranchEntry`: a projected id is matched against the session file by
+   timestamp, then walked forward to the first branchable user entry; a real
+   entry id passes through; the client's optimistic id is rewritten by the host
+   from the prompt message id it recorded). Evidence: driving the pinned CLI,
+   `omp:…:assistant:2000` now forks the first user+assistant turn.
+2. **P1 — `{}` could never fork.** The route required `entryId` while the
+   callers documented `{}` as "copy the whole transcript". OMP has no
+   whole-transcript copy — branching *at* the first user message yields an
+   **empty** fork (verified against the CLI addendum), so the honest answer is a
+   400 naming the requirement, not an empty session. The adapter rejects a cut
+   at the end of the transcript the same way, and the UI surfaces that message
+   (`readJson` now reads the error body, and the fork actions toast it).
+3. **P2 — cache retention wrote the wrong file.** The route hardcoded
+   `config.yml`; on a machine whose settings live in `config.yaml` it reported a
+   value that was not in force and its first write created a `config.yml` that
+   OMP then loaded *instead of* `config.yaml`, dropping every other setting.
+   It now resolves the first existing of `[config.yml, config.yaml]` through
+   the same helper the config layer uses.
+4. **P3 — the remote-instance remedy never matched**, because the manager's
+   message changed to OMP and the matcher still looked for `opencode`. The
+   matcher and the hint were updated in all 13 locales.
+5. **P3 — the onboarding hints named OpenCode's variables.** They now name
+   `omp` and `OPENCHAMBER_OMP_PATH`, the variable the launcher actually reads.
+
+The review also disproved a claim this branch carried: OMP's `branch` **always**
+mints a new session id and file, so the "in-place branch" handling the UI had
+built (and the comment describing it) was dead and wrong; it is deleted.
