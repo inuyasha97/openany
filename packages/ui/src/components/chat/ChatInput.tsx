@@ -1302,7 +1302,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
         // A local or extension command is run, not queued: the queue delivers
         // text to the model, and `/compact`, `/btw`, or `/task` mean nothing there.
-        if (planLocalSlashCommand(inputSnapshot.message, inputMode, hasDrafts, true)
+        if (planLocalSlashCommand(inputSnapshot.message, inputMode, hasDrafts, true, resolveSessionCapabilities(currentSessionId).revert)
             || routeGuestSlashCommand(inputSnapshot.message, inputMode, guestCommands)) {
             void handleSubmitRef.current();
             return;
@@ -1580,7 +1580,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // the prompt it produces. A command the composer cannot run here is not
         // a local command at all and goes out as typed.
         let commandPlan = !queuedOnly && inputSnapshot.hasContent
-            ? planLocalSlashCommand(inputSnapshot.message, inputMode, hasDrafts, Boolean(currentSessionId))
+            ? planLocalSlashCommand(inputSnapshot.message, inputMode, hasDrafts, Boolean(currentSessionId), resolveSessionCapabilities(currentSessionId).revert)
             : null;
         if (commandPlan?.kind === 'prompt') {
             const magicCommand = findMagicPromptCommand(commandPlan.command.name);

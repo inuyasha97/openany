@@ -196,6 +196,8 @@ const sessionHandleSchema = z.object({
   }),
 })
 const okSchema = z.object({ ok: z.boolean() })
+/** `set_thinking_level` answers with the level OMP applied. */
+const thinkingLevelSchema = z.object({ level: z.string().min(1) })
 const commandSchema = z.object({ name: z.string(), source: z.string(), description: z.string().optional() })
 const commandsSchema = z.object({ commands: z.array(commandSchema) })
 /** OMP's own context-usage numbers (`ContextUsage` in `pi-tui`); optional on the route. */
@@ -538,6 +540,21 @@ export class OmpRuntimeClient implements AgentRuntime {
       body: JSON.stringify({ provider: model.providerID, modelId: model.id }),
     })
     await readJson(response, okSchema)
+  }
+
+  /**
+   * Sets the session's thinking effort. OMP validates the level against its own
+   * `ThinkingLevel` enum and the server rejects anything else with a 400 naming
+   * the accepted values, so a level the picker offers always round-trips.
+   */
+  async setThinkingLevel(id: string, level: string, directory?: string | null): Promise<string> {
+    void directory
+    const response = await this.fetchImpl(`${this.basePath}/sessions/${encodeURIComponent(id)}/thinking`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ level }),
+    })
+    return (await readJson(response, thinkingLevelSchema)).level
   }
 
   private async fetchSessions(): Promise<OmpSessionRecord[]> {

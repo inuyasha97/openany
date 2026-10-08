@@ -49,7 +49,18 @@ export type Agent = Omit<AgentInfo, "name"> & { name: string; displayName: strin
 export type Command = CommandInfo
 export type Skill = SkillInfo
 export type Provider = ProviderInfo
-export type Model = ModelInfo
+/**
+ * The thinking facts the OMP catalog reports for a model beside the wire shape
+ * (`GET /api/agents/omp/models`). `efforts` is empty when the model has no
+ * thinking config, which is the picker's signal to hide its effort control; a
+ * model that reasons always reports at least one effort.
+ */
+export type ModelThinking = {
+  reasoning?: boolean
+  efforts?: string[]
+  defaultLevel?: string
+}
+export type Model = ModelInfo & ModelThinking
 export type McpServerStatus = McpServer
 /** Version-control facts about a directory the UI shows (current and default branch). */
 export type Vcs = { branch?: string; defaultBranch?: string }

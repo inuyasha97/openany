@@ -441,6 +441,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['delete', 'confirmation'],
   },
   {
+    id: 'sessions.cache-retention',
+    page: 'sessions',
+    titleKey: 'settings.openchamber.defaults.field.cacheRetention',
+    descriptionKey: 'settings.openchamber.defaults.field.cacheRetentionInfo',
+    keywords: ['cache', 'prompt cache', 'retention', 'warming', 'keep alive', 'anthropic'],
+  },
+  {
     id: 'sessions.permission-default',
     page: 'sessions',
     titleKey: 'settings.sessions.permissions.defaultMode',

@@ -261,6 +261,23 @@ mock.module('@/hooks/useIsTextTruncated', () => ({ useIsTextTruncated: () => fal
 mock.module('@/lib/device', () => ({ useDeviceInfo: () => ({ isTouch: false }) }));
 mock.module('@/lib/startupTrace', () => ({ markStartupTrace: () => undefined }));
 
+/** Every `setThinkingLevel` the effort control issued, in order. */
+const setThinkingLevelCalls: Array<{ sessionId: string; level: string }> = [];
+const setThinkingLevelImpl = async (sessionId: string, level: string): Promise<string> => {
+  setThinkingLevelCalls.push({ sessionId, level });
+  return level;
+};
+mock.module('@/lib/agent/registry', () => ({
+  getAgentRuntime: () => ({ setThinkingLevel: setThinkingLevelImpl }),
+  getAgentRuntimeForSession: () => ({ setThinkingLevel: setThinkingLevelImpl }),
+  getOmpRuntimeClient: () => ({ setThinkingLevel: setThinkingLevelImpl }),
+  registerSessionRuntime: () => undefined,
+  forgetSessionRuntime: () => undefined,
+  runtimeIdForSession: () => 'omp',
+  registerAgentRuntime: () => undefined,
+  clearAgentRuntimes: () => undefined,
+}));
+
 const { ModelControls } = await import('./ModelControls');
 const { I18nProvider } = await import('@/lib/i18n');
 
@@ -744,4 +761,77 @@ describe('ModelControls effort restore', () => {
       }
     });
   }
+});
+
+/**
+ * The effort control is OMP's `set_thinking_level`, driven by the model
+ * catalog: a model that reports no efforts must offer nothing (OMP would reject
+ * every level), and a model that reports efforts must offer exactly those,
+ * starting at the effort OMP applies by default.
+ */
+const EFFORT_MODEL_ID = 'm-effort';
+
+type ThinkingModel = {
+  id: string;
+  name: string;
+  providerID: string;
+  variants: [];
+  reasoning: boolean;
+  efforts: string[];
+  defaultLevel?: string;
+};
+
+const seedThinkingModel = (efforts: string[], defaultLevel?: string) => {
+  const model: ThinkingModel = {
+    id: EFFORT_MODEL_ID,
+    name: EFFORT_MODEL_ID,
+    providerID: PROVIDER_ID,
+    variants: [],
+    reasoning: efforts.length > 0,
+    efforts,
+    ...(defaultLevel ? { defaultLevel } : {}),
+  };
+  useConfigStore.setState({
+    providers: [{ id: PROVIDER_ID, name: PROVIDER_ID, models: [model] }] as unknown as ConfigState['providers'],
+    currentProviderId: PROVIDER_ID,
+    currentModelId: EFFORT_MODEL_ID,
+    currentAgentName: AGENT,
+    currentVariant: undefined,
+    currentVariantSelection: { override: undefined, inherited: undefined },
+  });
+  useSessionUIStore.setState({ currentSessionId: SESSION_ID });
+};
+
+describe('ModelControls effort control', () => {
+  beforeEach(() => {
+    setThinkingLevelCalls.length = 0;
+    useSelectionStore.setState({ savedVariant: undefined });
+  });
+
+  test('a model without efforts offers no effort control', async () => {
+    seedThinkingModel([]);
+    const { dom, cleanup } = await renderModelControls();
+    try {
+      expect(dom.container.querySelector('[data-testid="effort-select"]')).toBeNull();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('a model with efforts offers exactly those levels, defaulting to defaultLevel', async () => {
+    seedThinkingModel(['low', 'high'], 'low');
+    const { dom, cleanup } = await renderModelControls();
+    try {
+      const select = dom.container.querySelector('[data-testid="effort-select"]');
+      expect(select).not.toBeNull();
+      expect(select!.children).toHaveLength(2);
+      expect(dom.container.querySelector('.model-controls__effort-label')?.textContent?.trim()).toBe('Low');
+
+      const high = Array.from(select!.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'High');
+      await act(async () => high?.click());
+      expect(setThinkingLevelCalls).toEqual([{ sessionId: SESSION_ID, level: 'high' }]);
+    } finally {
+      await cleanup();
+    }
+  });
 });

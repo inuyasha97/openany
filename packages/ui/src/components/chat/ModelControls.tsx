@@ -55,6 +55,7 @@ import {
 import { getSyncParts } from '@/sync/sync-refs';
 import type { BtwSelection } from '@/stores/useBtwStore';
 import { listModelVariantIds, type ModelVariantSource } from '@/lib/modelVariants';
+import { getAgentRuntimeForSession } from '@/lib/agent/registry';
 
 type IconComponent = IconName;
 
@@ -681,6 +682,40 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     const restoredSessionSelectionRef = React.useRef<string | null>(null);
 
     const currentSessionDirectory = currentSessionId ? getDirectoryForSession(currentSessionId) : undefined;
+
+    // --- Effort (OMP's thinking level) --------------------------------------
+    // The catalog reports the efforts a model accepts and the effort OMP applies
+    // by default. The pick is per session (`set_thinking_level`), so the control
+    // exists only where there is a session to set it on, and it falls back to
+    // the model's default whenever the model or the session changes.
+    const currentModelEfforts = React.useMemo(() => {
+        const efforts = currentModelForMetadata?.efforts;
+        return Array.isArray(efforts)
+            ? efforts.filter((effort): effort is string => typeof effort === 'string' && effort.length > 0)
+            : [];
+    }, [currentModelForMetadata]);
+    const currentModelDefaultLevel = typeof currentModelForMetadata?.defaultLevel === 'string'
+        ? currentModelForMetadata.defaultLevel
+        : undefined;
+    const effortSessionId = currentSessionId ?? controlledSessionId ?? null;
+    const [effortLevel, setEffortLevel] = React.useState<string | undefined>(currentModelDefaultLevel);
+    React.useEffect(() => {
+        setEffortLevel(currentModelDefaultLevel);
+    }, [currentModelDefaultLevel, currentModelId, currentProviderId, effortSessionId]);
+    const handleEffortSelect = React.useCallback((level: string) => {
+        setEffortLevel(level);
+        if (!effortSessionId) return;
+        void getAgentRuntimeForSession(effortSessionId)
+            .setThinkingLevel(effortSessionId, level, currentSessionDirectory ?? null)
+            .catch((error) => {
+                // The runtime refused the level; the control goes back to what it
+                // showed before the pick instead of claiming a level that is not
+                // in force.
+                console.warn('[model-controls] failed to set the thinking level:', error instanceof Error ? error.message : error);
+                setEffortLevel(currentModelDefaultLevel);
+            });
+    }, [currentModelDefaultLevel, currentSessionDirectory, effortSessionId]);
+
     const hasRenderableCurrentSessionSnapshot = useSessionRenderable(
         currentSessionId ?? '',
         currentSessionDirectory ?? undefined,
@@ -2855,6 +2890,73 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         );
     };
 
+    /**
+     * OMP's thinking effort for the selected model. It is offered only when the
+     * catalog reports efforts (a model with no thinking config reports none) and
+     * there is a session to set the level on; picking one calls the session's
+     * `set_thinking_level`. The value shown starts at the model's own default.
+     */
+    const renderEffortSelector = () => {
+        if (!isReady || currentModelEfforts.length === 0 || !effortSessionId) {
+            return null;
+        }
+
+        const selectedLevel = effortLevel ?? currentModelDefaultLevel ?? currentModelEfforts[0];
+
+        return (
+            <Tooltip delayDuration={600}>
+                <DropdownMenu>
+                    <TooltipTrigger asChild>
+                        <DropdownMenuTrigger asChild>
+                            <div
+                                className={cn(
+                                    'model-controls__effort-trigger flex items-center gap-1.5 transition-colors cursor-pointer select-none hover:bg-transparent hover:opacity-70 min-w-0',
+                                    buttonHeight,
+                                )}
+                            >
+                                <Icon name="brain-ai-3" className={cn(controlIconSize, 'flex-shrink-0', 'text-[color:var(--status-info)]')} />
+                                <span
+                                    className={cn(
+                                        'model-controls__effort-label',
+                                        controlTextSize,
+                                        'font-medium min-w-0 truncate',
+                                        isDesktop ? 'max-w-[180px]' : undefined,
+                                    )}
+                                >
+                                    {formatEffortLabel(selectedLevel)}
+                                </span>
+                            </div>
+                        </DropdownMenuTrigger>
+                    </TooltipTrigger>
+                    <DropdownMenuContent side="top" align="end" alignOffset={-40} className="w-[min(180px,calc(100vw-2rem))]">
+                        <DropdownMenuLabel className="typography-ui-header font-semibold text-foreground">{t('chat.modelControls.thinking')}</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        <div data-testid="effort-select">
+                            {currentModelEfforts.map((level) => {
+                                const selected = level === selectedLevel;
+                                return (
+                                    <DropdownMenuItem
+                                        key={level}
+                                        className="typography-meta"
+                                        onSelect={() => handleEffortSelect(level)}
+                                    >
+                                        <div className="flex items-center justify-between gap-2 w-full min-w-0">
+                                            <span className="typography-meta font-medium text-foreground truncate min-w-0">{formatEffortLabel(level)}</span>
+                                            {selected && <Icon name="check" className="size-4 text-inherit flex-shrink-0" />}
+                                        </div>
+                                    </DropdownMenuItem>
+                                );
+                            })}
+                        </div>
+                    </DropdownMenuContent>
+                </DropdownMenu>
+                <TooltipContent side="top">
+                    <p className="typography-meta">{t('chat.modelControls.thinking')}: {formatEffortLabel(selectedLevel)}</p>
+                </TooltipContent>
+            </Tooltip>
+        );
+    };
+
     const renderAgentSelector = () => {
         if (!isCompact) {
             return (
@@ -3056,6 +3158,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 >
                     {!inlineMobileSelection && renderVariantSelector()}
                     {renderModelSelector()}
+                    {renderEffortSelector()}
                     {inlineMobileSelection && renderVariantSelector()}
                     {!selection && !isAutoSelected && renderAgentSelector()}
                 </div>

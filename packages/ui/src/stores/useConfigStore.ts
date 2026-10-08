@@ -766,6 +766,12 @@ type OmpCatalogModel = {
     maxTokens?: unknown;
     input?: unknown;
     requestModelId?: unknown;
+    /** Whether the model reasons at all; absent on a catalog that omits it. */
+    reasoning?: unknown;
+    /** The efforts the model accepts, least → most intensive; `[]` when it has none. */
+    efforts?: unknown;
+    /** The effort OMP applies when this model is selected. */
+    defaultLevel?: unknown;
 };
 
 /**
@@ -791,6 +797,14 @@ const loadOmpProviderCatalog = async (): Promise<{ providers: Provider[]; models
         const input = Array.isArray(raw.input) && raw.input.length > 0
             ? raw.input.filter((value): value is string => typeof value === 'string')
             : ['text'];
+        // OMP reports the model's thinking beside the wire shape: whether it
+        // reasons, the efforts it accepts, and the effort it applies by default.
+        // A model with no thinking config reports `efforts: []`, which is how
+        // the picker knows to leave the effort control out.
+        const efforts = Array.isArray(raw.efforts)
+            ? raw.efforts.filter((value): value is string => typeof value === 'string' && value.length > 0)
+            : [];
+        const defaultLevel = typeof raw.defaultLevel === 'string' && raw.defaultLevel ? raw.defaultLevel : undefined;
         models.push({
             id: raw.id,
             modelID: typeof raw.requestModelId === 'string' && raw.requestModelId ? raw.requestModelId : raw.id,
@@ -798,6 +812,9 @@ const loadOmpProviderCatalog = async (): Promise<{ providers: Provider[]; models
             name: typeof raw.name === 'string' && raw.name ? raw.name : raw.id,
             capabilities: { tools: true, input, output: ['text'] },
             variants: [],
+            reasoning: raw.reasoning === true,
+            efforts,
+            ...(defaultLevel ? { defaultLevel } : {}),
             time: { released: 0 },
             cost: [],
             status: 'active',

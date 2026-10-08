@@ -140,6 +140,16 @@ describe("OmpRuntimeClient", () => {
     expect((calls[0].body as { text: string }).text).toBe("/init")
   })
 
+  test("sets the session's thinking level and reads back the applied level", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/thinking": { body: { level: "high" } },
+    })
+    expect(await client.setThinkingLevel("ses_a", "high")).toBe("high")
+    expect(calls).toEqual([
+      { url: "/api/agents/omp/sessions/ses_a/thinking", method: "POST", body: { level: "high" } },
+    ])
+  })
+
   test("carries the status detail beside the busy tag", async () => {
     const { client } = makeClient({
       "GET /api/agents/omp/sessions": { body: { sessions } },

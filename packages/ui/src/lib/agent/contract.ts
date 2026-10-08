@@ -171,6 +171,11 @@ export type AgentRuntime = {
   getPermission(sessionID: string, requestID: string, directory?: string | null): Promise<FetchPermissionResult>
   listPermissions(options?: PendingRequestListOptions): Promise<PermissionRequest[]>
   selectModel(id: string, model: ModelRef, directory?: string | null): Promise<void>
+  /**
+   * Sets the session's thinking effort (`set_thinking_level`). OMP answers the
+   * level it applied, which the caller may show as the confirmed value.
+   */
+  setThinkingLevel(id: string, level: string, directory?: string | null): Promise<string>
   getActiveStatus(directory?: string | null): Promise<Record<string, SessionStatus> | null>
 
   forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<AgentSession>

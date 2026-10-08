@@ -42,6 +42,7 @@ import {
 import { Icon } from '@/components/icon/Icon';
 import { AgentPermissionsEditor } from './AgentPermissionsEditor';
 import { SettingsLegacyFormatNote } from '@/components/sections/shared/SettingsLegacyFormatNote';
+import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 
 type AgentVariantProvider = {
   id: string;
@@ -418,8 +419,14 @@ export const AgentsPage: React.FC = () => {
       <div className="flex h-full items-center justify-center">
         <div className="text-center text-muted-foreground">
           <Icon name="robot-2" className="mx-auto mb-3 h-12 w-12 opacity-50" />
-          <p className="typography-body">{t('settings.agents.page.empty.title')}</p>
-          <p className="typography-meta mt-1 opacity-75">{t('settings.agents.page.empty.description')}</p>
+          {resolveSessionCapabilities(undefined).agents ? (
+            <>
+              <p className="typography-body">{t('settings.agents.page.empty.title')}</p>
+              <p className="typography-meta mt-1 opacity-75">{t('settings.agents.page.empty.description')}</p>
+            </>
+          ) : (
+            <p className="typography-meta max-w-sm opacity-75">{t('settings.agents.unsupported')}</p>
+          )}
         </div>
       </div>
     );

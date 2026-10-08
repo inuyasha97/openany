@@ -31,6 +31,7 @@ import { SidebarGroup } from '@/components/sections/shared/SidebarGroup';
 import { Icon } from "@/components/icon/Icon";
 import { useI18n } from '@/lib/i18n';
 import { SETTINGS_PANEL_TITLE_CLASS } from '@/components/sections/shared/SettingsSection';
+import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 
 interface AgentsSidebarProps {
   onItemSelect?: () => void;
@@ -38,6 +39,11 @@ interface AgentsSidebarProps {
 
 export const AgentsSidebar: React.FC<AgentsSidebarProps> = ({ onItemSelect }) => {
   const { t } = useI18n();
+  // The list is `listAgents`, which OMP does not implement: it picks a subagent
+  // inside the model's own `task` call. With no list to show, the panel explains
+  // where the choice happens instead of offering a create button that would
+  // write an entry nothing would ever list.
+  const agentsSupported = resolveSessionCapabilities(undefined).agents;
   const [query, setQuery] = React.useState('');
   const [renameDialogAgent, setRenameDialogAgent] = React.useState<Agent | null>(null);
   const [renameNewName, setRenameNewName] = React.useState('');
@@ -269,22 +275,31 @@ export const AgentsSidebar: React.FC<AgentsSidebarProps> = ({ onItemSelect }) =>
       <div className="border-b px-3 pt-4 pb-3">
         <h2 className={`${SETTINGS_PANEL_TITLE_CLASS} mb-3`}>{t('settings.agents.sidebar.title')}</h2>
         <SettingsProjectSelector className="mb-3" />
-        <div className="flex items-center justify-between gap-2">
-          <span className="typography-meta text-muted-foreground">{t('settings.agents.sidebar.total', { count: visibleAgents.length })}</span>
-          <Button size="sm"
-            data-settings-item="agents.create"
-            variant="ghost"
-            className="h-7 w-7 px-0 -my-1 text-muted-foreground"
-            onClick={handleCreateNew}
-          >
-            <Icon name="add" className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-        {visibleAgents.length > 0 ? <SettingsSidebarSearch value={query} onChange={setQuery} /> : null}
+        {agentsSupported ? (
+          <>
+            <div className="flex items-center justify-between gap-2">
+              <span className="typography-meta text-muted-foreground">{t('settings.agents.sidebar.total', { count: visibleAgents.length })}</span>
+              <Button size="sm"
+                data-settings-item="agents.create"
+                variant="ghost"
+                className="h-7 w-7 px-0 -my-1 text-muted-foreground"
+                onClick={handleCreateNew}
+              >
+                <Icon name="add" className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            {visibleAgents.length > 0 ? <SettingsSidebarSearch value={query} onChange={setQuery} /> : null}
+          </>
+        ) : null}
       </div>
 
       <ScrollableOverlay outerClassName="flex-1 min-h-0" className="space-y-1 px-3 py-2 overflow-x-hidden">
-        {visibleAgents.length === 0 ? (
+        {!agentsSupported ? (
+          <div className="py-12 px-4 text-center text-muted-foreground">
+            <Icon name="robot-2" className="mx-auto mb-3 h-10 w-10 opacity-50" />
+            <p className="typography-meta opacity-75">{t('settings.agents.unsupported')}</p>
+          </div>
+        ) : visibleAgents.length === 0 ? (
           <div className="py-12 px-4 text-center text-muted-foreground">
             <Icon name="robot-2" className="mx-auto mb-3 h-10 w-10 opacity-50" />
             <p className="typography-ui-label font-medium">{t('settings.agents.sidebar.empty.title')}</p>

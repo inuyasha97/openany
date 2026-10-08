@@ -65,32 +65,40 @@ describe('findMagicPromptCommand', () => {
 
 describe('planLocalSlashCommand', () => {
     test('/fork is a session action that keeps its text as the argument', () => {
-        expect(planLocalSlashCommand('/fork try the other approach', 'normal', true, true)).toEqual({
+        expect(planLocalSlashCommand('/fork try the other approach', 'normal', true, true, true)).toEqual({
             command: { name: 'fork', argument: 'try the other approach' },
             kind: 'action',
             attachedContext: 'retain',
         });
-        expect(planLocalSlashCommand('/fork', 'normal', false, false)).toBeNull();
+        expect(planLocalSlashCommand('/fork', 'normal', false, false, true)).toBeNull();
     });
 
     test('prompt commands send attached context instead of disabling command parsing', () => {
-        expect(planLocalSlashCommand('/summary auth', 'normal', true, true)).toEqual({
+        expect(planLocalSlashCommand('/summary auth', 'normal', true, true, true)).toEqual({
             command: { name: 'summary', argument: 'auth' },
             kind: 'prompt',
             attachedContext: 'send',
         });
-        expect(planLocalSlashCommand('/btw why?', 'normal', true, true)?.kind).toBe('prompt');
+        expect(planLocalSlashCommand('/btw why?', 'normal', true, true, true)?.kind).toBe('prompt');
     });
 
     test('session actions stay on the normal send path for a new-session draft', () => {
         for (const command of ['undo', 'redo', 'timeline']) {
-            expect(planLocalSlashCommand(`/${command}`, 'normal', false, false)).toBeNull();
+            expect(planLocalSlashCommand(`/${command}`, 'normal', false, false, true)).toBeNull();
         }
     });
 
+    test('undo and redo are not local actions when the runtime cannot revert', () => {
+        for (const command of ['undo', 'redo']) {
+            expect(planLocalSlashCommand(`/${command}`, 'normal', false, true, false)).toBeNull();
+        }
+        // A command the runtime can still run is unaffected by the revert gate.
+        expect(planLocalSlashCommand('/timeline', 'normal', false, true, false)?.kind).toBe('action');
+    });
+
     test('shell mode and server-owned commands stay outside local planning', () => {
-        expect(planLocalSlashCommand('/compact', 'shell', true, true)).toBeNull();
-        expect(planLocalSlashCommand('/project-command', 'normal', true, true)).toBeNull();
+        expect(planLocalSlashCommand('/compact', 'shell', true, true, true)).toBeNull();
+        expect(planLocalSlashCommand('/project-command', 'normal', true, true, true)).toBeNull();
     });
 });
 

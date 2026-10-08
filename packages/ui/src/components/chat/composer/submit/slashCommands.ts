@@ -172,12 +172,18 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
  * Plan commands owned by the composer before attached context is consumed.
  * Action commands leave that context in the composer; prompt commands send it.
  * Unknown commands return null so the OpenCode command router remains authoritative.
+ *
+ * `canRevert` is the session runtime's `capabilities.revert`: `/undo` and
+ * `/redo` move the session's revert marker, so a runtime that cannot revert
+ * (OMP) must not have them planned as local actions. They fall through to the
+ * runtime as typed, the same as any other name nothing local knows.
  */
 export function planLocalSlashCommand(
     text: string,
     inputMode: 'normal' | 'shell' | undefined,
     hasAttachedContext: boolean,
     hasSession: boolean,
+    canRevert: boolean,
 ): LocalSlashCommandPlan | null {
     if (inputMode !== 'normal') return null;
     const command = parseSlashCommand(text);
@@ -185,6 +191,7 @@ export function planLocalSlashCommand(
 
     if (LOCAL_ACTION_COMMANDS.has(command.name)) {
         if (!hasSession) return null;
+        if (!canRevert && (command.name === 'undo' || command.name === 'redo')) return null;
 
         return {
             command,

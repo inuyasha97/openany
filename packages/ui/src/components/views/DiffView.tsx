@@ -15,6 +15,7 @@ import { useGitStore, useGitStatus, useIsGitRepo, useGitLoadingStatus } from '@/
 import { useGitBaseBranchStore } from '@/stores/useGitBaseBranchStore';
 import { useBranchComparisonBase } from '@/hooks/useBranchComparisonBase';
 import { coerceDiffScope, isBranchScopeAvailable, isBranchScopeDefinitelyUnavailable, useRangeKeyedCache, useBoundedDirectoryRetry } from './branchDiffScope';
+import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { cn } from '@/lib/utils';
 import type { GitStatus, GitSubmoduleState } from '@/lib/api/types';
@@ -256,6 +257,8 @@ interface ChangeScopeSelectorProps {
     prCount: number | null;
     showCommitOption: boolean;
     showBranchOption: boolean;
+    /** The runtime can produce a per-turn diff; OMP cannot. */
+    showTurnOption: boolean;
     onScopeChange?: (scope: PendingDiffScope) => void;
 }
 
@@ -269,6 +272,7 @@ const ChangeScopeSelector = React.memo<ChangeScopeSelectorProps>(({
     prCount,
     showCommitOption,
     showBranchOption,
+    showTurnOption,
     onScopeChange,
 }) => {
     const { t } = useI18n();
@@ -318,12 +322,14 @@ const ChangeScopeSelector = React.memo<ChangeScopeSelectorProps>(({
                             <span className="typography-meta text-muted-foreground">{stagedCount}</span>
                         </span>
                     </DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="turn">
-                        <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
-                            <span>{t('diffView.scope.lastTurn')}</span>
-                            <span className="typography-meta text-muted-foreground">{turnCount}</span>
-                        </span>
-                    </DropdownMenuRadioItem>
+                    {showTurnOption ? (
+                        <DropdownMenuRadioItem value="turn">
+                            <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                                <span>{t('diffView.scope.lastTurn')}</span>
+                                <span className="typography-meta text-muted-foreground">{turnCount}</span>
+                            </span>
+                        </DropdownMenuRadioItem>
+                    ) : null}
                     {showBranchOption ? (
                         <DropdownMenuRadioItem value="branch">
                             <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
@@ -1267,6 +1273,9 @@ export const DiffView: React.FC<DiffViewProps> = ({
     const setDiffFileListMode = useUIStore((state) => state.setDiffFileListMode);
     const openContextFileAtLine = useUIStore((state) => state.openContextFileAtLine);
     const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
+    // OMP keeps no per-turn snapshots, so the Last Turn scope must not be
+    // offered and a persisted choice of it must fall back to a scope that works.
+    const turnDiffSupported = resolveSessionCapabilities(currentSessionId).turnDiff;
     const sessionMessages = useSessionMessages(activeDiffScope === 'turn' ? currentSessionId ?? '' : '', rootDirectory ?? undefined);
     const diffWrapLines = diffWrapLinesStore;
     const forcedStaged = activeDiffScope === 'staged' ? true : activeDiffScope === 'working' ? false : null;
@@ -1329,7 +1338,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     const [lastTurnDiffs, setLastTurnDiffs] = React.useState<TurnSnapshotDiff[]>([]);
     const lastMessageId = sessionMessages.length > 0 ? sessionMessages[sessionMessages.length - 1].id : '';
     React.useEffect(() => {
-        if (activeDiffScope !== 'turn' || !currentSessionId || !visible) return;
+        if (activeDiffScope !== 'turn' || !turnDiffSupported || !currentSessionId || !visible) return;
         let cancelled = false;
         void runtime.getSessionTurnDiff(currentSessionId, { directory: rootDirectory ?? undefined })
             .then((files) => {
@@ -1350,7 +1359,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         return () => {
             cancelled = true;
         };
-    }, [activeDiffScope, currentSessionId, lastMessageId, rootDirectory, runtime, visible]);
+    }, [activeDiffScope, currentSessionId, lastMessageId, rootDirectory, runtime, turnDiffSupported, visible]);
 
     const lastTurnDiffData = React.useMemo(() => {
         const map = new Map<string, DiffData>();
@@ -1471,6 +1480,15 @@ export const DiffView: React.FC<DiffViewProps> = ({
             }
         }
     }, [activeDiffScope, branchScopeDefinitelyUnavailable, onDiffScopeChange]);
+
+    // A persisted Last Turn scope on a runtime that cannot produce a per-turn
+    // diff (OMP) falls back to Working instead of leaving a scope whose diff can
+    // never arrive. Persisted so the tab and the selector agree.
+    React.useEffect(() => {
+        if (turnDiffSupported || activeDiffScope !== 'turn') return;
+        setActiveDiffScope('working');
+        onDiffScopeChange?.('working');
+    }, [activeDiffScope, onDiffScopeChange, turnDiffSupported]);
 
     const comparisonSource = React.useMemo<GitComparisonSource | null>(() => {
         if (activeDiffScope === 'pr') return selectedPr;
@@ -2487,6 +2505,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
                             prCount={activeDiffScope === 'pr' ? comparison.files?.length ?? null : null}
                             showCommitOption={!isVSCodeRuntime()}
                             showBranchOption={showBranchOption}
+                            showTurnOption={turnDiffSupported}
                             onScopeChange={(scope) => {
                                 setActiveDiffScope(scope);
                                 onDiffScopeChange?.(scope);
