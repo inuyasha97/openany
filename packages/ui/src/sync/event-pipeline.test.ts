@@ -278,12 +278,12 @@ describe("event pipeline", () => {
 
   test("registers the runtime a created session came from", async () => {
     const harness = await startPipeline()
-    registerAgentRuntime(createOpenCodeStubRuntime("acp"))
+    registerAgentRuntime(createOpenCodeStubRuntime("alt"))
     expect(runtimeIdForSession("ses_child")).toBe("omp")
 
     // SAFETY: the server's `session.created` carries the owning runtime id on
     // the info record; the canonical `Session` type does not declare it.
-    const childInfo = { ...makeSession("ses_child"), runtimeId: "acp" } as Session
+    const childInfo = { ...makeSession("ses_child"), runtimeId: "alt" } as Session
 
     try {
       harness.stream.push(
@@ -294,7 +294,7 @@ describe("event pipeline", () => {
       )
       await flush()
 
-      expect(runtimeIdForSession("ses_child")).toBe("acp")
+      expect(runtimeIdForSession("ses_child")).toBe("alt")
     } finally {
       forgetSessionRuntime("ses_child")
     }

@@ -79,7 +79,7 @@ The adapter's `OmpRuntime.subscribe` now passes `(sessionId, event)`; the projec
 
 Wiring: thin edits to `packages/web/server/index.js` (one import, one mount call after the feature routes register and before the generic proxy, plus a shutdown getter) and one cleanup step in `packages/web/server/lib/opencode/shutdown-runtime.js` that disposes the host. The routes are always registered; each request is served only when the runtime is enabled — `OPENCHAMBER_OMP_RUNTIME=1` forces it on, otherwise the `ompRuntimeEnabled` setting decides, read per request so a settings toggle needs no restart. With neither on the adapter is never imported and the OpenCode-only path is unchanged.
 
-Packaging decision: `packages/web/package.json` gained no dependency. The fork-owned server module imports the adapter by relative path (`../../../../omp-adapter/src/index.ts`), resolved when the runtime is enabled. The adapter and the OMP SDK are TypeScript with extensionless imports, so they load only under Bun. The Electron desktop runs the OpenChamber server in-process under **Node**, where that import cannot resolve (`ERR_MODULE_NOT_FOUND`); the server guard keeps the OMP/ACP runtimes disabled there and the Settings switches are hidden on desktop and VS Code. Supporting them on desktop needs a compiled-to-JS adapter or a Bun server there — a separate decision.
+Packaging decision: `packages/web/package.json` gained no dependency. The fork-owned server module imports the adapter by relative path (`../../../../omp-adapter/src/index.ts`), resolved when the runtime is enabled. The adapter and the OMP SDK are TypeScript with extensionless imports, so they load only under Bun. The Electron desktop runs the OpenChamber server in-process under **Node**, where that import cannot resolve (`ERR_MODULE_NOT_FOUND`); the server guard kept the ACP runtime disabled there and the Settings switches are hidden on desktop and VS Code. Supporting them on desktop needed a compiled-to-JS adapter or a Bun server there — a separate decision. ACP was later removed outright; see *ACP removed* below.
 
 ### P5.3: the UI client and the bridge branch
 
@@ -206,3 +206,21 @@ from both surfaces.
 - **Out of scope**: `packages/vscode` still imports the deleted OpenCode
   server modules and does not type-check; the spec leaves it and
   `packages/mobile` untouched and not required to build.
+
+## ACP removed (2026-10-08)
+
+ACP was the second non-OpenCode runtime the agent host contract targeted
+(phase 6), but it was dropped and its code removed:
+
+- `packages/acp-adapter/` (`@openchamber/acp-adapter`) is deleted, and its
+  dependency is gone from `bun.lock`.
+- The server host is gone: `packages/web/server/lib/agents/acp-routes.js`,
+  `acp-runtime-host.js`, `acp-transport.js` and their tests are deleted, as is
+  the `installAcpAgentRuntime` wiring in `lib/agents/index.js` and
+  `packages/web/server/index.js`.
+- The `openchamber:acp` bridge frame is removed from the UI event pipeline
+  (`packages/ui/src/sync/event-pipeline.ts`); only `openchamber:omp` remains.
+- The Dockerfile no longer copies the adapter's `package.json`, and
+  `docs/agent-host/PHASE6-ACP.md` is deleted.
+
+OMP is the only non-OpenCode runtime the contract targets.

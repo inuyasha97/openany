@@ -2,6 +2,14 @@
 
 Status: direction note, written 2026-09-27. This is not an agreed design and nothing here is built. The second half of this file describes the code as it stands today. Owner: the maintainer.
 
+Update (2026-10-08): ACP was dropped as a runtime and removed from the tree. The
+`packages/acp-adapter/` package, the `packages/web/server/lib/agents/acp-*`
+modules and their `/api/agents/acp/*` routes, and the UI's `openchamber:acp`
+bridge frame are all gone; OMP is the only runtime the contract targets beyond
+the native one. Every mention of ACP below is part of the historical direction
+note and no longer describes the code. [PHASE6-ACP.md](PHASE6-ACP.md) was deleted
+with it.
+
 Read this file to share one picture of where the project is going and what the current coupling looks like. Nothing in it authorizes a change. [ROLLOUT.md](ROLLOUT.md) says how to build it while staying in sync with upstream OpenChamber.
 
 ## What this is about

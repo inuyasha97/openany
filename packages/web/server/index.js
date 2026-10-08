@@ -63,7 +63,7 @@ import { createSettingsHelpers } from './lib/openchamber/settings-helpers.js';
 import { createThemeRuntime } from './lib/openchamber/theme-runtime.js';
 import { createFeatureRoutesRuntime } from './lib/openchamber/feature-routes-runtime.js';
 // Fork-owned OMP agent runtime; the only runtime in this fork.
-import { installAcpAgentRuntime, installOmpAgentRuntime } from './lib/agents/index.js';
+import { installOmpAgentRuntime } from './lib/agents/index.js';
 import { configureOmpRuntimeHost, listPermissions, readSessions } from './lib/agents/omp-host-access.js';
 import { createSessionActivityProbe } from './lib/openchamber/session-activity.js';
 import { parseServeCliOptions } from './lib/openchamber/cli-options.js';
@@ -625,8 +625,6 @@ let exitOnShutdown = true;
 let uiAuthController = null;
 // Fork-owned OMP agent runtime host; created on the first request.
 let ompAgentRuntime = null;
-// Fork-owned ACP agent runtime host; null unless OPENCHAMBER_ACP_RUNTIME=1.
-let acpAgentRuntime = null;
 // The isolated-spaces host: the place, the manager and the dispatcher. Null while the feature's
 // switch is off, and then nothing of the feature runs, see docs/isolated-spaces/DESIGN.md.
 let spacesHost = null;
@@ -1325,8 +1323,6 @@ const gracefulShutdownRuntime = createGracefulShutdownRuntime({
   getSpacesHost: () => spacesHost,
   // Fork: dispose the OMP runtime (off unless the flag is on).
   getOmpRuntime: () => ompAgentRuntime,
-  // Fork: dispose the ACP runtime (off unless the flag is on).
-  getAcpRuntime: () => acpAgentRuntime,
 });
 
 const gracefulShutdown = (...args) => gracefulShutdownRuntime.gracefulShutdown(...args);
@@ -1868,20 +1864,13 @@ async function main(options = {}) {
     routingRuntime,
   });
 
-  // Fork: register the OMP/ACP routes. OMP is the runtime and is always
-  // served; ACP is still served only when its env flag forces it on or the
-  // matching setting is enabled, read per request.
+  // Fork: register the OMP routes. OMP is the runtime and is always served.
   ompAgentRuntime = await installOmpAgentRuntime({
     app,
     broadcast: broadcastOpenChamberUiEvent,
   });
   // Fork: let the server features that used OpenCode reach the OMP host.
   configureOmpRuntimeHost(() => ompAgentRuntime);
-  acpAgentRuntime = await installAcpAgentRuntime({
-    app,
-    broadcast: broadcastOpenChamberUiEvent,
-    isSettingEnabled: async () => (await readSettingsFromDiskMigrated())?.acpRuntimeEnabled === true,
-  });
 
   // After bootstrap: the upgrade gate needs the real UI auth controller.
   guestSurfaceRuntime = createGuestSurfaceRuntime({

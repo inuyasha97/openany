@@ -183,11 +183,11 @@ const openchamberAutoAcceptSchema = z.object({
   }),
 })
 
-// The fork's agent runtimes (OMP, ACP) push already-projected `SyncEvent`s on
-// the shared bridge. Only the envelope is validated here; the events themselves
+// The fork's agent runtime (OMP) pushes already-projected `SyncEvent`s on the
+// shared bridge. Only the envelope is validated here; the events themselves
 // are the server's projection into the canonical vocabulary.
 const openchamberRuntimeFrameSchema = z.object({
-  type: z.union([z.literal("openchamber:omp"), z.literal("openchamber:acp")]),
+  type: z.literal("openchamber:omp"),
   properties: z.object({
     sessionID: z.string().min(1),
     directory: z.string().optional(),
