@@ -22,6 +22,7 @@ import { registerRoutingPromptRewrite, registerRoutingRoutes } from '../routing/
 import { registerSettingsUtilityRoutes } from '../openchamber/core-routes.js';
 import { registerProjectIconRoutes } from '../openchamber/project-icon-routes.js';
 import { registerConfigSettingsRoutes } from '../openchamber/config-settings-routes.js';
+import { registerOmpSettingsRoutes } from '../openchamber/omp-settings-routes.js';
 import { registerConfigSnippetRoutes } from '../openchamber/config-snippet-routes.js';
 import { registerConfigSkillRoutes } from '../openchamber/config-skill-routes.js';
 import { registerConfigEntityRoutes } from '../openchamber/config-entity-routes.js';
@@ -112,6 +113,8 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       readSettingsFromDisk,
       formatSettingsResponse,
       persistSettings,
+      readConfigFile,
+      writeConfig,
       sanitizeProjects,
       sanitizeSkillCatalogs,
       isUnsafeSkillRelativePath,
@@ -150,6 +153,13 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       readSettingsFromDiskMigrated,
       persistSettings,
       formatSettingsResponse,
+    });
+
+    // The OMP-native settings knobs that have no OpenChamber settings document
+    // home: they live in the agent dir's own `config.yml`.
+    registerOmpSettingsRoutes(app, {
+      readConfigFile,
+      writeConfig,
     });
 
     registerConfigSnippetRoutes(app, { resolveOptionalProjectDirectory });

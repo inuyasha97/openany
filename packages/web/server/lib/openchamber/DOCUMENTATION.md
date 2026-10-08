@@ -30,6 +30,7 @@ tunnel and static-route utilities for the web server runtime.
 - `packages/web/server/lib/opencode/project-directory-runtime.js`: request-scoped and settings-backed project directory resolution/validation runtime.
 - `packages/web/server/lib/openchamber/config-entity-routes.js`: registers the OMP-backed agent/command/MCP/AGENTS.md routes. Writes land as markdown/`mcp.json` files the runtime reads itself, so the route answers plain success.
 - `packages/web/server/lib/openchamber/config-mutation-response.js`: shared response builder for applied config mutations.
+- `packages/web/server/lib/openchamber/omp-settings-routes.js`: registers `GET|PUT /api/config/cache-retention`, the OMP-native knob that replaced the session-warming row; writes only `providers.cacheRetention` into the agent dir's `config.yml`.
 - `packages/web/server/lib/openchamber/snippets.js`: snippet file CRUD, discovery, and hashtag expansion over `~/.omp/agent/snippets` + `<project>/.omp/snippets` (legacy `~/.config/opencode` trees still read). Routes in `config-snippet-routes.js`.
 - `packages/web/server/lib/opencode/cli-options.js`: CLI/environment option parsing for server startup arguments.
 - `packages/web/server/lib/opencode/core-routes.js`: server status/system routes, auth/access guard routes, and settings utility route registration.
@@ -778,6 +779,12 @@ elsewhere.
   - The surface kind comes from `?surface=web|desktop|vscode|mobile` or the legacy `x-openchamber-surface` header (`settingsSurfaceOf`, `settings-files.js`); anything else reads the base document.
 - Deps: `readSettingsFromDiskMigrated`, `persistSettings`, `formatSettingsResponse` (all built in `index.js`).
 
+## Public exports (omp-settings-routes.js)
+- `registerOmpSettingsRoutes(app, dependencies)`: registers the OMP-native settings knobs that have no OpenChamber settings-document home, because OMP keeps them in the agent directory's own `config.yml`.
+  - `GET /api/config/cache-retention` — `{ retention: 'auto'|'short'|'long'|'none' }`. OMP keeps the Anthropic prompt cache warm itself, so this replaced the removed session-warming row: the key is `providers.cacheRetention` and OMP's default is `auto`, which is what an absent (or unrecognized) stored value reads back as. Errors are `500 { error }`.
+  - `PUT /api/config/cache-retention` — body `{ retention }`, answers `{ retention, changed }` where `changed` compares against what `GET` would have answered. `400 { error }` names the four accepted values for anything else. Only `providers.cacheRetention` is written: the rest of the document and the other `providers` entries are read back and written unchanged, and a `providers` section that is not a mapping is refused rather than clobbered. A file that cannot be parsed or written (bad YAML, unwritable path) is `500 { error }`.
+- Deps: `readConfigFile`, `writeConfig` (from `agent-config-files.js`, passed by `feature-routes-runtime.js`) and `configFile` (defaults to `CONFIG_FILE`, the agent dir's `config.yml`; injected in tests to drive a temp agent dir).
+
 ## Public exports (config-snippet-routes.js)
 - `registerConfigSnippetRoutes(app, dependencies)`: registers the snippet routes the snippets store drives. Snippets live in `~/.omp/agent/snippets` and `<project>/.omp/snippets`, with the legacy `~/.config/opencode` trees still read.
   - `GET /api/config/snippets` — array of `{ name, content, aliases, description?, filePath, source }`.
@@ -838,6 +845,7 @@ elsewhere.
   - `POST /api/config/reload` — restarts OpenCode on request. Config edits no longer need it; it stays for the changes that cannot be hot-applied (OpenCode binary, port, managed/external switch) and as a manual recovery. Managed OpenCode restarts and returns `requiresReload: true`. External OpenCode returns `requiresManualRestart: true` (changes are already on disk; the connected server must be restarted outside OpenChamber).
 - `registerCommonRequestMiddleware(app, dependencies)`: registers shared request middleware stack:
   - conditional JSON body parser behavior for `/api/*` vs non-API requests
+    - The `/api` branch parses JSON only for a named prefix allowlist (`/api/config/settings`, `/api/config/cache-retention`, `/api/config/{agents,commands,mcp,snippets,skills}`, the project/fs/git/terminal families, …); every other `/api` request reaches its route without a body, so a new route that reads `req.body` must be added to that list or mount its own `express.json()`.
   - URL-encoded parser setup
   - request logging middleware
   - `dependencies.skipBodyParsing(req)` names a request both parsers leave alone, so its body reaches its route untouched; the isolated-spaces dispatcher uses it for `/api/spaces/<id>/...`, which it streams into a space
