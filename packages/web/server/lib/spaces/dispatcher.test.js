@@ -338,7 +338,7 @@ describe('space dispatcher', () => {
     const sdkStyleOutside = await fetch(host.url(`/api/spaces/${ID}/echo`), { headers: { 'x-opencode-directory': encodeURIComponent('/home/me') } });
     expect(sdkStyleOutside.status).toBe(400);
     expect(inside.seen).toHaveLength(0);
-    // The SDK encodes the header on every request and sends no marker; OpenCode decodes it, so the guard reads it decoded too.
+    // The SDK encodes the header on every request and sends no marker; the server decodes it, so the guard reads it decoded too.
     const sdkStyle = await fetch(host.url(`/api/spaces/${ID}/echo`), { headers: { 'x-opencode-directory': encodeURIComponent(`/spaces/${ID}/repo`) } });
     expect(sdkStyle.status).toBe(200);
     expect(inside.seen).toHaveLength(1);
@@ -358,7 +358,7 @@ describe('space dispatcher', () => {
     }
     const byHeader = await fetch(host.url('/api/host'), { headers: { 'x-opencode-directory': `/spaces/${ID}/repo` } });
     expect(byHeader.status).toBe(400);
-    // An SDK-style header, URI-encoded with no marker, names the same directory to OpenCode.
+    // An SDK-style header, URI-encoded with no marker, names the same directory to the server.
     const byEncodedHeader = await fetch(host.url('/api/host'), { headers: { 'x-opencode-directory': encodeURIComponent(`/spaces/${ID}/repo`) } });
     expect(byEncodedHeader.status).toBe(400);
 

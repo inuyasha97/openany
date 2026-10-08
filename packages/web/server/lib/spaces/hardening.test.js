@@ -25,7 +25,7 @@ const labels = (role, change = {}) => buildSpaceLabels({
   ...change,
 });
 
-const toolsLabels = (change = {}) => buildToolsLabels({ role: 'tools', owner: OWNER, key: KEY, description: 'web 1.24.2, opencode 1.18.31', created: '2026-09-19T10:00:00.000Z', ...change });
+const toolsLabels = (change = {}) => buildToolsLabels({ role: 'tools', owner: OWNER, key: KEY, description: 'web 1.24.2, omp 18.1.11', created: '2026-09-19T10:00:00.000Z', ...change });
 
 const goodContainer = () => hardenedContainerEntry({ name: `openchamber-space-${ID}-space`, labels: labels('space'), network: NETWORK, volumes: [WORK, HOME], toolsVolume: TOOLS });
 const goodNetwork = () => internalNetworkEntry({ name: NETWORK, labels: labels('network') });
@@ -80,10 +80,15 @@ describe('findHardeningViolations', () => {
     ['user', { ...goodContainer(), Config: { User: '0:0' } }],
     ['environment', withEnv(['OPENCHAMBER_UI_PASSWORD=secret'])],
     ['environment', withEnv(['OPENCHAMBER_UI_PASSWORD='])],
-    // OpenCode 2 takes a provider key from its environment, directly or inside its config text.
+    // OMP takes its logins and provider keys from the agent directory, so a variable that moves
+    // that directory — or that points OMP at a credential broker — is refused like the password.
+    ['environment', withEnv(['PI_CODING_AGENT_DIR=/tmp/agent'])],
+    ['environment', withEnv(['OMP_PROFILE=work'])],
+    ['environment', withEnv(['PI_PROFILE=work'])],
+    ['environment', withEnv(['OMP_AUTH_BROKER_URL=https://broker.example.test'])],
+    // Any other variable is refused too, whether or not OMP would read it as a credential.
     ['environment', withEnv(['OPENAI_API_KEY=x'])],
-    ['environment', withEnv(['OPENCODE_CONFIG_CONTENT={"provider":{"groq":{"options":{"apiKey":"x"}}}}'])],
-    ['environment', withEnv(['OPENCODE_CLI_CONFIG_CONTENT={}'])],
+    ['environment', withEnv(['SOME_UNSET_VARIABLE=1'])],
     ['read_only', withHost({ ReadonlyRootfs: false })],
     ['privileged', withHost({ Privileged: true })],
     ['cap_drop', withHost({ CapDrop: ['NET_RAW'] })],

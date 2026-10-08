@@ -66,8 +66,8 @@ const journeyWith = ({ failAt = null, place = createMemoryPlace(), projects = [P
     writeToken: async (spaceId, token) => { calls.push(['writeToken', spaceId, token]); fail('writeToken'); },
     writeIdleStop: async (spaceId, setting) => { fail('writeIdleStop'); idle.writes.push([spaceId, setting]); },
   };
-  const restartOpenCodeInside = async (spaceId) => { calls.push(['restartOpenCodeInside', spaceId]); fail('restartOpenCodeInside'); };
-  const spaceOpenCode = {
+  const restartAgentInside = async (spaceId) => { calls.push(['restartAgentInside', spaceId]); fail('restartAgentInside'); };
+  const spaceAgent = {
     writeProviderConfig: async (spaceId, grants) => { calls.push(['writeProviderConfig', spaceId, grants]); fail('writeProviderConfig'); },
   };
   const codeIn = {
@@ -89,7 +89,7 @@ const journeyWith = ({ failAt = null, place = createMemoryPlace(), projects = [P
   const records = createSpaceRecords({ dataDir, logger: quiet });
   const manager = createSpaceManager({ registry: createPlaceRegistry([place]), now: () => new Date('2026-09-26T10:00:00.000Z') });
   const journey = createSpaceJourney({
-    manager, place, gatekeeper, codeIn, codeOut, records, spaceOpenCode, serverInside, restartOpenCodeInside,
+    manager, place, gatekeeper, codeIn, codeOut, records, spaceAgent, serverInside, restartAgentInside,
     listProjectDirectories: async () => projects,
     readHostSecret: (name) => hostEnvironment[name],
     readIdleStop: async () => idle.saved ?? { enabled: true, hours: 4 },
@@ -347,10 +347,10 @@ describe('the journey: repair', () => {
     };
   };
 
-  it('restarts OpenCode inside a running space and nothing else', async () => {
+  it('reloads the agent inside a running space and nothing else', async () => {
     const { journey, calls, id } = await ready();
-    expect(await journey.restartOpenCode(id)).toMatchObject({ id, state: 'running' });
-    expect(calls).toEqual([['restartOpenCodeInside', id]]);
+    expect(await journey.restartAgent(id)).toMatchObject({ id, state: 'running' });
+    expect(calls).toEqual([['restartAgentInside', id]]);
   });
 
   it('restarts the container with a fresh token written first, then stops and starts it with its network said again', async () => {
@@ -380,15 +380,15 @@ describe('the journey: repair', () => {
     expect(calls.map(([name]) => name)).toEqual(['writeToken', 'setNetwork']);
   });
 
-  it('refuses both restarts for a stopped space, and says why OpenCode did not restart', async () => {
+  it('refuses both restarts for a stopped space, and says why the agent did not reload', async () => {
     const { journey, calls, id } = await ready();
     await journey.stopSpace(id);
     await expect(journey.restartSpace(id)).rejects.toMatchObject({ code: 'space_not_running' });
-    await expect(journey.restartOpenCode(id)).rejects.toMatchObject({ code: 'space_not_running' });
+    await expect(journey.restartAgent(id)).rejects.toMatchObject({ code: 'space_not_running' });
     expect(calls).toEqual([]);
 
-    const failing = await ready({ failAt: 'restartOpenCodeInside' });
-    await expect(failing.journey.restartOpenCode(failing.id)).rejects.toMatchObject({ code: 'restartOpenCodeInside_failed' });
+    const failing = await ready({ failAt: 'restartAgentInside' });
+    await expect(failing.journey.restartAgent(failing.id)).rejects.toMatchObject({ code: 'restartAgentInside_failed' });
   });
 
   it('lists what is broken: nothing, a gatekeeper that a restart brings back, or one that is gone for good', async () => {
@@ -477,7 +477,7 @@ describe('the journey: grants', () => {
   const openai = { kind: 'model', provider: 'openai', upstream: 'https://api.openai.com/v1', secret: { kind: 'env', name: 'OPENAI_API_KEY' } };
   const registry = { kind: 'domain', upstream: 'https://registry.example.com/npm/' };
 
-  it('gives a model key to the gatekeeper, remembers the grant without the key, and points OpenCode inside at the window', async () => {
+  it('gives a model key to the gatekeeper, remembers the grant without the key, and points the agent inside at the window', async () => {
     const { journey, records, calls, id } = await ready({ hostEnvironment: { OPENAI_API_KEY: ENV_KEY } });
     const typed = await journey.grantAccess(id, anthropic);
     expect(typed).toEqual({ grant: { kind: 'model', id: 'anthropic', provider: 'anthropic', upstream: 'https://api.anthropic.com/v1', header: 'x-api-key', source: { kind: 'typed' }, url: 'http://gatekeeper:8080/model/anthropic' } });
@@ -509,7 +509,7 @@ describe('the journey: grants', () => {
     calls.splice(0);
     const opened = await journey.grantAccess(id, registry);
     expect(opened.grant).toEqual({ kind: 'domain', id: expect.stringMatching(/^open-[0-9a-f]{12}$/), upstream: 'https://registry.example.com/npm/', url: `http://gatekeeper:8080/model/${opened.grant.id}` });
-    // No header, no secret, and OpenCode inside is not told about a domain.
+    // No header, no secret, and the agent inside is not told about a domain.
     expect(calls).toEqual([['addGrant', id, { id: opened.grant.id, upstream: 'https://registry.example.com/npm/', header: null, secret: null }]]);
     expect(records.read(id).record.grants.map((grant) => grant.kind)).toEqual(['model', 'domain']);
   });
@@ -598,7 +598,7 @@ describe('the journey: grants', () => {
     ]);
     // The typed key is not in anything the start sent or wrote.
     expect(JSON.stringify(calls)).not.toContain(KEY);
-    // OpenCode's configuration inside is written again from the record, with both model grants,
+    // The agent's configuration inside is written again from the record, with both model grants,
     // so a write that failed at the grant is repaired here. It holds no key.
     expect(calls.filter(([name]) => name === 'writeProviderConfig')).toEqual([['writeProviderConfig', id, [expect.objectContaining({ id: 'anthropic' }), expect.objectContaining({ id: 'openai' }), expect.objectContaining({ id: opened.grant.id })]]]);
 

@@ -45,11 +45,14 @@ const SETUP_MEMORY_BYTES = 128 * 1024 * 1024;
 const FILLER_MEMORY_BYTES = 2 * 1024 * 1024 * 1024;
 const FILLER_TMPFS_OPTIONS = 'rw,exec,nosuid,size=1g';
 // The container environment is an allowlist. Anything in it is readable through `docker inspect`
-// and by every process inside, and OpenCode 2 turns some variables into a login: a provider key
-// under one of its catalog's names, or a key inside OPENCODE_CONFIG_CONTENT. So a container may
-// carry the variables we set and the base image's own, and nothing else. The server password is
-// named on its own as well, so its message stays specific.
-const FORBIDDEN_ENVIRONMENT = ['OPENCHAMBER_UI_PASSWORD'];
+// and by every process inside, and OMP turns some variables into a different config root or a
+// different credential source: `PI_CODING_AGENT_DIR` and `OMP_PROFILE` (or its legacy `PI_PROFILE`
+// alias) move the agent directory, where `agent.db`'s logins and `models.yml`'s provider keys live,
+// and `OMP_AUTH_BROKER_URL` makes OMP read its credentials from a broker instead of the space's own
+// store. So a container may carry the variables we set and the base image's own, and nothing else.
+// OMP takes no credential from a plain provider-named variable, and has no environment variable
+// that carries configuration text of its own, so those need no entry.
+const FORBIDDEN_ENVIRONMENT = ['OPENCHAMBER_UI_PASSWORD', 'PI_CODING_AGENT_DIR', 'OMP_PROFILE', 'PI_PROFILE', 'OMP_AUTH_BROKER_URL'];
 // The variables the pinned base image sets itself. Docker copies them into every container made
 // from it. Read on 2026-09-24 with
 // `docker image inspect <SPACE_BASE_IMAGE> --format '{{json .Config.Env}}'`, which answered
@@ -285,8 +288,8 @@ function findCommonViolations({ container, tmpfsOptions, networkMode, mountViola
   const mounts = container?.Mounts ?? [];
 
   const variableNames = (config.Env ?? []).map((entry) => String(entry).split('=')[0]);
-  const secretVariables = variableNames.filter((name) => FORBIDDEN_ENVIRONMENT.includes(name));
-  if (secretVariables.length > 0) violate('environment', `The container environment holds a secret: ${secretVariables.join(', ')}`);
+  const namedVariables = variableNames.filter((name) => FORBIDDEN_ENVIRONMENT.includes(name));
+  if (namedVariables.length > 0) violate('environment', `The container environment holds a variable the space must never carry: ${namedVariables.join(', ')}`);
   const unexpectedVariables = variableNames.filter((name) => !FORBIDDEN_ENVIRONMENT.includes(name) && !allowedEnvironment.has(name));
   if (unexpectedVariables.length > 0) violate('environment', `The container environment holds variables nobody set for it: ${unexpectedVariables.join(', ')}`);
   if (config.User !== SPACE_USER) violate('user', `Runs as '${config.User ?? ''}', expected ${SPACE_USER}`);

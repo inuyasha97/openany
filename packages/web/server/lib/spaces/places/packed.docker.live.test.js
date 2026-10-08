@@ -13,7 +13,7 @@ import { TOOLS_MOUNT_PATH } from '../layout.js';
 import { runCommand } from '../run-command.js';
 import { createSpaceServerChannel } from '../space-server.js';
 import { packLocalTools } from '../tools-pack.js';
-import { createPackedToolsSource, readHostToolVersions } from '../tools.js';
+import { createPackedToolsSource } from '../tools.js';
 import { createLiveDockerPlace } from './docker-live-support.js';
 
 const PACKED_ENABLED = process.env.OPENCHAMBER_TEST_DOCKER_PACKED === '1';
@@ -35,7 +35,7 @@ describe.skipIf(!PACKED_ENABLED)('development build inside a space: docker (live
   beforeAll(async () => {
     directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-packed-test-'));
     const tarballs = await packLocalTools({ runCommand, outputDirectory: directory });
-    const toolsSource = createPackedToolsSource({ ...tarballs, openCodeVersion: readHostToolVersions().openCodeVersion });
+    const toolsSource = createPackedToolsSource({ ...tarballs });
     ({ place, host, dispose } = createLiveDockerPlace({ toolsSource }));
     await place.create(spec);
   }, CREATE_TIMEOUT_MS);
@@ -47,7 +47,7 @@ describe.skipIf(!PACKED_ENABLED)('development build inside a space: docker (live
 
   it('is healthy and verifies clean', async () => {
     const health = await createSpaceServerChannel({ exec: place.exec }).request(spec.id, { path: '/health' });
-    expect(JSON.parse(health.body)).toMatchObject({ isOpenCodeReady: true });
+    expect(JSON.parse(health.body)).toMatchObject({ isAgentReady: true });
     expect(await place.verify(spec.id)).toEqual([]);
   });
 

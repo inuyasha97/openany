@@ -199,11 +199,16 @@ const safeDecode = (value) => {
 };
 
 // A percent-escape in the header: the SDK sends the directory URI-encoded on every request,
-// with no marker, and OpenCode decodes it on its side, so the guards must read what OpenCode
+// with no marker, and the server decodes it on its side, so the guards must read what the server
 // will. The marker still says so for the values the UI encodes because they are not Latin-1.
+//
+// The header's name is `x-opencode-directory` and stays that way: it is the wire name the whole
+// OpenChamber SDK, UI and VS Code extension send, and the fork's own server reads it
+// (`lib/openchamber/project-directory-runtime.js`). Renaming it here alone would stop the
+// dispatcher from reading what the server inside a space — the same OpenChamber server — reads.
 const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
 
-/** Every directory a request names in its query or its directory header, as OpenCode reads them. */
+/** Every directory a request names in its query or its directory header, as the server reads them. */
 export function requestedDirectories(req, url) {
   const directories = [];
   for (const key of ['directory', 'location[directory]']) {

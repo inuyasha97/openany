@@ -168,7 +168,7 @@ describe.skipIf(!LIVE_DOCKER_ENABLED)('code in: docker (live)', () => {
   // The secret is searched for on the host, in what was collected from the space. Sending it into
   // the space as a search pattern would put it there.
   it('puts the ignored .env secret nowhere in the space, files or git objects', async () => {
-    // Gzipped on the way out, because the space's HOME holds OpenCode's data and exec output is capped.
+    // Gzipped on the way out, because the space's HOME holds the agent's data and exec output is capped.
     const collect = async (script, args) => {
       const collected = await place.exec(spec.id, ['/bin/sh', '-c', `PATH=/usr/bin:/bin; ${script} | gzip -c | base64 -w 0`, 'sh', ...args], { timeoutMs: 120_000 });
       expect(collected.code).toBe(0);

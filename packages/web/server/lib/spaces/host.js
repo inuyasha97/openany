@@ -24,7 +24,7 @@ import { spaceProjectPath } from './layout.js';
 import { createSpaceManager } from './manager.js';
 import { createSpaceRecords } from './space-records.js';
 import { createSpaceEventSources } from './space-events.js';
-import { createSpaceOpenCode } from './space-opencode.js';
+import { createSpaceAgent } from './space-agent.js';
 import { createSpaceSessionIndex, mergeSessionLists } from './space-sessions.js';
 import { createSpaceWebSocketForwarder } from './websocket.js';
 import { createDockerPlace } from './places/docker.js';
@@ -44,11 +44,13 @@ const SESSION_PAGE_LIMIT = 100;
 const SESSION_MAX_PAGES = 10;
 const SESSION_LIST_TIMEOUT_MS = 10_000;
 const MAX_SESSION_LIST_BYTES = 8 * 1024 * 1024;
-// The server inside restarts its OpenCode and answers once it is ready again, which on a slow
-// machine takes a while; past this the restart is reported as not answered.
-const RESTART_OPENCODE_TIMEOUT_MS = 180_000;
+// The server inside reloads its configuration and answers once it has; on a slow machine that
+// takes a while, and past this the reload is reported as not answered.
+const RESTART_AGENT_TIMEOUT_MS = 180_000;
 const MAX_RESTART_ANSWER_BYTES = 64 * 1024;
-// A managed OpenCode that restarted; an external one answers `success` with no restart at all.
+// The in-space server's own reload answer. OMP runs in this server's process, one session process
+// at a time, so there is no managed child to respawn: the route re-reads its config and says the
+// client should refresh, which is why it always answers `requiresReload: true`.
 const restartedSchema = z.object({ success: z.literal(true), requiresReload: z.literal(true) });
 // The cursor of a next page, as the server inside names it; anything else ends the read.
 const nextCursorSchema = z.string().min(1);
@@ -67,17 +69,18 @@ const readBody = (response, cap) => new Promise((resolve, reject) => {
 });
 
 /**
- * Asks the server inside a space to restart the OpenCode it manages, the route its own settings
- * use for that, over the dispatcher's `requestInside`. The answer comes from inside and is
- * data: anything but a 200 that says OpenCode was restarted is a failure, and its text never
- * travels further than a code.
+ * Asks the server inside a space to reload its agent configuration, the route its own settings
+ * use for that, over the dispatcher's `requestInside`. The in-space server hosts OMP in-process and
+ * opens each session's OMP process lazily, so this is the whole of a "restart" from the host's side.
+ * The answer comes from inside and is data: anything but a 200 that says it reloaded is a failure,
+ * and its text never travels further than a code.
  */
-export const restartOpenCodeInside = async (requestInside, spaceId) => {
+export const restartAgentInside = async (requestInside, spaceId) => {
   const response = await requestInside(spaceId, {
     method: 'POST',
     path: '/api/config/reload',
     headers: { accept: 'application/json', 'content-length': '0' },
-    timeoutMs: RESTART_OPENCODE_TIMEOUT_MS,
+    timeoutMs: RESTART_AGENT_TIMEOUT_MS,
   });
   let succeeded = false;
   try {
@@ -87,7 +90,7 @@ export const restartOpenCodeInside = async (requestInside, spaceId) => {
   } finally {
     response.destroy();
   }
-  if (!succeeded) throw new SpaceError('opencode_restart_failed', `OpenCode inside the space did not restart (status ${response.statusCode}).`);
+  if (!succeeded) throw new SpaceError('agent_restart_failed', `The agent inside the space did not reload (status ${response.statusCode}).`);
 };
 
 /**
@@ -151,7 +154,7 @@ export function createSpacesHost({
   const codeIn = createCodeIn({ git, place: dockerPlace });
   const codeOut = createCodeOut({ git, place: dockerPlace });
   const records = createSpaceRecords({ dataDir, logger });
-  const spaceOpenCode = createSpaceOpenCode({ exec: dockerPlace.exec });
+  const spaceAgent = createSpaceAgent({ exec: dockerPlace.exec });
 
   const listSpaces = () => manager.listSpaces({ placeId: dockerPlace.id });
   const dispatcher = createSpaceDispatcher({
@@ -237,9 +240,9 @@ export function createSpacesHost({
     codeIn,
     codeOut,
     records,
-    spaceOpenCode,
+    spaceAgent,
     serverInside,
-    restartOpenCodeInside: (spaceId) => restartOpenCodeInside(dispatcher.requestInside, spaceId),
+    restartAgentInside: (spaceId) => restartAgentInside(dispatcher.requestInside, spaceId),
     listProjectDirectories,
     // A key named by an environment variable is read from the host's own environment, now, and
     // its value is kept nowhere (decision 5).

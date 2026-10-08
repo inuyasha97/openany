@@ -15,7 +15,7 @@
 // value (decision 5) and says it again to the gatekeeper after every start; a value it cannot
 // find again leaves the space "needs access" until the user grants once more.
 //
-// Repair, since 5d-2 (DESIGN.md, journey step 8 and decision 10): restart OpenCode inside, and
+// Repair, since 5d-2 (DESIGN.md, journey step 8 and decision 10): reload the agent inside, and
 // restart the container with a fresh token for the server inside. A space whose gatekeeper is gone
 // is listed as such, because no restart brings it back.
 //
@@ -104,11 +104,11 @@ const failureOf = (error) => ({
 /**
  * `listProjectDirectories` answers the host's registered projects; a space is made for one of them
  * and its label carries the project's hash. `announce(spaceId, payload)` enters an event into the
- * host's hub, `onSpacesChanged()` tells the host to read its list again at once. `spaceOpenCode`
- * writes OpenCode's files inside a space, and `readHostSecret(name)` is how a key named by an
+ * host's hub, `onSpacesChanged()` tells the host to read its list again at once. `spaceAgent`
+ * writes the agent's own files inside a space, and `readHostSecret(name)` is how a key named by an
  * environment variable of the host's is found again: its value or undefined, never stored.
  * `serverInside.writeToken(spaceId, token)` replaces the token the server inside reads when it
- * starts, and `restartOpenCodeInside(spaceId)` asks the server inside to restart its OpenCode.
+ * starts, and `restartAgentInside(spaceId)` asks the server inside to reload its agent.
  * `readIdleStop()` and `saveIdleStop(setting)` read and keep the user's idle stop setting, and
  * `serverInside.writeIdleStop(spaceId, setting)` tells it to the server inside.
  */
@@ -119,9 +119,9 @@ export function createSpaceJourney({
   codeIn,
   codeOut,
   records,
-  spaceOpenCode,
+  spaceAgent,
   serverInside,
-  restartOpenCodeInside,
+  restartAgentInside,
   listProjectDirectories,
   readHostSecret = () => undefined,
   readIdleStop = async () => ({ ...DEFAULT_IDLE_STOP }),
@@ -342,14 +342,14 @@ export function createSpaceJourney({
   };
 
   /**
-   * OpenCode's configuration inside, written again from the record at a start: it survives a
-   * stop in the home volume, but a write that failed at the grant is repaired only here. It
+   * The agent's provider configuration inside, written again from the record at a start: it survives
+   * a stop in the home volume, but a write that failed at the grant is repaired only here. It
    * cooperates and enforces nothing, so a failure is logged and the start goes on.
    */
   const rewriteProviderConfig = async (spaceId, grants) => {
     if (!grants.some((grant) => grant.kind === 'model')) return;
     try {
-      await spaceOpenCode.writeProviderConfig(spaceId, grants);
+      await spaceAgent.writeProviderConfig(spaceId, grants);
     } catch (error) {
       logger.warn?.(`[spaces] the provider configuration of space ${spaceId} was not written again: ${error?.code ?? error?.message ?? error}`);
     }
@@ -553,22 +553,22 @@ export function createSpaceJourney({
   });
 
   /**
-   * Restarts OpenCode inside a running space, the softest of the repair actions: the server inside
-   * restarts the OpenCode it manages and answers once it is ready again. The container, its
-   * gatekeeper and the grants stay as they are.
+   * Reloads the agent inside a running space, the softest of the repair actions: the server inside
+   * reloads its configuration and opens each session's OMP process again on the next use, and
+   * answers once it has. The container, its gatekeeper and the grants stay as they are.
    */
-  const restartOpenCode = (spaceId) => exclusive(spaceId, async () => {
+  const restartAgent = (spaceId) => exclusive(spaceId, async () => {
     requireNotPending(spaceId);
     const space = await requireListed(spaceId);
-    if (space.state !== 'running') throw new SpaceError('space_not_running', 'OpenCode runs inside a running space. Start the space.');
-    await restartOpenCodeInside(spaceId);
+    if (space.state !== 'running') throw new SpaceError('space_not_running', 'The agent runs inside a running space. Start the space.');
+    await restartAgentInside(spaceId);
     onSpacesChanged();
     return requireListed(spaceId);
   });
 
   /**
    * Gives a running space a grant: the key goes to the gatekeeper, the grant without its value
-   * goes to the record, and for a model grant OpenCode inside is told to send that provider's
+   * goes to the record, and for a model grant the agent inside is told to send that provider's
    * calls through the window. A second grant for the same provider replaces the first, which is
    * how a key is changed; a grant is never taken back (decision 4). The value of a typed key is
    * in this request and in the gatekeeper's memory, and nowhere else afterwards.
@@ -605,7 +605,7 @@ export function createSpaceJourney({
     }
     // A failure here answers the grant with it; the key is in the gatekeeper and the record, and
     // the next start writes the configuration again.
-    if (grant.kind === 'model') await spaceOpenCode.writeProviderConfig(spaceId, grants);
+    if (grant.kind === 'model') await spaceAgent.writeProviderConfig(spaceId, grants);
     return { grant: describeGrant(grant) };
   });
 
@@ -802,5 +802,5 @@ export function createSpaceJourney({
     return { brought, applied, removal };
   });
 
-  return { createSpace, listSpaces, startSpace, stopSpace, restartSpace, restartOpenCode, removeSpace, stopAllSpaces, reopen, grantAccess, openDomain, readJournal, previewApply, applySpace, readIdleStopSetting, changeIdleStop, runSetup, readSetup };
+  return { createSpace, listSpaces, startSpace, stopSpace, restartSpace, restartAgent, removeSpace, stopAllSpaces, reopen, grantAccess, openDomain, readJournal, previewApply, applySpace, readIdleStopSetting, changeIdleStop, runSetup, readSetup };
 }

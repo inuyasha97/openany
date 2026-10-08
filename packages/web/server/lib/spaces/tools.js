@@ -59,8 +59,8 @@ export const OMP_CLI_VERSION = '18.1.11';
 const hostOmpCliVersion = () => process.env.OPENCHAMBER_OMP_CLI_VERSION ?? OMP_CLI_VERSION;
 
 /**
- * The OMP CLI is one npm package and `omp` is its only bin, so there is no second package to name
- * beside it the way OpenCode's plugin was.
+ * The OMP CLI is one npm package and `omp` is its only bin, so there is no second package to
+ * name beside it.
  *
  * Worth knowing before a space is expected to run it: the npm bin is a Bun program — the file
  * starts with `#!/usr/bin/env bun` and the package declares `engines.bun` — while the pinned space

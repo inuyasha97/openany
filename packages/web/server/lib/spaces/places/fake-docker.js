@@ -123,7 +123,7 @@ export const bridgeNetworkEntry = ({ name, labels }) => ({
   Labels: labels,
 });
 
-const HEALTHY_ANSWER = 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"status":"ok","isOpenCodeReady":true}';
+const HEALTHY_ANSWER = 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"status":"ok","isAgentReady":true}';
 const jsonAnswer = (body) => `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n${body}`;
 const CONTROL_ANSWERS = {
   '/health': jsonAnswer('{"ready":true,"mode":"allowlist","domains":0,"grants":0}'),

@@ -140,7 +140,7 @@ describe('parseSpaceLabels', () => {
 
 describe('tools labels and names', () => {
   const KEY = '0123456789abcdef';
-  const TOOLS_FIELDS = { role: 'tools', owner: 'install-a', key: KEY, description: 'web 1.24.2, opencode 1.18.31', created: '2026-09-20T08:00:00.000Z' };
+  const TOOLS_FIELDS = { role: 'tools', owner: 'install-a', key: KEY, description: 'web 1.24.2, omp 18.1.11', created: '2026-09-20T08:00:00.000Z' };
 
   it('names the volume after the owner and the key, and a one-shot after the volume', () => {
     expect(toolsResourceName('install-a', KEY)).toBe(`openchamber-tools-install-a-${KEY}`);
@@ -170,7 +170,7 @@ describe('tools labels and names', () => {
       'openchamber.space.role': 'tools',
       'openchamber.space.owner': 'install-a',
       'openchamber.space.tools.key': KEY,
-      'openchamber.space.tools.description': 'web 1.24.2, opencode 1.18.31',
+      'openchamber.space.tools.description': 'web 1.24.2, omp 18.1.11',
       'openchamber.space.created': '2026-09-20T08:00:00.000Z',
     });
   });

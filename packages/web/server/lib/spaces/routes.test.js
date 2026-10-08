@@ -54,7 +54,7 @@ const journeyOf = (overrides = {}) => {
     startSpace: record('startSpace', { id: ID, state: 'running' }),
     stopSpace: record('stopSpace', { id: ID, state: 'exited' }),
     restartSpace: record('restartSpace', { id: ID, state: 'running', networkRestored: true }),
-    restartOpenCode: record('restartOpenCode', { id: ID, state: 'running' }),
+    restartAgent: record('restartAgent', { id: ID, state: 'running' }),
     removeSpace: record('removeSpace', { id: ID, removed: true }),
     grantAccess: record('grantAccess', { grant: { id: 'open-1' } }),
     openDomain: record('openDomain', { network: { mode: 'allowlist', domains: ['registry.npmjs.org'] } }),
@@ -73,7 +73,7 @@ const journeyOf = (overrides = {}) => {
 describe('space routes', () => {
   it('answers every journey route with 404 and isolated_spaces_off while the feature is off, and the switch still works', async () => {
     const { call, calls } = await serve({ journey: null, switchState: { enabled: false } });
-    for (const [method, path] of [['GET', ''], ['POST', ''], ['GET', '/places'], ['POST', `/${ID}/start`], ['POST', `/${ID}/stop`], ['POST', `/${ID}/restart`], ['POST', `/${ID}/restart-opencode`], ['POST', `/${ID}/grants`], ['DELETE', `/${ID}`], ['GET', `/${ID}/journal`], ['GET', `/${ID}/apply`], ['POST', `/${ID}/apply`], ['GET', '/idle-stop'], ['PUT', '/idle-stop'], ['POST', `/${ID}/setup`], ['GET', `/${ID}/setup`]]) {
+    for (const [method, path] of [['GET', ''], ['POST', ''], ['GET', '/places'], ['POST', `/${ID}/start`], ['POST', `/${ID}/stop`], ['POST', `/${ID}/restart`], ['POST', `/${ID}/restart-agent`], ['POST', `/${ID}/grants`], ['DELETE', `/${ID}`], ['GET', `/${ID}/journal`], ['GET', `/${ID}/apply`], ['POST', `/${ID}/apply`], ['GET', '/idle-stop'], ['PUT', '/idle-stop'], ['POST', `/${ID}/setup`], ['GET', `/${ID}/setup`]]) {
       expect(await call(method, `${SPACES_ROUTE}${path}`, method === 'GET' || method === 'DELETE' ? undefined : {}), `${method} ${path}`).toEqual({ status: 404, body: { code: 'isolated_spaces_off', message: 'Isolated spaces are turned off.', details: null } });
     }
     expect(await call('GET', `${SPACES_ROUTE}/switch`)).toEqual({ status: 200, body: { enabled: false, spaces: [] } });
@@ -108,7 +108,7 @@ describe('space routes', () => {
     expect(await call('POST', `${SPACES_ROUTE}/${ID}/start`)).toEqual({ status: 200, body: { id: ID, state: 'running' } });
     expect(await call('POST', `${SPACES_ROUTE}/${ID}/stop`)).toEqual({ status: 200, body: { id: ID, state: 'exited' } });
     expect(await call('POST', `${SPACES_ROUTE}/${ID}/restart`)).toEqual({ status: 200, body: { id: ID, state: 'running', networkRestored: true } });
-    expect(await call('POST', `${SPACES_ROUTE}/${ID}/restart-opencode`)).toEqual({ status: 200, body: { id: ID, state: 'running' } });
+    expect(await call('POST', `${SPACES_ROUTE}/${ID}/restart-agent`)).toEqual({ status: 200, body: { id: ID, state: 'running' } });
     expect(await call('POST', `${SPACES_ROUTE}/${ID}/grants`, { kind: 'domain', upstream: 'https://registry.example.com/' })).toEqual({ status: 200, body: { grant: { id: 'open-1' } } });
     expect(await call('POST', `${SPACES_ROUTE}/${ID}/network/domains`, { domain: 'registry.npmjs.org' })).toEqual({ status: 200, body: { network: { mode: 'allowlist', domains: ['registry.npmjs.org'] } } });
     expect(await call('GET', `${SPACES_ROUTE}/${ID}/journal`)).toEqual({ status: 200, body: { records: [], dropped: 0, since: 'now' } });
@@ -118,7 +118,7 @@ describe('space routes', () => {
     expect(await call('GET', `${SPACES_ROUTE}/${ID}/setup`)).toEqual({ status: 200, body: { setup: null, output: null } });
     expect(await call('DELETE', `${SPACES_ROUTE}/${ID}`)).toEqual({ status: 200, body: { id: ID, removed: true } });
     expect(journey.calls).toEqual([
-      ['listSpaces', { access: true }], ['createSpace', request], ['startSpace', ID], ['stopSpace', ID], ['restartSpace', ID], ['restartOpenCode', ID], ['grantAccess', ID, { kind: 'domain', upstream: 'https://registry.example.com/' }], ['openDomain', ID, { domain: 'registry.npmjs.org' }], ['readJournal', ID], ['previewApply', ID], ['applySpace', ID, { as: 'branch', branch: 'b' }], ['runSetup', ID, { commands: ['npm ci'] }], ['readSetup', ID], ['removeSpace', ID],
+      ['listSpaces', { access: true }], ['createSpace', request], ['startSpace', ID], ['stopSpace', ID], ['restartSpace', ID], ['restartAgent', ID], ['grantAccess', ID, { kind: 'domain', upstream: 'https://registry.example.com/' }], ['openDomain', ID, { domain: 'registry.npmjs.org' }], ['readJournal', ID], ['previewApply', ID], ['applySpace', ID, { as: 'branch', branch: 'b' }], ['runSetup', ID, { commands: ['npm ci'] }], ['readSetup', ID], ['removeSpace', ID],
     ]);
   });
 

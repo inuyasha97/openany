@@ -126,7 +126,7 @@ require('node:http').createServer((request, response) => {
     headerNames: Object.keys(request.headers).sort(),
   };
   // One line per request in the container's log, so the host can read what a client it does
-  // not control, OpenCode inside a space, sent here. Hashes only, as in the answer.
+  // not control, the OpenChamber server inside a space, sent here. Hashes only, as in the answer.
   console.log('seen ' + JSON.stringify(seen));
   request.resume();
   request.on('end', () => {

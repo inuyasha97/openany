@@ -34,7 +34,7 @@ const STEP_TEXT = {
 const BUSY_TEXT = {
   start: 'spaces.group.busy.start',
   stop: 'spaces.group.busy.stop',
-  restart_opencode: 'spaces.group.busy.restartOpenCode',
+  restart_agent: 'spaces.group.busy.restartAgent',
   restart: 'spaces.group.busy.restart',
   setup: 'spaces.group.busy.setup',
   remove: 'spaces.group.busy.remove',
@@ -43,7 +43,7 @@ const BUSY_TEXT = {
 const FAILED_TEXT = {
   start: 'spaces.group.actionFailed.start',
   stop: 'spaces.group.actionFailed.stop',
-  restart_opencode: 'spaces.group.actionFailed.restartOpenCode',
+  restart_agent: 'spaces.group.actionFailed.restartAgent',
   restart: 'spaces.group.actionFailed.restart',
   setup: 'spaces.group.actionFailed.setup',
   remove: 'spaces.group.actionFailed.remove',

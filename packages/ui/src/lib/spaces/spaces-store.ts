@@ -40,7 +40,7 @@ export type SpaceAccessFailure = { provider: string; code: string; message: stri
 type SpaceCreationAccess = { kind: 'giving' } | { kind: 'failed'; failures: readonly SpaceAccessFailure[] };
 
 /** The actions on a space the user can take from its group, from soft to hard; `setup` runs the project's setup commands again. */
-export type SpaceAction = 'start' | 'stop' | 'restart_opencode' | 'restart' | 'setup' | 'remove';
+export type SpaceAction = 'start' | 'stop' | 'restart_agent' | 'restart' | 'setup' | 'remove';
 
 /** An action this window started on a space: under way, or failed with the server's reason. */
 export type SpaceActionState =

@@ -1,6 +1,6 @@
 // A space's state and its repair (DESIGN.md, user journey step 8): what the group's status line
 // says about a space that is stopped, broken or not answering, which actions its menu offers, and
-// the actions themselves, from soft to hard: start, restart OpenCode, restart the container, stop,
+// the actions themselves, from soft to hard: start, restart the agent, restart the container, stop,
 // delete. What the host lists is the authority; this window only adds the action it has under way
 // or the one that failed, so the line can say so. Since 5d-4 the menu of a running space also runs
 // the project's setup commands again.
@@ -10,7 +10,7 @@ import { refreshGlobalSessions } from '@/stores/useGlobalSessionsStore';
 import {
   removeSpace,
   restartSpace,
-  restartSpaceOpenCode,
+  restartSpaceAgent,
   startSpace,
   stopSpace,
   type SpaceEntry,
@@ -64,7 +64,7 @@ export const spaceMenuActionsOf = (entry: SpaceEntry | undefined): SpaceAction[]
   if (entry.state === 'missing') return ['remove'];
   const gone = entry.damage === 'gatekeeper_gone';
   if (entry.state === 'exited') return gone ? ['remove'] : ['start', 'remove'];
-  return gone ? ['stop', 'remove'] : ['restart_opencode', 'restart', 'setup', 'stop', 'remove'];
+  return gone ? ['stop', 'remove'] : ['restart_agent', 'restart', 'setup', 'stop', 'remove'];
 };
 
 /**
@@ -85,7 +85,7 @@ const call = (spaceId: string, action: SpaceAction): Promise<SpaceFailure | null
     case 'start': return startSpace(spaceId).then(() => null);
     case 'stop': return stopSpace(spaceId).then(() => null);
     case 'restart': return restartSpace(spaceId).then(() => null);
-    case 'restart_opencode': return restartSpaceOpenCode(spaceId).then(() => null);
+    case 'restart_agent': return restartSpaceAgent(spaceId).then(() => null);
     case 'setup': {
       const entry = useSpacesStore.getState().journey?.get(spaceId);
       if (!entry) return Promise.resolve({ code: 'space_not_found', message: '' });

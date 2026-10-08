@@ -89,7 +89,6 @@ const describeCall = (args) => {
   if (args[0] === 'create') return args.includes('--network-alias') ? 'create gatekeeper' : 'create space';
   if (args[0] === 'rename') return `rename ${args[1]} ${args[2]}`;
   if (args[0] === 'network' && args[1] === 'connect') return `network connect ${args[2]}`;
-  if (isExec('ln -sfn')(args)) return 'exec link plugin';
   if (isExec('token.new')(args)) return 'exec write token';
   if (isExec('gatekeeper.cjs.new')(args)) return 'exec write program';
   if (args[0] === 'exec') return `exec ${args[4].endsWith('-gatekeeper') ? 'gatekeeper ' : ''}${args[5].split('/').pop()}`;
@@ -119,7 +118,6 @@ const SPACE_STEPS = [
   ...GATEKEEPER_START_STEPS,
   'create space',
   `start ${CONTAINER}`,
-  'exec link plugin',
   'exec write token',
   'exec curl',
 ];
@@ -231,8 +229,6 @@ describe('docker place: create', () => {
       '--env', 'NO_PROXY=gatekeeper,localhost,127.0.0.1',
       '--env', 'no_proxy=gatekeeper,localhost,127.0.0.1',
       '--env', 'NODE_USE_ENV_PROXY=1',
-      '--env', 'OPENCODE_DISABLE_MODELS_FETCH=1',
-      '--env', 'OPENCODE_DISABLE_AUTOUPDATE=1',
       '--env', 'OPENCHAMBER_RELAY_HOST=off',
       '--env', 'OPENCHAMBER_SPACE_IDLE_STOP_FILE=/home/space/.openchamber-space/idle-stop.json',
       SPACE_BASE_IMAGE,
@@ -440,7 +436,6 @@ describe('docker place: create rollback', () => {
     { step: 'gatekeeper program', failAt: isExec('gatekeeper.cjs.new'), code: 'gatekeeper_setup_failed', removals: withoutSpace },
     { step: 'space container', failAt: (args) => args[0] === 'create' && !args.includes('--network-alias'), removals: everything },
     { step: 'start', failAt: (args) => args[0] === 'start' && args[1] === CONTAINER, removals: everything },
-    { step: 'plugin link', failAt: isExec('ln -sfn'), code: 'space_setup_failed', removals: everything },
     { step: 'token', failAt: isExec('token.new'), code: 'space_setup_failed', removals: everything },
   ];
 

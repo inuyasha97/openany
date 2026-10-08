@@ -59,6 +59,7 @@ const STATUS_BY_CODE = new Map([
   ['gatekeeper_missing', 409],
   ['invalid_setup_commands', 400],
   ['space_setup_running', 409],
+  ['agent_restart_failed', 502],
 ]);
 
 /** One JSON answer per failure, with a stable code. Details travel as data; a stack never does. */
@@ -207,9 +208,9 @@ export function registerSpaceRoutes(app, { getJourney, getPlaces = () => [], rea
     res.json(await journey.stopSpace(spaceIdOf(req)));
   }));
 
-  // The repair actions, from soft to hard: OpenCode inside, then the container with a fresh token.
-  app.post(`${SPACES_ROUTE}/:id/restart-opencode`, withJourney(async (journey, req, res) => {
-    res.json(await journey.restartOpenCode(spaceIdOf(req)));
+  // The repair actions, from soft to hard: the agent inside, then the container with a fresh token.
+  app.post(`${SPACES_ROUTE}/:id/restart-agent`, withJourney(async (journey, req, res) => {
+    res.json(await journey.restartAgent(spaceIdOf(req)));
   }));
 
   app.post(`${SPACES_ROUTE}/:id/restart`, withJourney(async (journey, req, res) => {

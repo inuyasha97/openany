@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { Readable } from 'node:stream';
 
-import { createSpacesHost, readOrCreateOwner, restartOpenCodeInside } from './host.js';
+import { createSpacesHost, readOrCreateOwner, restartAgentInside } from './host.js';
 import { hashProjectDirectory } from './labels.js';
 import { createMemoryPlace } from './places/memory-place.js';
 
@@ -48,7 +48,7 @@ describe('readOrCreateOwner', () => {
   });
 });
 
-describe('restartOpenCodeInside', () => {
+describe('restartAgentInside', () => {
   // The server inside, as the dispatcher hands back its answer: a status and a body to read.
   const answering = (statusCode, body) => {
     const asked = [];
@@ -61,20 +61,20 @@ describe('restartOpenCodeInside', () => {
 
   it('asks the server inside for the reload its own settings use, and resolves when it says it succeeded', async () => {
     const { asked, requestInside } = answering(200, JSON.stringify({ success: true, requiresReload: true }));
-    await restartOpenCodeInside(requestInside, 'a1b2c3d4e5f6');
+    await restartAgentInside(requestInside, 'a1b2c3d4e5f6');
     expect(asked).toEqual([expect.objectContaining({ spaceId: 'a1b2c3d4e5f6', method: 'POST', path: '/api/config/reload' })]);
   });
 
   it.each([
     ['an error status', 500, JSON.stringify({ success: false, error: 'boom' })],
     ['a 200 that does not say it succeeded', 200, JSON.stringify({ success: 'yes' })],
-    ['an OpenCode it does not manage, which it did not restart', 200, JSON.stringify({ success: true, requiresReload: false, requiresManualRestart: true })],
-    ['a body that is not JSON', 200, 'restarted'],
+    ['a 200 that does not carry the reload flag', 200, JSON.stringify({ success: true, requiresReload: false })],
+    ['a body that is not JSON', 200, 'reloaded'],
     ['a body past the cap', 200, JSON.stringify({ success: true, padding: 'x'.repeat(70 * 1024) })],
-  ])('reports %s as a failed restart, with no text from inside', async (_name, status, body) => {
+  ])('reports %s as a failed reload, with no text from inside', async (_name, status, body) => {
     const { requestInside } = answering(status, body);
-    const failure = await restartOpenCodeInside(requestInside, 'a1b2c3d4e5f6').catch((error) => error);
-    expect(failure).toMatchObject({ code: 'opencode_restart_failed' });
+    const failure = await restartAgentInside(requestInside, 'a1b2c3d4e5f6').catch((error) => error);
+    expect(failure).toMatchObject({ code: 'agent_restart_failed' });
     expect(failure.message).not.toContain('boom');
   });
 });

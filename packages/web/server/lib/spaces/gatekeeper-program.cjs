@@ -565,7 +565,8 @@ function joinSockets(clientSocket, upstream, done) {
   clientSocket.pipe(upstream);
 }
 
-/** Anything but CONNECT. Stage 0 proved that OpenCode, curl, npm and git all use CONNECT for https. */
+/** Anything but CONNECT. Stage 0 proved that every https client measured — the agent CLI of the day,
+ * curl, npm and git — uses CONNECT for https. */
 function refusePlainProxy(request, response) {
   let host = '';
   try {

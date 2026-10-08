@@ -63,7 +63,7 @@ export function createMemoryPlace({ id = 'memory' } = {}) {
       // `/health` the way the real one does, with the space id so a caller can tell spaces apart.
       const server = http.createServer((request, response) => {
         response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ status: 'ok', isOpenCodeReady: true, spaceId, path: request.url }));
+        response.end(JSON.stringify({ status: 'ok', isAgentReady: true, spaceId, path: request.url }));
       });
       await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
       containers.get(`${spaceId}:${ROLE_SPACE}`).server = server;

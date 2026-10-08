@@ -33,7 +33,7 @@ import { SPACE_ACTION_TEXT } from './spaceActionText';
 const ACTION_ICON = {
   start: 'play',
   stop: 'stop',
-  restart_opencode: 'refresh',
+  restart_agent: 'refresh',
   restart: 'restart',
   setup: 'terminal-box',
   remove: 'delete-bin',

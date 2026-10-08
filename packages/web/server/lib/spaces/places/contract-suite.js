@@ -132,7 +132,7 @@ export function runPlaceContractSuite(title, { enabled = true, setup }) {
       const stream = await place.connect(spec.id);
       const answer = await requestOver(stream, '/health');
       expect(answer.status).toBe(200);
-      expect(JSON.parse(answer.body)).toMatchObject({ isOpenCodeReady: true });
+      expect(JSON.parse(answer.body)).toMatchObject({ isAgentReady: true });
       const closed = new Promise((resolve) => stream.once('close', resolve));
       stream.destroy();
       await closed;

@@ -64,7 +64,7 @@ describe('the idle stop inside a space', () => {
     expect(await at(10.5)).toBe(true);
   });
 
-  it('counts a session waiting for the user\'s answer as idle, though OpenCode keeps it busy', async () => {
+  it('counts a session waiting for the user\'s answer as idle, though the agent keeps it busy', async () => {
     const { at, sessions, pending } = timerWith({ enabled: true, hours: 2 });
     sessions.q = { status: 'busy', lastUpdateAt: 0 };
     expect(await at(1)).toBe(false);

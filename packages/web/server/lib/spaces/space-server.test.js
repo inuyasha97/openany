@@ -97,18 +97,6 @@ describe('space server channel: idle stop setting', () => {
   });
 });
 
-describe('space server channel: plugin link', () => {
-  it('links only the plugin package, above every project of the space', async () => {
-    const { channel, calls } = channelWith(ok());
-    await channel.linkPlugin(ID);
-
-    expect(calls[0].argv).toEqual([
-      '/bin/sh', '-c', 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; mkdir -p "$1/node_modules/@opencode" && ln -sfn "$2" "$1/node_modules/@opencode/plugin"',
-      'sh', `/spaces/${ID}`, '/opt/openchamber-tools/node_modules/@opencode/plugin',
-    ]);
-  });
-});
-
 describe('space server channel: request', () => {
   it('puts the whole request into a curl config on stdin, so nothing of it is in an argument', async () => {
     const { channel, calls } = channelWith(ok(http(200, '{"authenticated":true}', ['Set-Cookie: a=1; Path=/', 'Set-Cookie: b=2'])));
@@ -251,8 +239,8 @@ describe('space server channel: request', () => {
 describe('space server channel: waitUntilReady', () => {
   const refused = { code: 7, stdout: '', stderr: 'curl: (7) Failed to connect' };
 
-  it('waits through "nothing listens yet" and "OpenCode not ready", then resolves', async () => {
-    const { channel, calls, waits } = channelWith(refused, refused, ok(http(200, '{"isOpenCodeReady":false}')), ok(http(200, '{"isOpenCodeReady":true}')));
+  it('waits through "nothing listens yet" and "agent not ready", then resolves', async () => {
+    const { channel, calls, waits } = channelWith(refused, refused, ok(http(200, '{"isAgentReady":false}')), ok(http(200, '{"isAgentReady":true}')));
     await channel.waitUntilReady(ID);
 
     expect(calls).toHaveLength(4);
@@ -260,16 +248,16 @@ describe('space server channel: waitUntilReady', () => {
   });
 
   it('gives up at the deadline and says what it saw last', async () => {
-    const { channel, calls } = channelWith(ok(http(200, '{"isOpenCodeReady":false}')));
+    const { channel, calls } = channelWith(ok(http(200, '{"isAgentReady":false}')));
 
     const error = await channel.waitUntilReady(ID).catch((caught) => caught);
     expect(error.code).toBe('space_server_not_ready');
-    expect(error.message).toMatch(/within 120 seconds \(the answer does not report OpenCode ready\)/);
+    expect(error.message).toMatch(/within 120 seconds \(the answer does not report the agent ready\)/);
     expect(calls).toHaveLength(240);
   });
 
   it('asks /health with a short time limit, so a listener that never answers costs little', async () => {
-    const { channel, calls } = channelWith(ok(http(200, '{"isOpenCodeReady":true}')));
+    const { channel, calls } = channelWith(ok(http(200, '{"isAgentReady":true}')));
     await channel.waitUntilReady(ID);
 
     expect(calls[0].argv).toEqual(['/usr/bin/curl', '--disable', '--noproxy', '*', '--silent', '--show-error', '--include', '--max-time', '3', '--config', '-']);
@@ -301,14 +289,14 @@ describe('space server channel: waitUntilReady', () => {
     ['a body that is a number', ok(http(200, '5'))],
     ['a body that is not JSON', ok(http(200, '<html>'))],
     ['an empty body', ok(http(200, ''))],
-    ['a ready answer with another status', ok(http(503, '{"isOpenCodeReady":true}'))],
-    ['a truthy value that is not true', ok(http(200, '{"isOpenCodeReady":"yes"}'))],
+    ['a ready answer with another status', ok(http(503, '{"isAgentReady":true}'))],
+    ['a truthy value that is not true', ok(http(200, '{"isAgentReady":"yes"}'))],
     // Ready, but far larger than a health answer. The host does not spend time parsing it.
-    ['a ready body of more than 64 KiB', ok(http(200, `{"isOpenCodeReady":true,"padding":"${'x'.repeat(70 * 1024)}"}`))],
+    ['a ready body of more than 64 KiB', ok(http(200, `{"isAgentReady":true,"padding":"${'x'.repeat(70 * 1024)}"}`))],
     // Measured with curl 7.88.1 against a listener that answers `hello`: exit code 1, the code that a failed `docker exec` uses too.
     ['a listener that does not speak HTTP', { code: 1, stdout: '', stderr: 'curl: (1) Received HTTP/0.9 when not allowed\n' }],
     ['a request whose exec timed out', Object.assign(new Error('docker exec did not finish'), { code: 'command_timeout' })],
-    ['more header lines than the host parses', ok(http(200, '{"isOpenCodeReady":true}', Array.from({ length: 5_000 }, () => 'x: 1')))],
+    ['more header lines than the host parses', ok(http(200, '{"isAgentReady":true}', Array.from({ length: 5_000 }, () => 'x: 1')))],
     ['a header named __proto__', ok(http(200, '{}', ['__proto__: x']))],
     ['curl exit code 56, a reset connection', { code: 56, stdout: '', stderr: 'curl: (56) Recv failure' }],
     ['curl exit code 8, a weird server reply', { code: 8, stdout: '', stderr: 'curl: (8) Weird server reply' }],
@@ -323,7 +311,7 @@ describe('space server channel: waitUntilReady', () => {
   });
 
   it('becomes ready after hostile answers, when the real server takes the port', async () => {
-    const { channel } = channelWith(ok(http(200, 'null')), { code: 1, stdout: '', stderr: 'curl: (1) Received HTTP/0.9 when not allowed' }, { code: 52, stdout: '', stderr: '' }, ok(http(200, '{"isOpenCodeReady":true}')));
+    const { channel } = channelWith(ok(http(200, 'null')), { code: 1, stdout: '', stderr: 'curl: (1) Received HTTP/0.9 when not allowed' }, { code: 52, stdout: '', stderr: '' }, ok(http(200, '{"isAgentReady":true}')));
     await channel.waitUntilReady(ID);
   });
 

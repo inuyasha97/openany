@@ -331,7 +331,6 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
       await docker(['start', containerName], CHANGE_TIMEOUT_MS);
       // The server inside waits for its token. It arrives on stdin, after the start,
       // so it is in no argument, no container env and no label.
-      await server.linkPlugin(id);
       await server.writeToken(id, createSpaceToken());
       await server.waitUntilReady(id);
     } catch (error) {

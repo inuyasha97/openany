@@ -44,7 +44,7 @@ const WORKING = new Set(['busy', 'retry']);
  * readers may be async: the runtime host answers over its own protocol. A session
  * that is working counts as activity now, and every status change counts at the time it came, so
  * a turn that began and ended between two checks is not missed. A session that waits for the
- * user's answer stays busy in OpenCode's status the whole time; it counts as idle (the
+ * user's answer stays busy in the agent's status the whole time; it counts as idle (the
  * maintainer's call of 2026-09-28), so its memory is given back when nobody answers. A missing or unreadable file
  * stops nothing: the host writes it at every start, and a space must never stop on a guess.
  */

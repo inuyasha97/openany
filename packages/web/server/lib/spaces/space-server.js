@@ -25,8 +25,6 @@ import {
   SPACE_SERVER_PORT,
   SPACE_TOKEN_DIRECTORY,
   SPACE_TOKEN_PATH,
-  TOOLS_PLUGIN_PATH,
-  spaceWorkPath,
 } from './layout.js';
 
 const REQUEST_SECONDS = 20;
@@ -58,10 +56,6 @@ const WRITE_IDLE_STOP_SCRIPT = [
   `&& cat > ${SPACE_IDLE_STOP_PATH}.new && mv ${SPACE_IDLE_STOP_PATH}.new ${SPACE_IDLE_STOP_PATH}`,
 ].join(' ');
 
-// Module resolution walks up from the project files, so one link above every project is enough.
-// Only the plugin is linked, so project code does not quietly resolve our other packages.
-const LINK_PLUGIN_SCRIPT = `${IMAGE_ONLY_PATH} mkdir -p "$1/node_modules/@opencode" && ln -sfn "$2" "$1/node_modules/@opencode/plugin"`;
-
 const pause = (milliseconds) => new Promise((resolve) => { setTimeout(resolve, milliseconds); });
 
 export const createSpaceToken = () => crypto.randomBytes(32).toString('base64url');
@@ -77,7 +71,7 @@ const reportsReady = (answer) => {
     return false;
   }
   try {
-    return JSON.parse(answer.body)?.isOpenCodeReady === true;
+    return JSON.parse(answer.body)?.isAgentReady === true;
   } catch {
     return false;
   }
@@ -131,8 +125,6 @@ export function createSpaceServerChannel({ exec, wait = pause, now = Date.now })
     return token;
   };
 
-  const linkPlugin = (spaceId) => runFixedScript(spaceId, [IMAGE_SH, '-c', LINK_PLUGIN_SCRIPT, 'sh', spaceWorkPath(spaceId), TOOLS_PLUGIN_PATH], '', 'link the OpenCode plugin');
-
   /**
    * One HTTP request to the server inside. Resolves `{ status, headers, body }` for any status.
    * The whole request, with its headers and body, is a curl config on stdin, so a cookie or
@@ -169,7 +161,7 @@ export function createSpaceServerChannel({ exec, wait = pause, now = Date.now })
   };
 
   /**
-   * Resolves when `/health` answers and reports OpenCode ready. The wait ends at a wall-clock
+   * Resolves when `/health` answers and reports the agent ready. The wait ends at a wall-clock
    * deadline, whatever the thing on the port does. An unreadable answer, a wrong answer, and no
    * answer all count as "not ready yet". Only a failure of `exec` itself ends the wait early.
    */
@@ -181,7 +173,7 @@ export function createSpaceServerChannel({ exec, wait = pause, now = Date.now })
         if (reportsReady(await request(spaceId, { path: '/health', timeoutSeconds: HEALTH_SECONDS }))) {
           return;
         }
-        last = 'the answer does not report OpenCode ready';
+        last = 'the answer does not report the agent ready';
       } catch (error) {
         const fromInside = error.code === 'space_server_answer_unreadable'
           || (error.code === 'space_server_unreachable' && error.details?.execFailed !== true);
@@ -198,5 +190,5 @@ export function createSpaceServerChannel({ exec, wait = pause, now = Date.now })
     );
   };
 
-  return { writeToken, writeIdleStop, readToken, linkPlugin, request, waitUntilReady };
+  return { writeToken, writeIdleStop, readToken, request, waitUntilReady };
 }

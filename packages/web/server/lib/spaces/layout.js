@@ -11,8 +11,8 @@ export const spaceWorkPath = (spaceId) => `/spaces/${requireSpaceId(spaceId)}`;
 
 // The project's folder inside a space is named after the project directory on the host, restricted
 // to characters that need no quoting anywhere. A leading dot is refused, so the name never collides
-// with the history side repository below, and `node_modules` is refused because the OpenCode plugin
-// link lives at `/spaces/<id>/node_modules`.
+// with the history side repository below, and `node_modules` is refused so a project folder can never
+// be the place a future dependency tree of the space is resolved from.
 const PROJECT_FOLDER_UNSAFE = /[^A-Za-z0-9._-]+/g;
 const PROJECT_FOLDER_MAX_LENGTH = 64;
 const PROJECT_FOLDER_FALLBACK = 'project';
@@ -48,7 +48,6 @@ export const spaceHistoryPath = (spaceId) => `${spaceWorkPath(spaceId)}/.opencha
 // The tools volume: a plain npm project, mounted read-only.
 export const TOOLS_MOUNT_PATH = '/opt/openchamber-tools';
 export const TOOLS_BIN_PATH = `${TOOLS_MOUNT_PATH}/node_modules/.bin`;
-export const TOOLS_PLUGIN_PATH = `${TOOLS_MOUNT_PATH}/node_modules/@opencode/plugin`;
 // The filler writes this file last. A volume without it was never filled to the end.
 export const TOOLS_MARKER_PATH = `${TOOLS_MOUNT_PATH}/.filled`;
 
@@ -93,11 +92,13 @@ export const GATEKEEPER_PROGRAM_DIRECTORY = '/tmp/openchamber-gatekeeper';
 export const GATEKEEPER_PROGRAM_PATH = `${GATEKEEPER_PROGRAM_DIRECTORY}/gatekeeper.cjs`;
 export const GATEKEEPER_BIND_PATH = `${GATEKEEPER_PROGRAM_DIRECTORY}/bind`;
 
-// OpenCode's global configuration inside a space, where the host writes the provider
-// configuration that sends model calls through the window. The agent can change it; the
-// gatekeeper is what enforces, this only cooperates.
-export const SPACE_OPENCODE_CONFIG_DIRECTORY = `${SPACE_HOME}/.config/opencode`;
-export const SPACE_OPENCODE_CONFIG_PATH = `${SPACE_OPENCODE_CONFIG_DIRECTORY}/opencode.json`;
+// The agent's own configuration inside a space, where the host writes the provider configuration
+// that sends model calls through the window. OMP reads its providers from `models.yml` under its
+// agent directory, which is `~/.omp/agent` when neither `PI_CODING_AGENT_DIR` nor an active
+// `OMP_PROFILE` moves it — and neither is in the space's environment (hardening.js). The agent can
+// change the file; the gatekeeper is what enforces, this only cooperates.
+export const SPACE_AGENT_DIRECTORY = `${SPACE_HOME}/.omp/agent`;
+export const SPACE_MODELS_CONFIG_PATH = `${SPACE_AGENT_DIRECTORY}/models.yml`;
 
 const IMAGE_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
@@ -127,7 +128,7 @@ export const IMAGE_ONLY_PATH = `PATH=${IMAGE_PATH};`;
  */
 export const SPACE_ENVIRONMENT = Object.freeze({
   HOME: SPACE_HOME,
-  // The tools come last. The image has no `openchamber` and no `opencode`, so both are still found,
+  // The tools come last. The image has no `openchamber` and no `omp`, so both are still found,
   // and a transitive npm package that ships a bin named `node` or `sh` never shadows the image's.
   PATH: `${IMAGE_PATH}:${TOOLS_BIN_PATH}`,
   // The corridor, in both spellings. curl 7.88.1 in this image ignores an uppercase HTTP_PROXY on
@@ -144,9 +145,9 @@ export const SPACE_ENVIRONMENT = Object.freeze({
   no_proxy: `${GATEKEEPER_ALIAS},localhost,127.0.0.1`,
   // Node 22 ignores proxy variables without this. Measured: EAI_AGAIN for every fetch.
   NODE_USE_ENV_PROXY: '1',
-  // OpenCode's catalog and update downloads would only spend corridor attempts.
-  OPENCODE_DISABLE_MODELS_FETCH: '1',
-  OPENCODE_DISABLE_AUTOUPDATE: '1',
+  // OMP has no catalog-fetch or update check of its own to switch off: it refreshes its model
+  // cache only when `omp models refresh` runs, and it ships no auto-update. Nothing else is set
+  // here, and the corridor's allowlist is what a stray download meets.
   // The server inside a space never hosts the relay passively. It has a way out now, and a
   // space must not become the machine that paired devices land on.
   OPENCHAMBER_RELAY_HOST: 'off',
@@ -155,8 +156,10 @@ export const SPACE_ENVIRONMENT = Object.freeze({
   OPENCHAMBER_SPACE_IDLE_STOP_FILE: SPACE_IDLE_STOP_PATH,
 });
 
-// Waits for the token file, takes it as the server password, and becomes the server.
-// The password reaches the server through the environment of this one process, never through the container's.
+// Waits for the token file, takes it as the server password, and becomes the server. That server is
+// OpenChamber hosting the OMP agent runtime in its own process, one session process at a time; there
+// is no separate agent daemon to launch here. The password reaches the server through the environment
+// of this one process, never through the container's.
 const SERVER_SCRIPT = [
   `while [ ! -s ${SPACE_TOKEN_PATH} ]; do ${IMAGE_SLEEP} 0.2; done;`,
   `OPENCHAMBER_UI_PASSWORD="$(${IMAGE_CAT} ${SPACE_TOKEN_PATH})";`,
