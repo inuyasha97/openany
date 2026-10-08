@@ -14,7 +14,6 @@
 import fs from 'fs';
 import path from 'path';
 import {
-  getOmpRuntimeHost,
   promptSession,
   readSessionMessages,
   readSessionStatus,
@@ -425,26 +424,15 @@ export function createMessageQueueRuntime({
   };
 
   /**
-   * The slash command a queued text names, or null when it names none. OMP
-   * publishes each command's name, so a text that matches one is identified
-   * here; the dispatch itself fails loudly, because OMP has no command route.
+   * The image a queued attachment carries, in the shape OMP's prompt takes, or
+   * `null` when it is not an inline image. Mirrors the composer's own mapping.
    */
-  const resolveSlashCommand = async (text) => {
-    if (!text.startsWith('/')) return null;
-    const [head, ...tail] = text.split(' ');
-    const name = head.slice(1);
-    if (!name) return null;
-    // A failed lookup fails the whole send, so a retry does not admit anything
-    // twice.
-    const host = await getOmpRuntimeHost();
-    if (!host) throw Object.assign(new Error('the OMP runtime is not available'), { status: 503 });
-    const commands = asList(await host.listCommands()) ?? [];
-    const match = commands.map(asRecord).find((command) => command?.name === name);
+  const promptImageFromDataUrl = (dataUrl, mimeType) => {
+    const match = /^data:([^;,]+);base64,([\s\S]*)$/.exec(dataUrl ?? '');
     if (!match) return null;
-    return {
-      name,
-      arguments: tail.join(' '),
-    };
+    const resolvedMime = String(match[1]).toLowerCase();
+    if (!resolvedMime.startsWith('image/') || match[2].length === 0) return null;
+    return { type: 'image', data: match[2], mimeType: resolvedMime || mimeType };
   };
 
   /**
@@ -476,11 +464,27 @@ export function createMessageQueueRuntime({
       agent = routed.agent ?? agent;
     }
 
-    // OMP prompts carry one authored text, the session owns its agent, and a
-    // model switch takes a provider and an id. A selection OpenCode applied per
-    // send has no destination here: fail the send rather than silently drop the
-    // user's choice.
-    if (attachments.length > 0) throw unsupportedOnOmp('message attachments');
+    // OMP takes images inline and every other file as an `@path` mention, so a
+    // queued attachment is delivered the way the composer delivers one: an
+    // image's own bytes, a server-side file by its path. One that is neither — a
+    // remote URL, a pathless blob — fails the send instead of losing the file.
+    const images = [];
+    const mentions = [];
+    for (const attachment of attachments) {
+      const image = promptImageFromDataUrl(attachment.dataUrl, attachment.mimeType);
+      if (image) {
+        images.push(image);
+        continue;
+      }
+      if (attachment.serverPath) {
+        mentions.push(attachment.serverPath);
+        continue;
+      }
+      throw unsupportedOnOmp(`the attachment "${attachment.filename}"`);
+    }
+    // OMP's prompt carries one authored text and the session owns its agent and
+    // model, so a per-send selection has no destination here: fail the send
+    // rather than silently drop the user's choice.
     if (agent) throw unsupportedOnOmp(`the "${agent}" agent`);
     if (variant) throw unsupportedOnOmp(`the "${variant}" model variant`);
     if (item.agentMention) throw unsupportedOnOmp(`the "${item.agentMention}" agent mention`);
@@ -493,12 +497,6 @@ export function createMessageQueueRuntime({
         : 'the OMP runtime did not take the queued message model');
     }
 
-    // Resolved before anything is sent: a failed command lookup fails the whole
-    // send, and the command itself cannot be dispatched (OMP has no command
-    // route), so it fails loudly instead of going out as raw slash text.
-    const command = await resolveSlashCommand(item.text);
-    if (command) throw unsupportedOnOmp(`the "/${command.name}" command`);
-
     // Standing project context rides the send exactly as a UI send would
     // attach it; a failed lookup sends without it rather than not at all.
     const knowledge = sessionKnowledgeRuntime
@@ -510,13 +508,26 @@ export function createMessageQueueRuntime({
     // project context ride in front of the message text as one authored prompt
     // (instructions first, then the quoted content, then project knowledge):
     // the model still reads the message against them, and no extra turn starts.
+    //
+    // A prompt that starts with `/name args` is expanded by OMP itself — file
+    // commands, `/skill:<name>`, extension commands — so it has to lead the
+    // text: context in front of it would hide the slash and the message would
+    // go out as literal text.
+    const leads = item.text.trimStart().startsWith('/');
     const blocks = [
+      ...(leads ? [item.text] : []),
       ...item.context.flatMap(toContextTexts),
       knowledge.text,
-      item.text,
+      ...(leads ? [] : [item.text]),
     ].filter((text) => typeof text === 'string' && text.trim().length > 0);
 
-    const accepted = await promptSession(sessionId, blocks.join('\n\n'));
+    // Mentioned paths follow the text, the way the composer appends them.
+    const mentioned = [
+      blocks.join('\n\n'),
+      ...mentions.map((path) => (/\s/.test(path) ? `@"${path}"` : `@${path}`)),
+    ].filter((text) => text.length > 0);
+
+    const accepted = await promptSession(sessionId, mentioned.join(' '), undefined, images.length > 0 ? images : undefined);
     if (accepted !== true) {
       throw new Error(accepted === null
         ? 'the OMP runtime is not available, so the queued message was not sent'

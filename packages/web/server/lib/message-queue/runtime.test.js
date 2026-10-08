@@ -75,9 +75,9 @@ const createOmpHost = () => {
       failIf('model');
       state.switched.push({ sessionId: id, provider, modelId });
     }),
-    prompt: vi.fn(async (id, text) => {
+    prompt: vi.fn(async (id, text, _messageId, images) => {
       failIf('prompt');
-      state.sent.push({ sessionId: id, text });
+      state.sent.push({ sessionId: id, text, images });
       return true;
     }),
     listCommands: vi.fn(async () => {
@@ -508,51 +508,97 @@ describe('message queue runtime', () => {
     ].join('\n\n'));
   });
 
-  it('fails a queued message with attachments rather than dropping them', async () => {
+  it('delivers a queued image inline, the way the composer does', async () => {
+    const { runtime, omp, emit } = createRuntime();
+    runtime.start();
+    await runtime.enqueue(SESSION, DIRECTORY, item({
+      attachments: [{
+        id: 'a',
+        filename: 'shot.png',
+        mimeType: 'image/png',
+        size: 3,
+        source: 'local',
+        dataUrl: 'data:image/png;base64,QUJD',
+      }],
+    }));
+    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
+    await settle();
+
+    expect(omp.state.sent).toHaveLength(1);
+    expect(omp.state.sent[0].images).toEqual([{ type: 'image', data: 'QUJD', mimeType: 'image/png' }]);
+    expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(0);
+  });
+
+  it('delivers a queued server-side file as an @path mention', async () => {
+    const { runtime, omp, emit } = createRuntime();
+    runtime.start();
+    await runtime.enqueue(SESSION, DIRECTORY, item({
+      attachments: [{
+        id: 'a',
+        filename: 'notes.pdf',
+        mimeType: 'application/pdf',
+        size: 3,
+        source: 'server',
+        serverPath: '/repo/notes.pdf',
+        dataUrl: 'data:application/pdf;base64,QQ==',
+      }],
+    }));
+    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
+    await settle();
+
+    expect(omp.state.sent).toHaveLength(1);
+    expect(omp.state.sent[0].text).toBe('follow up @/repo/notes.pdf');
+  });
+
+  it('fails a queued attachment it cannot represent rather than dropping it', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { runtime, omp, emit } = createRuntime();
     runtime.start();
     await runtime.enqueue(SESSION, DIRECTORY, item({
-      attachments: [{ id: 'a', filename: 'f.txt', mimeType: 'text/plain', size: 1, source: 'local', dataUrl: 'data:text/plain,hi' }],
+      attachments: [{
+        id: 'a',
+        filename: 'remote.txt',
+        mimeType: 'text/plain',
+        size: 2,
+        source: 'local',
+        dataUrl: 'data:text/plain,hi',
+      }],
     }));
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
 
     expect(omp.state.sent).toEqual([]);
     expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(1);
-    expect(String(warn.mock.calls.at(-1)?.[1] ?? '')).toContain('message attachments');
+    expect(String(warn.mock.calls.at(-1)?.[1] ?? '')).toContain('the attachment "remote.txt"');
   });
 
-  it('fails a queued command loudly instead of sending it as raw slash text', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('sends a queued command as prompt text, leading the context so OMP expands it', async () => {
     const { runtime, omp, emit } = createRuntime();
     runtime.start();
-    omp.state.commands = [{ name: 'review' }];
-    await runtime.enqueue(SESSION, DIRECTORY, item({ content: '/review src', text: '/review src' }));
-    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
-    await settle();
-
-    expect(omp.state.commands).toEqual([{ name: 'review' }]);
-    expect(omp.state.sent).toEqual([]);
-    expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(1);
-    expect(String(warn.mock.calls.at(-1)?.[1] ?? '')).toContain('the "/review" command');
-  });
-
-  it('fails before admitting anything when the command lookup fails', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { runtime, omp, emit } = createRuntime();
-    runtime.start();
-    omp.state.fail = { op: 'commands', error: new Error('command list unavailable') };
     await runtime.enqueue(SESSION, DIRECTORY, item({
-      content: '/review',
-      text: '/review',
+      content: '/review src',
+      text: '/review src',
       context: [{ kind: 'context', text: 'quoted', metadata: {} }],
     }));
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
     await settle();
 
-    expect(omp.state.sent).toEqual([]);
-    expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(1);
+    expect(omp.state.sent).toHaveLength(1);
+    expect(omp.state.sent[0].text).toBe('/review src\n\nquoted');
+    expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(0);
+  });
+
+  it('delivers a slash prompt without consulting the command list', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { runtime, omp, emit } = createRuntime();
+    runtime.start();
+    omp.state.fail = { op: 'commands', error: new Error('command list unavailable') };
+    await runtime.enqueue(SESSION, DIRECTORY, item({ content: '/review', text: '/review' }));
+    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
+    await settle();
+
+    expect(omp.state.sent).toHaveLength(1);
+    expect(omp.state.sent[0].text).toBe('/review');
   });
 
   it('keeps captured context out of snapshots and broadcasts, and hands it back on take', async () => {
