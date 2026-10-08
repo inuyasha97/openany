@@ -116,3 +116,27 @@ export type OmpEvent =
       /** True when compaction was skipped for a benign reason. */
       skipped?: boolean
     }
+
+/** OMP's user-facing thinking efforts, least → most intensive (`Effort`). */
+export type OmpThinkingEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+
+/** What `set_thinking_level` accepts: an effort, `inherit` (defer to the global default) or `off`. */
+export type OmpThinkingLevel = "inherit" | "off" | OmpThinkingEffort
+
+/**
+ * The fields of OMP's `Model` OpenChamber reads, with the thinking capability
+ * normalized. The remaining `Model` fields ride through untouched via the index
+ * signature, so a caller can read more than this projection declares.
+ */
+export type OmpModelInfo = {
+  id: string
+  provider: string
+  name?: string
+  /** Whether the model supports reasoning at all (`Model.reasoning`). */
+  reasoning: boolean
+  /** The efforts the model accepts, least → most intensive; `[]` when it has no thinking config. */
+  efforts: readonly OmpThinkingEffort[]
+  /** The effort OMP applies when this model is selected; absent when OMP declared none. */
+  defaultLevel?: OmpThinkingEffort
+  [key: string]: unknown
+}

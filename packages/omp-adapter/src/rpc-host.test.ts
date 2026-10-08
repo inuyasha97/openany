@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import type { OmpRpcChild } from "./rpc-client"
+import type { OmpSessionStore } from "./session-store"
 import { createOmpHost, resolveOmpCommand } from "./rpc-host"
 
-const fakeChild = () => {
+type FakeChild = { child: OmpRpcChild; written: string[]; emit: (line: string) => void }
+
+const fakeChild = (): FakeChild => {
   const stdoutListeners: Array<(chunk: string | Uint8Array) => void> = []
   const written: string[] = []
   const child: OmpRpcChild = {
@@ -18,19 +21,26 @@ const fakeChild = () => {
   return { child, written, emit }
 }
 
+const emptyStore = () => ({ list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } })
+
+const lastFrame = (fake: { written: string[] }) => JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string }
+
+/** Opens a session on a fake child and completes the get_state handshake. */
+const openFakeSession = async (fake: FakeChild, store: OmpSessionStore = emptyStore(), input: { cwd?: string } = { cwd: "/repo" }) => {
+  const host = createOmpHost({ spawn: () => fake.child, store })
+  const pending = host.openSession(input)
+  fake.emit(JSON.stringify({ type: "ready" }))
+  await Promise.resolve()
+  const stateReq = lastFrame(fake)
+  fake.emit(JSON.stringify({ id: stateReq.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_1", sessionFile: "/s/ses_1.jsonl", sessionName: "first" } }))
+  const handle = await pending
+  return { host, handle }
+}
+
 describe("createOmpHost", () => {
   test("opens a session, fans out events and answers prompts", async () => {
     const fake = fakeChild()
-    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
-    const host = createOmpHost({ spawn: () => fake.child, store })
-    const handlePromise = host.openSession({ cwd: "/repo" })
-    fake.emit(JSON.stringify({ type: "ready" }))
-    // openSession awaits get_state after ready
-    await Promise.resolve()
-    const stateReq = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string }
-    expect(stateReq.type).toBe("get_state")
-    fake.emit(JSON.stringify({ id: stateReq.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_1", sessionFile: "/s/ses_1.jsonl" } }))
-    const handle = await handlePromise
+    const { host, handle } = await openFakeSession(fake)
     expect(handle.id).toBe("ses_1")
 
     const seen: unknown[] = []
@@ -39,8 +49,8 @@ describe("createOmpHost", () => {
     unsubscribe()
     expect(seen).toEqual([{ type: "turn_start" }])
 
-    const prompted = handle.prompt("hello")
-    const promptReq = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string }
+    const prompted = host.prompt("ses_1", "hello")
+    const promptReq = lastFrame(fake)
     expect(promptReq.type).toBe("prompt")
     fake.emit(JSON.stringify({ id: promptReq.id, type: "response", command: "prompt", success: true, data: { agentInvoked: true } }))
     expect(await prompted).toBe(true)
@@ -48,31 +58,165 @@ describe("createOmpHost", () => {
     await handle.dispose()
   })
 
+  test("refuses to prompt a session that is not open", async () => {
+    const host = createOmpHost({ spawn: () => fakeChild().child, store: emptyStore() })
+    await expect(host.prompt("ses_missing", "hi")).rejects.toThrow("omp session is not open: ses_missing")
+  })
+
   test("carries a prompt's images in the rpc frame and omits the field when empty", async () => {
     const fake = fakeChild()
-    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
-    const host = createOmpHost({ spawn: () => fake.child, store })
-    const handlePromise = host.openSession({ cwd: "/repo" })
-    fake.emit(JSON.stringify({ type: "ready" }))
-    await Promise.resolve()
-    const stateReq = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string }
-    fake.emit(JSON.stringify({ id: stateReq.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_1" } }))
-    const handle = await handlePromise
+    const { host, handle } = await openFakeSession(fake)
 
     const images = [{ type: "image" as const, data: "QUJD", mimeType: "image/png" }]
-    const pictured = handle.prompt("look", { images })
+    const pictured = host.prompt("ses_1", "look", { images })
     const picked = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; message?: string; images?: unknown }
     expect(picked.message).toBe("look")
     expect(picked.images).toEqual(images)
     fake.emit(JSON.stringify({ id: picked.id, type: "response", command: "prompt", success: true, data: { agentInvoked: true } }))
     expect(await pictured).toBe(true)
 
-    const plain = handle.prompt("plain")
-    const bare = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string }
+    const plain = host.prompt("ses_1", "plain")
+    const bare = lastFrame(fake)
     expect(bare.type).toBe("prompt")
-    expect(bare).not.toHaveProperty("images")
+    expect(JSON.parse(fake.written.at(-1) ?? "{}")).not.toHaveProperty("images")
     fake.emit(JSON.stringify({ id: bare.id, type: "response", command: "prompt", success: true, data: { agentInvoked: true } }))
     expect(await plain).toBe(true)
+
+    await handle.dispose()
+  })
+
+  test("records the parent session when creating a fork", async () => {
+    const fake = fakeChild()
+    const openPromise = createOmpHost({ spawn: () => fake.child, store: emptyStore() }).openSession({ cwd: "/repo", parentSession: "/s/parent.jsonl" })
+    fake.emit(JSON.stringify({ type: "ready" }))
+    await Promise.resolve()
+    const created = lastFrame(fake)
+    expect(created.type).toBe("new_session")
+    expect(JSON.parse(fake.written.at(-1) ?? "{}")).toMatchObject({ parentSession: "/s/parent.jsonl" })
+    fake.emit(JSON.stringify({ id: created.id, type: "response", command: "new_session", success: true, data: { cancelled: false } }))
+    await Promise.resolve()
+    const stateReq = lastFrame(fake)
+    expect(stateReq.type).toBe("get_state")
+    fake.emit(JSON.stringify({ id: stateReq.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_fork", sessionFile: "/s/fork.jsonl" } }))
+    expect((await openPromise).id).toBe("ses_fork")
+  })
+
+  test("forwards thinking level and fast mode commands", async () => {
+    const fake = fakeChild()
+    const { host, handle } = await openFakeSession(fake)
+
+    const leveled = host.setThinkingLevel("ses_1", "xhigh")
+    const levelReq = lastFrame(fake)
+    expect(levelReq.type).toBe("set_thinking_level")
+    expect(JSON.parse(fake.written.at(-1) ?? "{}")).toMatchObject({ level: "xhigh" })
+    fake.emit(JSON.stringify({ id: levelReq.id, type: "response", command: "set_thinking_level", success: true }))
+    expect(await leveled).toBe(true)
+
+    const cycled = host.cycleThinkingLevel("ses_1")
+    const cycleReq = lastFrame(fake)
+    expect(cycleReq.type).toBe("cycle_thinking_level")
+    fake.emit(JSON.stringify({ id: cycleReq.id, type: "response", command: "cycle_thinking_level", success: true, data: { level: "high" } }))
+    expect(await cycled).toBe("high")
+
+    const fast = host.setFastMode("ses_1", true)
+    const fastReq = lastFrame(fake)
+    expect(fastReq.type).toBe("set_fast_mode")
+    fake.emit(JSON.stringify({ id: fastReq.id, type: "response", command: "set_fast_mode", success: true, data: { enabled: true, active: false } }))
+    expect(await fast).toEqual({ enabled: true, active: false })
+
+    await handle.dispose()
+  })
+
+  test("reports a compacting session as busy", async () => {
+    const fake = fakeChild()
+    const { host, handle } = await openFakeSession(fake)
+
+    const status = host.getSessionStatus("ses_1")
+    const statusReq = lastFrame(fake)
+    expect(statusReq.type).toBe("get_state")
+    fake.emit(
+      JSON.stringify({
+        id: statusReq.id,
+        type: "response",
+        command: "get_state",
+        success: true,
+        data: { sessionId: "ses_1", isStreaming: false, isCompacting: true, queuedMessageCount: 3, tokensPerSecond: 42, contextUsage: { tokens: 10, contextWindow: 100, percent: 10 } },
+      }),
+    )
+    expect(await status).toEqual({
+      busy: true,
+      compacting: true,
+      queuedCount: 3,
+      tokensPerSecond: 42,
+      contextUsage: { tokens: 10, contextWindow: 100, percent: 10 },
+    })
+
+    await handle.dispose()
+  })
+
+  test("reports an idle session when no process is open", async () => {
+    const host = createOmpHost({ spawn: () => fakeChild().child, store: emptyStore() })
+    expect(await host.getSessionStatus("ses_1")).toEqual({ busy: false, compacting: false, queuedCount: 0, tokensPerSecond: null, contextUsage: null })
+  })
+
+  test("branches, follows the new session id and rejects an unknown entry", async () => {
+    const fake = fakeChild()
+    const { host, handle } = await openFakeSession(fake)
+
+    const branched = host.branch("ses_1", "e7")
+    const branchReq = lastFrame(fake)
+    expect(branchReq.type).toBe("branch")
+    expect(JSON.parse(fake.written.at(-1) ?? "{}")).toMatchObject({ entryId: "e7" })
+    fake.emit(JSON.stringify({ id: branchReq.id, type: "response", command: "branch", success: true, data: { text: "hello", cancelled: false } }))
+    await Promise.resolve()
+    const stateReq = lastFrame(fake)
+    expect(stateReq.type).toBe("get_state")
+    fake.emit(JSON.stringify({ id: stateReq.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_2", sessionFile: "/s/ses_2.jsonl" } }))
+    expect(await branched).toEqual({ id: "ses_2", sessionPath: "/s/ses_2.jsonl", cwd: "", title: "" })
+    // The handle follows the branched session and the original id is released.
+    expect(handle.id).toBe("ses_2")
+    await expect(host.prompt("ses_1", "hi")).rejects.toThrow("omp session is not open: ses_1")
+    const prompted = host.prompt("ses_2", "hi")
+    fake.emit(JSON.stringify({ id: lastFrame(fake).id, type: "response", command: "prompt", success: true, data: { agentInvoked: true } }))
+    expect(await prompted).toBe(true)
+
+    const invalid = host.branch("ses_2", "nope")
+    const invalidReq = lastFrame(fake)
+    fake.emit(JSON.stringify({ id: invalidReq.id, type: "response", command: "branch", success: false, error: "Invalid entry ID for branching" }))
+    await expect(invalid).rejects.toThrow("Invalid entry ID for branching")
+
+    await handle.dispose()
+  })
+
+  test("tracks askable frames and drops them on cancel and on reply", async () => {
+    const fake = fakeChild()
+    const { host, handle } = await openFakeSession(fake)
+
+    fake.emit(JSON.stringify({ type: "extension_ui_request", id: "r1", method: "select", title: "Which one?", options: ["a", "b"], optionDetails: [{ description: "first" }, {}] }))
+    expect(host.listPendingRequests("ses_1")).toEqual([
+      {
+        requestId: "r1",
+        sessionId: "ses_1",
+        method: "select",
+        title: "Which one?",
+        options: ["a", "b"],
+        optionDetails: [{ description: "first" }, {}],
+      },
+    ])
+
+    // A reply clears the ask it answered.
+    handle.send({ type: "extension_ui_response", id: "r1", value: "a" })
+    expect(host.listPendingRequests("ses_1")).toEqual([])
+
+    // OMP's cancel frame clears the ask it supersedes.
+    fake.emit(JSON.stringify({ type: "extension_ui_request", id: "r2", method: "editor", title: "Type something" }))
+    expect(host.listPendingRequests("ses_1")).toHaveLength(1)
+    fake.emit(JSON.stringify({ type: "extension_ui_request", id: "c1", method: "cancel", targetId: "r2" }))
+    expect(host.listPendingRequests("ses_1")).toEqual([])
+
+    // A non-ask frame is not tracked.
+    fake.emit(JSON.stringify({ type: "extension_ui_request", id: "n1", method: "notify", message: "hi" }))
+    expect(host.listPendingRequests("ses_1")).toEqual([])
 
     await handle.dispose()
   })
@@ -97,13 +241,7 @@ describe("createOmpHost", () => {
       },
       move: async () => { throw new Error("unused") },
     }
-    const host = createOmpHost({ spawn: () => fake.child, store })
-    const handlePromise = host.openSession({ cwd: "/repo" })
-    fake.emit(JSON.stringify({ type: "ready" }))
-    await Promise.resolve()
-    const stateReq = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string }
-    fake.emit(JSON.stringify({ id: stateReq.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_1" } }))
-    await handlePromise
+    const { host } = await openFakeSession(fake, store)
 
     expect(await host.deleteSession("ses_1")).toBe(true)
     expect(deleted).toEqual(["/s/ses_1.jsonl"])
@@ -124,7 +262,7 @@ describe("createOmpHost", () => {
     const handlePromise = host.openSession({ cwd: "/repo" })
     fake.emit(JSON.stringify({ type: "ready" }))
     await Promise.resolve()
-    const stateReq = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string }
+    const stateReq = lastFrame(fake)
     fake.emit(JSON.stringify({ id: stateReq.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_new", sessionFile: "/s/lazy.jsonl" } }))
     await handlePromise
 
@@ -132,7 +270,8 @@ describe("createOmpHost", () => {
     expect(deleted).toEqual(["/s/lazy.jsonl"])
   })
 
-  test("throws when renaming a session the store does not know", async () => {    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
+  test("throws when renaming a session the store does not know", async () => {
+    const store = emptyStore()
     const host = createOmpHost({ spawn: () => fakeChild().child, store })
     await expect(host.renameSession("missing", "x")).rejects.toThrow("unknown omp session: missing")
   })
@@ -140,26 +279,35 @@ describe("createOmpHost", () => {
   test("lists models on a short-lived rpc process that is disposed", async () => {
     const fake = fakeChild()
     let spawned = 0
-    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
-    const host = createOmpHost({ spawn: () => { spawned += 1; return fake.child }, store })
+    const host = createOmpHost({ spawn: () => { spawned += 1; return fake.child }, store: emptyStore() })
     const pending = host.listModels()
     fake.emit(JSON.stringify({ type: "ready" }))
     await Promise.resolve()
-    const req = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string }
-    fake.emit(JSON.stringify({ id: req.id, type: "response", command: "get_available_models", success: true, data: { models: [{ provider: "anthropic", id: "claude" }] } }))
+    const req = lastFrame(fake)
+    fake.emit(
+      JSON.stringify({
+        id: req.id,
+        type: "response",
+        command: "get_available_models",
+        success: true,
+        data: { models: [{ provider: "anthropic", id: "claude", reasoning: true, thinking: { mode: "effort", efforts: ["low", "high"], defaultLevel: "low" } }, { provider: "openai", id: "plain", reasoning: false }] },
+      }),
+    )
 
-    expect(await pending).toEqual([{ provider: "anthropic", id: "claude" }])
+    expect(await pending).toEqual([
+      { provider: "anthropic", id: "claude", reasoning: true, thinking: { mode: "effort", efforts: ["low", "high"], defaultLevel: "low" }, efforts: ["low", "high"], defaultLevel: "low" },
+      { provider: "openai", id: "plain", reasoning: false, efforts: [] },
+    ])
     expect(spawned).toBe(1)
   })
 
   test("lists login providers on a short-lived rpc process", async () => {
     const fake = fakeChild()
-    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
-    const host = createOmpHost({ spawn: () => fake.child, store })
+    const host = createOmpHost({ spawn: () => fake.child, store: emptyStore() })
     const pending = host.listLoginProviders()
     fake.emit(JSON.stringify({ type: "ready" }))
     await Promise.resolve()
-    const req = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string }
+    const req = lastFrame(fake)
     expect(req.type).toBe("get_login_providers")
     fake.emit(JSON.stringify({ id: req.id, type: "response", command: "get_login_providers", success: true, data: { providers: [{ id: "anthropic", name: "Anthropic", available: true, authenticated: false }] } }))
 
@@ -168,8 +316,7 @@ describe("createOmpHost", () => {
 
   test("runs a login and hands each frame to the caller with a reply sink", async () => {
     const fake = fakeChild()
-    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
-    const host = createOmpHost({ spawn: () => fake.child, store })
+    const host = createOmpHost({ spawn: () => fake.child, store: emptyStore() })
     const frames: Array<Record<string, unknown>> = []
     const pending = host.login("anthropic", { onFrame: (frame) => frames.push(frame) })
     fake.emit(JSON.stringify({ type: "ready" }))
@@ -190,8 +337,7 @@ describe("createOmpHost", () => {
 
   test("writes a reply frame the caller sends back for a prompt", async () => {
     const fake = fakeChild()
-    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
-    const host = createOmpHost({ spawn: () => fake.child, store })
+    const host = createOmpHost({ spawn: () => fake.child, store: emptyStore() })
     const pending = host.login("anthropic", {
       onFrame: (frame, reply) => {
         if (frame.method !== "input") return
@@ -200,7 +346,7 @@ describe("createOmpHost", () => {
     })
     fake.emit(JSON.stringify({ type: "ready" }))
     await Promise.resolve()
-    const req = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string }
+    const req = lastFrame(fake)
     fake.emit(JSON.stringify({ type: "extension_ui_request", id: "ui_9", method: "input", title: "Paste the authorization code" }))
 
     expect(JSON.parse(fake.written.at(-1) ?? "{}")).toEqual({ type: "extension_ui_response", id: "ui_9", value: "the-code" })
@@ -211,12 +357,11 @@ describe("createOmpHost", () => {
 
   test("rejects a login OMP refuses", async () => {
     const fake = fakeChild()
-    const store = { list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } }
-    const host = createOmpHost({ spawn: () => fake.child, store })
+    const host = createOmpHost({ spawn: () => fake.child, store: emptyStore() })
     const pending = host.login("nope")
     fake.emit(JSON.stringify({ type: "ready" }))
     await Promise.resolve()
-    const req = JSON.parse(fake.written.at(-1) ?? "{}") as { id: string }
+    const req = lastFrame(fake)
     fake.emit(JSON.stringify({ id: req.id, type: "response", command: "login", success: false, error: "Unknown OAuth provider: nope" }))
 
     await expect(pending).rejects.toThrow("Unknown OAuth provider: nope")

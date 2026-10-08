@@ -4,7 +4,9 @@
  * One RPC process per open session. `openSession` spawns, waits for `ready`,
  * optionally switches onto an on-disk session, then reads `get_state` for the
  * live id and session file. Events are forwarded verbatim; the caller owns
- * the projector.
+ * the projector. The host also keeps each session's unresolved askable frames
+ * ('select'/'confirm'/'input'/'editor') so a caller can list and answer them,
+ * and follows a `branch` to the new session id OMP swaps in place.
  *
  * Process-scoped commands that OMP only answers for the current session
  * (`get_available_models`, `get_available_commands`, and a rename of a session
@@ -15,10 +17,18 @@
 import { spawn as nodeSpawn } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
-import { OmpRpcClient, OmpRpcError, type OmpRpcChild, type OmpRpcSpawn } from "./rpc-client"
+import { toOmpModelInfo } from "./mapping"
+import { OmpRpcClient, OmpRpcError, type OmpRpcChild, type OmpRpcFrame, type OmpRpcSpawn } from "./rpc-client"
 import { createSessionStore, type OmpSessionStore } from "./session-store"
-import type { OmpMessage } from "./model"
-import type { OmpEvent, OmpHost, OmpLoginProvider, OmpLoginResult, OmpSessionHandle } from "./runtime"
+import type { OmpMessage, OmpModelInfo, OmpThinkingLevel } from "./model"
+import type {
+  OmpContextUsage,
+  OmpEvent,
+  OmpHost,
+  OmpLoginProvider,
+  OmpLoginResult,
+  OmpPendingRequest,
+} from "./runtime"
 
 export type OmpHostOptions = {
   command?: string
@@ -26,6 +36,57 @@ export type OmpHostOptions = {
   env?: Record<string, string | undefined>
   spawn?: OmpRpcSpawn
   store?: OmpSessionStore
+}
+
+/** The `get_state` payload fields the host reads. */
+type RpcSessionState = {
+  sessionId?: string
+  sessionFile?: string
+  sessionName?: string
+  isStreaming?: boolean
+  isCompacting?: boolean
+  queuedMessageCount?: number
+  tokensPerSecond?: number | null
+  contextUsage?: OmpContextUsage
+}
+
+/**
+ * A live session's mutable identity. OMP's `branch` swaps the session inside
+ * the same process, so the id and file are held here (not captured by value)
+ * and the handle reads through them.
+ */
+type SessionHolder = { id: string; file?: string }
+
+/** The `extension_ui_request` methods that expect an answer. */
+const ASKABLE_METHODS: Record<string, true> = { select: true, confirm: true, input: true, editor: true }
+
+/** Projects an askable `extension_ui_request` into the shape a caller lists and answers. */
+const toPendingRequest = (sessionId: string, frame: OmpRpcFrame): OmpPendingRequest => ({
+  requestId: String(frame.id),
+  sessionId,
+  method: frame.method as OmpPendingRequest["method"],
+  title: typeof frame.title === "string" ? frame.title : "",
+  ...(Array.isArray(frame.options) ? { options: frame.options.filter((option): option is string => typeof option === "string") } : {}),
+  ...(Array.isArray(frame.optionDetails) ? { optionDetails: frame.optionDetails as { description?: string }[] } : {}),
+  ...(typeof frame.message === "string" ? { message: frame.message } : {}),
+  ...(typeof frame.placeholder === "string" ? { placeholder: frame.placeholder } : {}),
+  ...(typeof frame.prefill === "string" ? { prefill: frame.prefill } : {}),
+})
+
+/** Records an ask OMP is waiting on, and drops the one a `cancel` frame supersedes. */
+const trackPending = (pending: Map<string, OmpPendingRequest>, holder: SessionHolder, frame: OmpRpcFrame): void => {
+  if (frame.type !== "extension_ui_request" || typeof frame.id !== "string") return
+  if (frame.method === "cancel") {
+    if (typeof frame.targetId === "string") pending.delete(frame.targetId)
+    return
+  }
+  if (typeof frame.method !== "string" || ASKABLE_METHODS[frame.method] !== true) return
+  pending.set(frame.id, toPendingRequest(holder.id, frame))
+}
+
+/** Drops the ask the reply frame answers, so a listed form is never already handled. */
+const forgetAnswered = (pending: Map<string, OmpPendingRequest>, frame: OmpRpcFrame): void => {
+  if (frame.type === "extension_ui_response" && typeof frame.id === "string") pending.delete(frame.id)
 }
 
 /**
@@ -84,6 +145,11 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
   // store yet. The live process reports its `sessionFile`; keep it so delete can
   // reach a session the store has never seen.
   const sessionFiles = new Map<string, string>()
+  // The live id and file are held in a mutable holder per open process, because
+  // `branch` swaps the session in place and the handle must read the new id.
+  const holders = new Map<string, SessionHolder>()
+  // Askable frames OMP is still waiting on, keyed by the current session id.
+  const pendings = new Map<string, Map<string, OmpPendingRequest>>()
 
   const spawnClient = (cwd?: string) => new OmpRpcClient({ command, args, cwd, env: options.env, spawn })
 
@@ -99,42 +165,55 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
 
   const findSession = async (id: string) => (await store.list()).find((session) => session.id === id)
 
+  const requireClient = (id: string): OmpRpcClient => {
+    const client = clients.get(id)
+    if (!client) throw new Error(`omp session is not open: ${id}`)
+    return client
+  }
+
   return {
     listSessions: () => store.list(),
 
     openSession: async (input) => {
       const client = spawnClient(input.cwd)
       await client.start()
-      let state: { sessionId: string; sessionFile?: string }
+      let state: RpcSessionState
       try {
+        if (input.parentSession) {
+          // Record the parent on the new session's header — the field the store
+          // reads back as `parentSessionPath`.
+          const created = await client.command<{ cancelled?: boolean } | undefined>("new_session", { parentSession: input.parentSession })
+          if (created?.cancelled === true) throw new Error(`omp new_session was cancelled: ${input.parentSession}`)
+        }
         if (input.sessionPath) {
           const switched = await client.command<{ cancelled?: boolean } | undefined>("switch_session", { sessionPath: input.sessionPath })
           if (switched?.cancelled === true) throw new Error(`omp session switch was cancelled: ${input.sessionPath}`)
         }
-        state = await client.command<{ sessionId: string; sessionFile?: string }>("get_state")
+        state = await client.command<RpcSessionState>("get_state")
       } catch (error) {
         // Nothing references this process yet, so a failed handshake must kill it
         // or it is unreachable until the parent exits.
         await client.dispose()
         throw error
       }
-      clients.set(state.sessionId, client)
-      if (state.sessionFile) sessionFiles.set(state.sessionId, state.sessionFile)
+      if (typeof state.sessionId !== "string") {
+        await client.dispose()
+        throw new Error("omp did not report a session id")
+      }
+      const holder: SessionHolder = { id: state.sessionId, file: state.sessionFile }
+      holders.set(holder.id, holder)
+      clients.set(holder.id, client)
+      if (holder.file) sessionFiles.set(holder.id, holder.file)
       const listeners = new Set<(event: OmpEvent) => void>()
+      const pending = new Map<string, OmpPendingRequest>()
+      pendings.set(holder.id, pending)
       client.onEvent((frame) => {
+        trackPending(pending, holder, frame)
         for (const listener of listeners) listener(frame as OmpEvent)
       })
-      const handle: OmpSessionHandle = {
-        id: state.sessionId,
-        prompt: async (text, options) => {
-          const images = options?.images ?? []
-          const result = await client.command<{ agentInvoked?: boolean } | undefined>("prompt", {
-            message: text,
-            // OMP reads an absent `images` and an empty one the same way; the
-            // field is only written when there is something to carry.
-            ...(images.length > 0 ? { images } : {}),
-          })
-          return result?.agentInvoked !== false
+      return {
+        get id() {
+          return holder.id
         },
         abort: async () => {
           await client.command("abort")
@@ -146,11 +225,17 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
           }
         },
         dispose: async () => {
-          clients.delete(state.sessionId)
+          clients.delete(holder.id)
+          holders.delete(holder.id)
+          sessionFiles.delete(holder.id)
+          pendings.delete(holder.id)
           await client.dispose()
         },
-        sessionFile: state.sessionFile,
+        get sessionFile() {
+          return holder.file
+        },
         send: (frame) => {
+          forgetAnswered(pending, frame)
           client.send(frame)
         },
         messages: async () => {
@@ -158,8 +243,69 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
           return result.messages
         },
       }
-      return handle
     },
+
+    prompt: async (id, text, options) => {
+      const client = requireClient(id)
+      const images = options?.images ?? []
+      const result = await client.command<{ agentInvoked?: boolean } | undefined>("prompt", {
+        message: text,
+        // OMP reads an absent `images` and an empty one the same way; the
+        // field is only written when there is something to carry.
+        ...(images.length > 0 ? { images } : {}),
+      })
+      return result?.agentInvoked !== false
+    },
+
+    /**
+     * Branches at `entryId`. OMP swaps the live session inside this process when
+     * the branch starts a new file, so the host follows the new id from
+     * `get_state`; an unknown entry rejects with OMP's own message and leaves
+     * the session untouched.
+     */
+    branch: async (id, entryId) => {
+      const client = requireClient(id)
+      const holder = holders.get(id)
+      if (!holder) throw new OmpRpcError("branch", `omp session is not open: ${id}`)
+      const result = await client.command<{ cancelled?: boolean } | undefined>("branch", { entryId })
+      if (result?.cancelled === true) throw new OmpRpcError("branch", "omp branch was cancelled")
+      const state = await client.command<RpcSessionState>("get_state")
+      if (typeof state.sessionId !== "string") throw new OmpRpcError("branch", "omp branch reported no session")
+      const from = holder.id
+      if (from !== state.sessionId) {
+        clients.delete(from)
+        holders.delete(from)
+        sessionFiles.delete(from)
+        const pending = pendings.get(from)
+        if (pending) {
+          pendings.delete(from)
+          pendings.set(state.sessionId, pending)
+        }
+      }
+      holder.id = state.sessionId
+      holder.file = state.sessionFile
+      clients.set(holder.id, client)
+      holders.set(holder.id, holder)
+      if (holder.file) sessionFiles.set(holder.id, holder.file)
+      return { id: holder.id, sessionPath: holder.file ?? "", cwd: "", title: state.sessionName ?? "" }
+    },
+
+    setThinkingLevel: async (id, level) => {
+      await requireClient(id).command("set_thinking_level", { level })
+      return true
+    },
+
+    cycleThinkingLevel: async (id) => {
+      const result = await requireClient(id).command<{ level?: OmpThinkingLevel } | null>("cycle_thinking_level")
+      return result?.level ?? null
+    },
+
+    setFastMode: async (id, enabled) => {
+      const result = await requireClient(id).command<{ enabled?: boolean; active?: boolean }>("set_fast_mode", { enabled })
+      return { enabled: result?.enabled === true, active: result?.active === true }
+    },
+
+    listPendingRequests: (id) => [...(pendings.get(id)?.values() ?? [])],
 
     renameSession: async (id, title) => {
       const open = clients.get(id)
@@ -182,6 +328,8 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
       const sessionFile = sessionFiles.get(id)
       clients.delete(id)
       sessionFiles.delete(id)
+      holders.delete(id)
+      pendings.delete(id)
       if (open) await open.dispose()
       const target = info?.sessionPath ?? sessionFile
       if (!target) return Boolean(open)
@@ -211,7 +359,9 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
     },
 
     listModels: () =>
-      withProcessClient(async (client) => (await client.command<{ models: unknown[] }>("get_available_models")).models),
+      withProcessClient(async (client) =>
+        (await client.command<{ models: unknown[] }>("get_available_models")).models.map(toOmpModelInfo),
+      ),
 
     listCommands: () =>
       withProcessClient(async (client) => (await client.command<{ commands: unknown[] }>("get_available_commands")).commands),
@@ -244,9 +394,17 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
 
     getSessionStatus: async (id) => {
       const client = clients.get(id)
-      if (!client) return { busy: false }
-      const state = await client.command<{ isStreaming?: boolean }>("get_state")
-      return { busy: state.isStreaming === true }
+      if (!client) return { busy: false, compacting: false, queuedCount: 0, tokensPerSecond: null, contextUsage: null }
+      const state = await client.command<RpcSessionState>("get_state")
+      return {
+        // A compactor is a running turn: a session that is compacting while not
+        // streaming still must queue the next send.
+        busy: state.isStreaming === true || state.isCompacting === true,
+        compacting: state.isCompacting === true,
+        queuedCount: state.queuedMessageCount ?? 0,
+        tokensPerSecond: state.tokensPerSecond ?? null,
+        contextUsage: state.contextUsage ?? null,
+      }
     },
   }
 }

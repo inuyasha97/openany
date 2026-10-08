@@ -38,6 +38,24 @@ describe("parseSessionFile", () => {
   test("returns null for a file without a session header", () => {
     expect(parseSessionFile("")).toBeNull()
   })
+
+  test("reads the parent session recorded on a fork's header", () => {
+    const text = JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "ses_fork",
+      timestamp: "2026-05-14T10:12:03.000Z",
+      cwd: "/repo/api",
+      title: "fork",
+      parentSession: "/sessions/repo-api/ses_1.jsonl",
+    })
+    expect(parseSessionFile(text)).toEqual({
+      id: "ses_fork",
+      cwd: "/repo/api",
+      title: "fork",
+      parentSession: "/sessions/repo-api/ses_1.jsonl",
+    })
+  })
 })
 
 describe("createSessionStore.list", () => {
@@ -74,6 +92,27 @@ describe("createSessionStore.list", () => {
 
     const sessions = await createSessionStore({ root }).list()
     expect(sessions.map((session) => session.id)).toEqual(["ses_1"])
+  })
+
+  test("exposes parentSessionPath for a forked session only", async () => {
+    writeSession("repo-api", "ses_1.jsonl", [
+      JSON.stringify({ type: "session", version: 3, id: "ses_1", timestamp: "t", cwd: "/repo/api", title: "root" }),
+    ])
+    writeSession("repo-api", "ses_fork.jsonl", [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "ses_fork",
+        timestamp: "t",
+        cwd: "/repo/api",
+        title: "fork",
+        parentSession: path.join(root, "repo-api", "ses_1.jsonl"),
+      }),
+    ])
+
+    const sessions = await createSessionStore({ root }).list()
+    expect(sessions.find((session) => session.id === "ses_1")).not.toHaveProperty("parentSessionPath")
+    expect(sessions.find((session) => session.id === "ses_fork")?.parentSessionPath).toBe(path.join(root, "repo-api", "ses_1.jsonl"))
   })
 })
 

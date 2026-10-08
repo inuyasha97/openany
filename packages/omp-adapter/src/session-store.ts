@@ -23,13 +23,13 @@ export type OmpSessionFs = {
 
 export const defaultSessionsRoot = (): string => path.join(os.homedir(), ".omp", "agent", "sessions")
 
-export const parseSessionFile = (text: string): { id: string; cwd: string; title: string } | null => {
-  let header: { id?: unknown; cwd?: unknown; title?: unknown } | null = null
+export const parseSessionFile = (text: string): { id: string; cwd: string; title: string; parentSession?: string } | null => {
+  let header: { id?: unknown; cwd?: unknown; title?: unknown; parentSession?: unknown } | null = null
   let title = ""
   for (const line of text.split("\n")) {
     const trimmed = line.trim()
     if (!trimmed) continue
-    let record: { type?: unknown; id?: unknown; cwd?: unknown; title?: unknown; v?: unknown }
+    let record: { type?: unknown; id?: unknown; cwd?: unknown; title?: unknown; parentSession?: unknown; v?: unknown }
     try {
       record = JSON.parse(trimmed) as typeof record
     } catch {
@@ -46,7 +46,13 @@ export const parseSessionFile = (text: string): { id: string; cwd: string; title
   }
   if (!header || typeof header.id !== "string" || typeof header.cwd !== "string") return null
   const headerTitle = typeof header.title === "string" ? header.title : ""
-  return { id: header.id, cwd: header.cwd, title: title || headerTitle }
+  return {
+    id: header.id,
+    cwd: header.cwd,
+    title: title || headerTitle,
+    // The header records the file a fork was branched from; absent otherwise.
+    ...(typeof header.parentSession === "string" ? { parentSession: header.parentSession } : {}),
+  }
 }
 
 export type OmpSessionStore = {
@@ -88,7 +94,15 @@ export const createSessionStore = (options: { root?: string; fs?: OmpSessionFs }
       for (const file of discover()) {
         try {
           const parsed = parseSessionFile(io.readFile(file, "utf8"))
-          if (parsed) sessions.push({ id: parsed.id, sessionPath: file, cwd: parsed.cwd, title: parsed.title })
+          if (parsed) {
+            sessions.push({
+              id: parsed.id,
+              sessionPath: file,
+              cwd: parsed.cwd,
+              title: parsed.title,
+              ...(parsed.parentSession ? { parentSessionPath: parsed.parentSession } : {}),
+            })
+          }
         } catch {
           // a single unreadable file must not drop the rest
         }
@@ -107,7 +121,13 @@ export const createSessionStore = (options: { root?: string; fs?: OmpSessionFs }
       io.mkdir(targetDir, { recursive: true })
       const target = path.join(targetDir, path.basename(sessionPath))
       io.rename(sessionPath, target)
-      return { id: parsed.id, sessionPath: target, cwd: toDirectory, title: parsed.title }
+      return {
+        id: parsed.id,
+        sessionPath: target,
+        cwd: toDirectory,
+        title: parsed.title,
+        ...(parsed.parentSession ? { parentSessionPath: parsed.parentSession } : {}),
+      }
     },
   }
 }

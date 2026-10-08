@@ -6,7 +6,7 @@
  * testable with a fake and the real SDK binding stays in one place.
  */
 
-import type { OmpEvent, OmpImageContent, OmpMessage } from "./model"
+import type { OmpEvent, OmpImageContent, OmpMessage, OmpModelInfo, OmpThinkingLevel } from "./model"
 
 export type { OmpEvent }
 
@@ -16,9 +16,50 @@ export type OmpSessionInfo = {
   sessionPath: string
   cwd: string
   title: string
+  /** On-disk path of the session this one was branched from, when OMP recorded one. */
+  parentSessionPath?: string
 }
 
 export type OmpOutboundFrame = { type: string; id?: string; [key: string]: unknown }
+
+/** How full a session's context window is (`get_state.contextUsage`). */
+export type OmpContextUsage = { tokens: number; contextWindow: number; percent: number }
+
+/**
+ * The full `get_state` reading. `busy` folds streaming and compaction together:
+ * a compactor is a running turn, so the composer must queue rather than send.
+ */
+export type OmpSessionStatus = {
+  busy: boolean
+  compacting: boolean
+  queuedCount: number
+  tokensPerSecond: number | null
+  contextUsage: OmpContextUsage | null
+}
+
+/**
+ * One `extension_ui_request` the model is still waiting on. `select` and
+ * `editor` are the `ask` tool's questions; `confirm` and `input` are tool
+ * approvals. OMP's `cancel` frame (and our own `extension_ui_response`) clears
+ * the entry.
+ */
+export type OmpPendingRequest = {
+  requestId: string
+  sessionId: string
+  method: "select" | "confirm" | "input" | "editor"
+  title: string
+  /** The choices an `ask` tool's `select` offers. */
+  options?: readonly string[]
+  /** Positional descriptions for `options`, when OMP supplied any. */
+  optionDetails?: readonly { description?: string }[]
+  /** The prompt text a `confirm` carries. */
+  message?: string
+  /** Placeholder for an `input`. */
+  placeholder?: string
+  /** Pre-filled text for an `editor`. */
+  prefill?: string
+}
+
 
 /** One OAuth provider OMP can log in to (`get_login_providers`). */
 export type OmpLoginProvider = {
@@ -51,11 +92,35 @@ export type OmpLoginOptions = {
 export type OmpPromptOptions = {
   /** Images sent with the prompt, in order. */
   images?: readonly OmpImageContent[]
+  /**
+   * The directory the caller believes the session runs in. OMP pins the
+   * process cwd when the session is opened, so the host does not re-apply it;
+   * it is carried so a command send passes the same options a prompt takes.
+   */
+  cwd?: string
+}
+
+/** What `sendCommand` takes; the command is expanded by OMP inside `prompt`. */
+export type OmpSendCommandParams = {
+  id: string
+  /** The command name without its leading slash. */
+  command: string
+  arguments?: string
+  directory?: string
+  images?: readonly OmpImageContent[]
+}
+
+/** What `forkSession` takes: the session to branch and the entry to branch at. */
+export type OmpForkParams = {
+  id: string
+  /** The entry (a user message) OMP branches the transcript at. */
+  entryId: string
+  directory?: string
 }
 
 export type OmpSessionHandle = {
+  /** The session's current id; a `branch` re-keys the live handle, so this can change. */
   id: string
-  prompt: (text: string, options?: OmpPromptOptions) => Promise<boolean>
   abort: () => Promise<void>
   subscribe: (listener: (event: OmpEvent) => void) => () => void
   dispose: () => Promise<void>
@@ -68,16 +133,23 @@ export type OmpSessionHandle = {
 
 export type OmpHost = {
   listSessions: () => Promise<OmpSessionInfo[]>
-  openSession: (input: { sessionPath?: string; cwd?: string }) => Promise<OmpSessionHandle>
+  openSession: (input: { sessionPath?: string; cwd?: string; parentSession?: string }) => Promise<OmpSessionHandle>
+  prompt: (id: string, text: string, options?: OmpPromptOptions) => Promise<boolean>
+  branch: (id: string, entryId: string) => Promise<OmpSessionInfo>
   renameSession: (id: string, title: string) => Promise<void>
   deleteSession: (id: string) => Promise<boolean>
   moveSession: (id: string, toDirectory: string) => Promise<void>
   setModel: (id: string, provider: string, modelId: string) => Promise<void>
-  listModels: () => Promise<unknown[]>
+  listModels: () => Promise<OmpModelInfo[]>
   listCommands: () => Promise<unknown[]>
+  setThinkingLevel: (id: string, level: OmpThinkingLevel) => Promise<boolean>
+  cycleThinkingLevel: (id: string) => Promise<OmpThinkingLevel | null>
+  setFastMode: (id: string, enabled: boolean) => Promise<{ enabled: boolean; active: boolean }>
   listLoginProviders: () => Promise<OmpLoginProvider[]>
   login: (providerId: string, options?: OmpLoginOptions) => Promise<OmpLoginResult>
-  getSessionStatus: (id: string) => Promise<{ busy: boolean }>
+  getSessionStatus: (id: string) => Promise<OmpSessionStatus>
+  /** The askable frames this session has not answered yet, oldest first. */
+  listPendingRequests: (id: string) => OmpPendingRequest[]
 }
 
 export class OmpRuntime {
@@ -93,8 +165,8 @@ export class OmpRuntime {
     return this.host.listSessions()
   }
 
-  async createSession(input: { cwd?: string } = {}): Promise<OmpSessionHandle> {
-    const handle = this.attach(await this.host.openSession({ cwd: input.cwd }))
+  async createSession(input: { cwd?: string; parentSession?: string } = {}): Promise<OmpSessionHandle> {
+    const handle = this.attach(await this.host.openSession({ cwd: input.cwd, parentSession: input.parentSession }))
     if (input.cwd) this.cwdBySession.set(handle.id, input.cwd)
     return handle
   }
@@ -141,6 +213,32 @@ export class OmpRuntime {
     return ids
   }
 
+  /**
+   * Moves a session's handle and its bookkeeping from the id it had to the id
+   * OMP reports after a `branch`. Without this the old id would keep the handle
+   * for a process that now serves the branched session, and a prompt to the
+   * original would land in the fork.
+   */
+  private rekey(from: string, to: string, cwd: string): void {
+    if (from === to) {
+      if (cwd) this.cwdBySession.set(to, cwd)
+      return
+    }
+    const handle = this.sessions.get(from)
+    if (handle) {
+      this.sessions.delete(from)
+      this.sessions.set(to, handle)
+      const unsubscribe = this.unsubscribes.get(from)
+      this.unsubscribes.delete(from)
+      if (unsubscribe) this.unsubscribes.set(to, unsubscribe)
+      const usedAt = this.lastUsedAt.get(from)
+      this.lastUsedAt.delete(from)
+      if (usedAt !== undefined) this.lastUsedAt.set(to, usedAt)
+    }
+    this.cwdBySession.delete(from)
+    if (cwd) this.cwdBySession.set(to, cwd)
+  }
+
   private async disposeSession(id: string): Promise<void> {
     const handle = this.sessions.get(id)
     this.sessions.delete(id)
@@ -160,7 +258,22 @@ export class OmpRuntime {
   }
 
   async prompt(id: string, text: string, options?: OmpPromptOptions): Promise<boolean> {
-    return (await this.getSession(id)).prompt(text, options)
+    // The session must be open before the host can write to its process.
+    await this.getSession(id)
+    return this.host.prompt(id, text, options)
+  }
+
+  /**
+   * Sends a slash command. OMP expands `/name args` itself, for file commands,
+   * `/skill:<name>` and extension commands alike, so the command travels as an
+   * ordinary prompt and the raw text is never special-cased here.
+   */
+  async sendCommand(params: OmpSendCommandParams): Promise<void> {
+    const text = params.arguments?.trim() ? `/${params.command} ${params.arguments.trim()}` : `/${params.command}`
+    const options: OmpPromptOptions = {}
+    if (params.directory !== undefined) options.cwd = params.directory
+    if (params.images && params.images.length > 0) options.images = params.images
+    await this.prompt(params.id, text, options)
   }
 
   async getMessages(id: string): Promise<readonly OmpMessage[]> {
@@ -187,12 +300,44 @@ export class OmpRuntime {
     return this.host.setModel(id, provider, modelId)
   }
 
-  listModels(): Promise<unknown[]> {
+  listModels(): Promise<OmpModelInfo[]> {
     return this.host.listModels()
   }
 
   listCommands(): Promise<unknown[]> {
     return this.host.listCommands()
+  }
+
+  async setThinkingLevel(id: string, level: OmpThinkingLevel): Promise<boolean> {
+    await this.getSession(id)
+    return this.host.setThinkingLevel(id, level)
+  }
+
+  async cycleThinkingLevel(id: string): Promise<OmpThinkingLevel | null> {
+    await this.getSession(id)
+    return this.host.cycleThinkingLevel(id)
+  }
+
+  async setFastMode(id: string, enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
+    await this.getSession(id)
+    return this.host.setFastMode(id, enabled)
+  }
+
+  /**
+   * Branches the session at `entryId` and follows the branched session. OMP
+   * swaps the live session inside the same process, so the handle is re-keyed
+   * to the new id and the branch's own directory is remembered.
+   */
+  async forkSession(params: OmpForkParams): Promise<OmpSessionInfo> {
+    await this.getSession(params.id)
+    const info = await this.host.branch(params.id, params.entryId)
+    const cwd = info.cwd || this.cwdBySession.get(params.id) || params.directory || ""
+    this.rekey(params.id, info.id, cwd)
+    return { ...info, cwd }
+  }
+
+  async listPendingRequests(id: string): Promise<OmpPendingRequest[]> {
+    return this.host.listPendingRequests(id)
   }
 
   listLoginProviders(): Promise<OmpLoginProvider[]> {
@@ -203,7 +348,7 @@ export class OmpRuntime {
     return this.host.login(providerId, options)
   }
 
-  getSessionStatus(id: string): Promise<{ busy: boolean }> {
+  getSessionStatus(id: string): Promise<OmpSessionStatus> {
     return this.host.getSessionStatus(id)
   }
 

@@ -1,9 +1,17 @@
 import { describe, expect, test } from "bun:test"
-import { OmpRuntime, type OmpEvent, type OmpHost, type OmpPromptOptions, type OmpSessionHandle, type OmpSessionInfo } from "./runtime"
+import type { OmpModelInfo } from "./model"
+import {
+  OmpRuntime,
+  type OmpEvent,
+  type OmpHost,
+  type OmpPendingRequest,
+  type OmpPromptOptions,
+  type OmpSessionHandle,
+  type OmpSessionInfo,
+  type OmpSessionStatus,
+} from "./runtime"
 
 type FakeHandle = OmpSessionHandle & {
-  promptCalls: string[]
-  promptOptions: Array<OmpPromptOptions | undefined>
   abortCalls: number
   disposed: boolean
   sent: Array<{ type: string; id?: string; [key: string]: unknown }>
@@ -14,17 +22,10 @@ const makeHandle = (id: string): FakeHandle => {
   const listeners = new Set<(event: OmpEvent) => void>()
   const handle: FakeHandle = {
     id,
-    promptCalls: [],
-    promptOptions: [],
     abortCalls: 0,
     disposed: false,
     sent: [],
     sessionFile: `/sessions/${id}.json`,
-    prompt: async (text, options) => {
-      handle.promptCalls.push(text)
-      handle.promptOptions.push(options)
-      return true
-    },
     abort: async () => {
       handle.abortCalls += 1
     },
@@ -48,7 +49,22 @@ const makeHandle = (id: string): FakeHandle => {
 
 const info = (id: string): OmpSessionInfo => ({ id, sessionPath: `/sessions/${id}.json`, cwd: "/repo", title: id })
 
-const makeHost = (infos: OmpSessionInfo[]): {
+const IDLE_STATUS: OmpSessionStatus = {
+  busy: false,
+  compacting: false,
+  queuedCount: 0,
+  tokensPerSecond: null,
+  contextUsage: null,
+}
+
+type FakeHostOptions = {
+  status?: OmpSessionStatus
+  branchResult?: OmpSessionInfo
+  pending?: OmpPendingRequest[]
+  models?: OmpModelInfo[]
+}
+
+type HostHarness = {
   host: OmpHost
   opened: string[]
   handles: Map<string, FakeHandle>
@@ -56,17 +72,26 @@ const makeHost = (infos: OmpSessionInfo[]): {
   deleted: string[]
   moved: Array<[string, string]>
   models: Array<[string, string, string]>
-  openInputs: Array<{ sessionPath?: string; cwd?: string }>
+  openInputs: Array<{ sessionPath?: string; cwd?: string; parentSession?: string }>
   logins: string[]
-} => {
+  promptCalls: Array<{ id: string; text: string; options?: OmpPromptOptions }>
+  commands: Array<Record<string, unknown>>
+}
+
+const makeHost = (infos: OmpSessionInfo[], options: FakeHostOptions = {}): HostHarness => {
   const handles = new Map<string, FakeHandle>()
   const opened: string[] = []
   const renamed: Array<[string, string]> = []
   const deleted: string[] = []
   const moved: Array<[string, string]> = []
   const models: Array<[string, string, string]> = []
-  const openInputs: Array<{ sessionPath?: string; cwd?: string }> = []
+  const openInputs: Array<{ sessionPath?: string; cwd?: string; parentSession?: string }> = []
   const logins: string[] = []
+  const promptCalls: Array<{ id: string; text: string; options?: OmpPromptOptions }> = []
+  const commands: Array<Record<string, unknown>> = []
+  const status = options.status ?? IDLE_STATUS
+  const branchResult = options.branchResult ?? info("ses_fork")
+  const modelList: OmpModelInfo[] = options.models ?? [{ provider: "anthropic", id: "claude", reasoning: true, efforts: ["low", "high"] }]
   const host: OmpHost = {
     listSessions: async () => infos,
     openSession: async (input) => {
@@ -76,6 +101,14 @@ const makeHost = (infos: OmpSessionInfo[]): {
       const handle = makeHandle(id)
       handles.set(id, handle)
       return handle
+    },
+    prompt: async (id, text, promptOptions) => {
+      promptCalls.push({ id, text, options: promptOptions })
+      return true
+    },
+    branch: async (_id, entryId) => {
+      commands.push({ type: "branch", entryId })
+      return branchResult
     },
     renameSession: async (id, title) => {
       renamed.push([id, title])
@@ -90,16 +123,29 @@ const makeHost = (infos: OmpSessionInfo[]): {
     setModel: async (id, provider, modelId) => {
       models.push([id, provider, modelId])
     },
-    listModels: async () => [{ provider: "anthropic", id: "claude" }],
+    listModels: async () => modelList,
     listCommands: async () => [{ name: "goal", source: "builtin" }],
+    setThinkingLevel: async (_id, level) => {
+      commands.push({ type: "set_thinking_level", level })
+      return true
+    },
+    cycleThinkingLevel: async () => {
+      commands.push({ type: "cycle_thinking_level" })
+      return "high"
+    },
+    setFastMode: async (_id, enabled) => {
+      commands.push({ type: "set_fast_mode", enabled })
+      return { enabled, active: enabled }
+    },
     listLoginProviders: async () => [{ id: "anthropic", name: "Anthropic", available: true, authenticated: false }],
     login: async (providerId) => {
       logins.push(providerId)
       return { providerId }
     },
-    getSessionStatus: async () => ({ busy: false }),
+    getSessionStatus: async () => status,
+    listPendingRequests: () => options.pending ?? [],
   }
-  return { host, opened, handles, renamed, deleted, moved, models, openInputs, logins }
+  return { host, opened, handles, renamed, deleted, moved, models, openInputs, logins, promptCalls, commands }
 }
 
 describe("OmpRuntime", () => {
@@ -109,21 +155,21 @@ describe("OmpRuntime", () => {
   })
 
   test("creates a session, attaches it and routes a prompt", async () => {
-    const { host, handles } = makeHost([])
+    const { host, promptCalls } = makeHost([])
     const runtime = new OmpRuntime(host)
     const created = await runtime.createSession({ cwd: "/repo" })
     expect(created.id).toBe("new-session")
     await runtime.prompt("new-session", "hi")
-    expect(handles.get("new-session")?.promptCalls).toEqual(["hi"])
+    expect(promptCalls).toEqual([{ id: "new-session", text: "hi", options: undefined }])
   })
 
-  test("carries prompt options through to the session handle", async () => {
-    const { host, handles } = makeHost([])
+  test("forwards prompt options to the host", async () => {
+    const { host, promptCalls } = makeHost([])
     const runtime = new OmpRuntime(host)
     await runtime.createSession({ cwd: "/repo" })
     const images = [{ type: "image" as const, data: "QUJD", mimeType: "image/png" }]
     await runtime.prompt("new-session", "look", { images })
-    expect(handles.get("new-session")?.promptOptions).toEqual([{ images }])
+    expect(promptCalls).toEqual([{ id: "new-session", text: "look", options: { images } }])
   })
 
   test("reuses an attached session instead of opening it again", async () => {
@@ -143,6 +189,13 @@ describe("OmpRuntime", () => {
     // OMP refuses a switch that changes the working directory.
     expect(openInputs).toEqual([{ sessionPath: "/sessions/ses_a.json", cwd: "/repo" }])
     await expect(runtime.getSession("missing")).rejects.toThrow("unknown omp session: missing")
+  })
+
+  test("carries a parent session through session creation", async () => {
+    const { host, openInputs } = makeHost([])
+    const runtime = new OmpRuntime(host)
+    await runtime.createSession({ cwd: "/repo", parentSession: "/sessions/parent.json" })
+    expect(openInputs).toEqual([{ cwd: "/repo", parentSession: "/sessions/parent.json" }])
   })
 
   test("fans session events out to subscribers", async () => {
@@ -171,11 +224,58 @@ describe("OmpRuntime", () => {
   })
 
   test("reads models, commands and session status from the host", async () => {
-    const { host } = makeHost([])
+    const status: OmpSessionStatus = { busy: true, compacting: true, queuedCount: 2, tokensPerSecond: 12, contextUsage: { tokens: 10, contextWindow: 100, percent: 10 } }
+    const { host } = makeHost([], { status })
     const runtime = new OmpRuntime(host)
-    expect(await runtime.listModels()).toEqual([{ provider: "anthropic", id: "claude" }])
+    expect(await runtime.listModels()).toEqual([{ provider: "anthropic", id: "claude", reasoning: true, efforts: ["low", "high"] }])
     expect(await runtime.listCommands()).toEqual([{ name: "goal", source: "builtin" }])
-    expect(await runtime.getSessionStatus("ses_a")).toEqual({ busy: false })
+    expect(await runtime.getSessionStatus("ses_a")).toEqual(status)
+  })
+
+  test("sends a command as prompt text", async () => {
+    const { host, promptCalls } = makeHost([info("ses_1")])
+    const runtime = new OmpRuntime(host)
+    await runtime.sendCommand({ id: "ses_1", command: "review", arguments: "the diff", directory: "/repo" })
+    expect(promptCalls).toEqual([{ id: "ses_1", text: "/review the diff", options: { cwd: "/repo" } }])
+  })
+
+  test("sends a command with no arguments as the bare command", async () => {
+    const { host, promptCalls } = makeHost([info("ses_1")])
+    const runtime = new OmpRuntime(host)
+    await runtime.sendCommand({ id: "ses_1", command: "init", arguments: "", directory: "/repo" })
+    expect(promptCalls[0]?.text).toBe("/init")
+  })
+
+  test("forwards thinking level, cycle and fast mode to the host", async () => {
+    const { host, commands } = makeHost([info("ses_1")])
+    const runtime = new OmpRuntime(host)
+    await runtime.setThinkingLevel("ses_1", "high")
+    expect(await runtime.cycleThinkingLevel("ses_1")).toBe("high")
+    expect(await runtime.setFastMode("ses_1", true)).toEqual({ enabled: true, active: true })
+    expect(commands).toContainEqual({ type: "set_thinking_level", level: "high" })
+    expect(commands).toContainEqual({ type: "cycle_thinking_level" })
+    expect(commands).toContainEqual({ type: "set_fast_mode", enabled: true })
+  })
+
+  test("branches at an entry and follows the new session without reopening it", async () => {
+    const fork: OmpSessionInfo = { id: "ses_2", sessionPath: "/sessions/ses_2.json", cwd: "/repo", title: "ses_2" }
+    const { host, opened, handles, commands } = makeHost([info("ses_1")], { branchResult: fork })
+    const runtime = new OmpRuntime(host)
+    const forked = await runtime.forkSession({ id: "ses_1", entryId: "e7", directory: "/repo" })
+    expect(commands).toContainEqual({ type: "branch", entryId: "e7" })
+    expect(forked.id).toBe("ses_2")
+    // The branched session is served by the same process, so it must not spawn a
+    // second one: the rekeyed id resolves to the handle the original opened.
+    expect(opened).toEqual(["ses_1"])
+    expect(await runtime.getSession("ses_2")).toBe(handles.get("ses_1"))
+    expect(opened).toEqual(["ses_1"])
+  })
+
+  test("lists the session's pending askable frames", async () => {
+    const pending: OmpPendingRequest[] = [{ requestId: "r1", sessionId: "ses_1", method: "select", title: "Which?" }]
+    const { host } = makeHost([info("ses_1")], { pending })
+    const runtime = new OmpRuntime(host)
+    expect(await runtime.listPendingRequests("ses_1")).toEqual(pending)
   })
 
   test("reads login providers and starts a login through the host", async () => {
