@@ -1257,7 +1257,7 @@ export const settingsDict = {
   'settings.remoteInstances.page.section.advancedHint': '連接埠、安裝方式、密碼與額外轉發。大多數連線使用預設值即可。',
   'settings.remoteInstances.page.field.installMethodAuto': '自動',
   'settings.remoteInstances.page.error.hint.noRuntime': '遠端機器上既沒有 bun 也沒有 npm。請在那裡安裝其中之一，或把此連線切換為「已在執行」。',
-  'settings.remoteInstances.page.error.hint.noOpencode': '遠端機器上沒有安裝 opencode CLI。請先在那裡安裝（見 opencode.ai），然後重新連線。',
+  'settings.remoteInstances.page.error.hint.noOpencode': '遠端機器上沒有安裝 OMP CLI。請先在那裡安裝（`bun add -g @oh-my-pi/pi-coding-agent`），然後重新連線。',
   'settings.remoteInstances.page.error.action.setUiPassword': '設定介面密碼',
   'settings.remoteInstances.page.error.action.pickRandomPort': '使用其他本機連接埠',
   'settings.remoteInstances.page.error.action.setRemotePort': '設定遠端連接埠',

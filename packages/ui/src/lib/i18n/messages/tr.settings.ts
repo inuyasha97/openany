@@ -2226,7 +2226,7 @@ export const settingsDict = {
   'settings.remoteInstances.page.section.advancedHint': 'Portlar, kurulum yöntemi, şifreler ve ek forward\'lar. Çoğu bağlantı için varsayılanlar yeterlidir.',
   'settings.remoteInstances.page.field.installMethodAuto': 'Otomatik',
   'settings.remoteInstances.page.error.hint.noRuntime': 'Uzak makinede ne bun ne de npm var. Birini oraya kurun ya da bu bağlantıyı "Zaten çalışıyor" moduna geçirin.',
-  'settings.remoteInstances.page.error.hint.noOpencode': 'opencode CLI uzak makinede kurulu değil. Oraya kurun (bkz. opencode.ai), sonra tekrar bağlanın.',
+  'settings.remoteInstances.page.error.hint.noOpencode': 'OMP CLI uzak makinede kurulu değil. Oraya kurun (`bun add -g @oh-my-pi/pi-coding-agent`), sonra tekrar bağlanın.',
   'settings.remoteInstances.page.error.action.setUiPassword': 'UI şifresi belirle',
   'settings.remoteInstances.page.error.action.pickRandomPort': 'Başka bir yerel port kullan',
   'settings.remoteInstances.page.error.action.setRemotePort': 'Uzak portu ayarla',

@@ -1385,7 +1385,7 @@ export const settingsDict = {
   'settings.remoteInstances.page.section.advancedHint': 'Poorten, installatiemethode, wachtwoorden en extra forwards. De standaardwaarden werken voor de meeste verbindingen.',
   'settings.remoteInstances.page.field.installMethodAuto': 'Automatisch',
   'settings.remoteInstances.page.error.hint.noRuntime': 'Op de remote machine staat noch bun noch npm. Installeer een van beide daar of zet deze verbinding op "Reeds actief".',
-  'settings.remoteInstances.page.error.hint.noOpencode': 'De opencode CLI is niet geïnstalleerd op de remote machine. Installeer die daar (zie opencode.ai) en verbind daarna opnieuw.',
+  'settings.remoteInstances.page.error.hint.noOpencode': 'De OMP CLI is niet geïnstalleerd op de remote machine. Installeer die daar (`bun add -g @oh-my-pi/pi-coding-agent`) en verbind daarna opnieuw.',
   'settings.remoteInstances.page.error.action.setUiPassword': 'UI-wachtwoord instellen',
   'settings.remoteInstances.page.error.action.pickRandomPort': 'Een andere lokale poort gebruiken',
   'settings.remoteInstances.page.error.action.setRemotePort': 'De remote poort instellen',

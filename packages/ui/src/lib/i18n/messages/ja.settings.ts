@@ -1385,7 +1385,7 @@ export const settingsDict = {
   'settings.remoteInstances.page.section.advancedHint': 'ポート、インストール方法、パスワード、追加の転送。ほとんどの接続は初期値のままで動作します。',
   'settings.remoteInstances.page.field.installMethodAuto': '自動',
   'settings.remoteInstances.page.error.hint.noRuntime': 'リモートマシンに bun も npm もありません。どちらかをそこにインストールするか、この接続を「すでに実行中」に切り替えてください。',
-  'settings.remoteInstances.page.error.hint.noOpencode': 'リモートマシンに opencode CLI がインストールされていません。そこにインストールしてから（opencode.ai を参照）、もう一度接続してください。',
+  'settings.remoteInstances.page.error.hint.noOpencode': 'リモートマシンに OMP CLI がインストールされていません。そこにインストールしてから（`bun add -g @oh-my-pi/pi-coding-agent`）、もう一度接続してください。',
   'settings.remoteInstances.page.error.action.setUiPassword': 'UI パスワードを設定',
   'settings.remoteInstances.page.error.action.pickRandomPort': '別のローカルポートを使う',
   'settings.remoteInstances.page.error.action.setRemotePort': 'リモートポートを設定',

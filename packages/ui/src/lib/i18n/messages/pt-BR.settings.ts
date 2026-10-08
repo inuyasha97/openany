@@ -1352,7 +1352,7 @@ export const settingsDict = {
   "settings.remoteInstances.page.section.advancedHint": "Portas, método de instalação, senhas e encaminhamentos extras. Os padrões servem para quase todas as conexões.",
   "settings.remoteInstances.page.field.installMethodAuto": "Automático",
   "settings.remoteInstances.page.error.hint.noRuntime": "A máquina remota não tem bun nem npm. Instale um deles lá ou mude esta conexão para “Já em execução”.",
-  "settings.remoteInstances.page.error.hint.noOpencode": "A CLI do opencode não está instalada na máquina remota. Instale-a lá (veja opencode.ai) e conecte novamente.",
+  "settings.remoteInstances.page.error.hint.noOpencode": "A CLI do OMP não está instalada na máquina remota. Instale-a lá (`bun add -g @oh-my-pi/pi-coding-agent`) e conecte novamente.",
   "settings.remoteInstances.page.error.action.setUiPassword": "Definir senha da interface",
   "settings.remoteInstances.page.error.action.pickRandomPort": "Usar outra porta local",
   "settings.remoteInstances.page.error.action.setRemotePort": "Definir a porta remota",

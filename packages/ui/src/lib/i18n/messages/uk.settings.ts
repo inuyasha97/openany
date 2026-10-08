@@ -1352,7 +1352,7 @@ export const settingsDict = {
   "settings.remoteInstances.page.section.advancedHint": "Порти, спосіб встановлення, паролі та додаткові прокидання. Для більшості підключень достатньо значень за замовчуванням.",
   "settings.remoteInstances.page.field.installMethodAuto": "Автоматично",
   "settings.remoteInstances.page.error.hint.noRuntime": "На віддаленій машині немає ні bun, ні npm. Встановіть щось із них там або переведіть це підключення в режим «Вже запущено».",
-  "settings.remoteInstances.page.error.hint.noOpencode": "На віддаленій машині не встановлено opencode CLI. Встановіть його там (див. opencode.ai) і підключіться знову.",
+  "settings.remoteInstances.page.error.hint.noOpencode": "На віддаленій машині не встановлено OMP CLI. Встановіть його там (`bun add -g @oh-my-pi/pi-coding-agent`) і підключіться знову.",
   "settings.remoteInstances.page.error.action.setUiPassword": "Задати пароль UI",
   "settings.remoteInstances.page.error.action.pickRandomPort": "Взяти інший локальний порт",
   "settings.remoteInstances.page.error.action.setRemotePort": "Задати віддалений порт",

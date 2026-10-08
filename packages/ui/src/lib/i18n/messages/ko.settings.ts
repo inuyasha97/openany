@@ -1352,7 +1352,7 @@ export const settingsDict = {
   'settings.remoteInstances.page.section.advancedHint': '포트, 설치 방법, 비밀번호, 추가 포워딩. 대부분의 연결은 기본값으로 충분합니다.',
   'settings.remoteInstances.page.field.installMethodAuto': '자동',
   'settings.remoteInstances.page.error.hint.noRuntime': '원격 머신에 bun도 npm도 없습니다. 그곳에 하나를 설치하거나 이 연결을 "이미 실행 중"으로 바꾸세요.',
-  'settings.remoteInstances.page.error.hint.noOpencode': '원격 머신에 opencode CLI가 설치되어 있지 않습니다. 그곳에 설치한 뒤(opencode.ai 참고) 다시 연결하세요.',
+  'settings.remoteInstances.page.error.hint.noOpencode': '원격 머신에 OMP CLI가 설치되어 있지 않습니다. 그곳에 설치한 뒤(`bun add -g @oh-my-pi/pi-coding-agent`) 다시 연결하세요.',
   'settings.remoteInstances.page.error.action.setUiPassword': 'UI 비밀번호 설정',
   'settings.remoteInstances.page.error.action.pickRandomPort': '다른 로컬 포트 사용',
   'settings.remoteInstances.page.error.action.setRemotePort': '원격 포트 설정',

@@ -1708,7 +1708,7 @@ export const settingsDict = {
   'settings.remoteInstances.page.section.advancedHint': 'Porty, metoda instalacji, hasła i dodatkowe przekierowania. Domyślne wartości wystarczą dla większości połączeń.',
   'settings.remoteInstances.page.field.installMethodAuto': 'Automatycznie',
   'settings.remoteInstances.page.error.hint.noRuntime': 'Na zdalnej maszynie nie ma ani bun, ani npm. Zainstaluj tam jedno z nich albo przełącz to połączenie na „Już uruchomiony”.',
-  'settings.remoteInstances.page.error.hint.noOpencode': 'Na zdalnej maszynie nie ma zainstalowanego opencode CLI. Zainstaluj je tam (zobacz opencode.ai) i połącz się ponownie.',
+  'settings.remoteInstances.page.error.hint.noOpencode': 'Na zdalnej maszynie nie ma zainstalowanego OMP CLI. Zainstaluj je tam (`bun add -g @oh-my-pi/pi-coding-agent`) i połącz się ponownie.',
   'settings.remoteInstances.page.error.action.setUiPassword': 'Ustaw hasło interfejsu',
   'settings.remoteInstances.page.error.action.pickRandomPort': 'Użyj innego portu lokalnego',
   'settings.remoteInstances.page.error.action.setRemotePort': 'Ustaw port zdalny',
