@@ -10,11 +10,6 @@ import { replaceFileWithRetry } from './windows-file-replace.mjs';
 const LOCAL_HOST_ID = 'local';
 const DEFAULT_CONNECTION_TIMEOUT_SEC = 60;
 const DEFAULT_LOCAL_BIND_HOST = '127.0.0.1';
-// Global npm prefixes are root-owned on most distributions, so `npm install -g`
-// fails with EACCES for a normal SSH user. Everything we install goes to a
-// prefix inside the user's home instead.
-const REMOTE_USER_PREFIX = '$HOME/.openchamber/npm-global';
-const REMOTE_BUN_CANDIDATE = '"${BUN_INSTALL:-$HOME/.bun}/bin/bun"';
 // nvm puts node on PATH only from an interactive ~/.bashrc, which the SSH
 // login shell never runs. Use its newest installed node; with no nvm the path
 // does not exist and every probe skips it.
@@ -1070,43 +1065,15 @@ export class ElectronSshManager {
   }
 
   async installOpenChamberManaged(parsed, controlPath, version, preferred) {
-    const bunPath = await this.resolveRemoteTool(parsed, controlPath, 'bun', [
-      REMOTE_BUN_CANDIDATE,
-      '"${XDG_CACHE_HOME:-$HOME/.cache}/.bun/bin/bun"',
-    ]);
-    const npmPath = await this.resolveRemoteTool(parsed, controlPath, 'npm', [`"${REMOTE_NVM_BIN}/npm"`]);
-
-    // bun's global install targets `~/.bun` or `${XDG_CACHE_HOME:-~/.cache}/.bun` (bun 1.3.x XDG-aware);
-    // npm is pinned to a prefix in the user's home so it never touches the root-owned global directory.
-    const bunCommand = bunPath ? `${shellQuote(bunPath)} add -g @openchamber/web@${version}` : null;
-    const npmCommand = npmPath
-      // npm is a node script: an nvm npm finds its node only next to itself.
-      ? `mkdir -p "${REMOTE_USER_PREFIX}" && PATH="$(dirname ${shellQuote(npmPath)}):$PATH" ${shellQuote(npmPath)} install -g --prefix "${REMOTE_USER_PREFIX}" @openchamber/web@${version}`
-      : null;
-
-    const commands = [];
-    if (preferred === 'npm') {
-      if (npmCommand) commands.push(npmCommand);
-      if (bunCommand) commands.push(bunCommand);
-    } else {
-      if (bunCommand) commands.push(bunCommand);
-      if (npmCommand) commands.push(npmCommand);
-    }
-
-    if (commands.length === 0) {
-      throw new Error('Remote host has neither bun nor npm available');
-    }
-
-    let lastError = null;
-    for (const command of commands) {
-      try {
-        await this.runRemoteCommand(parsed, controlPath, command);
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError || new Error('Failed to install OpenChamber on remote host');
+    // `@openchamber/web` on npm belongs to the upstream project, so installing it
+    // on a remote host would put a different product — an OpenCode-based server —
+    // behind this desktop. The fork does not publish that package, so there is
+    // nothing to install: a remote instance has to point at a server that is
+    // already running there (`mode: "external"`).
+    throw new Error(
+      'This build cannot install a server on a remote host: it is not published to a package '
+      + 'registry. Point the remote instance at a server that is already running there.',
+    );
   }
 
   async probeRemoteSystemInfo(parsed, controlPath, port, openchamberPassword) {

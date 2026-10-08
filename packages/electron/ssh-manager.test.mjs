@@ -52,7 +52,7 @@ afterEach(async () => {
 
 describe('ElectronSshManager', () => {
   for (const scenario of ['explicit XDG with spaces', 'unset XDG', 'missing XDG with home fallback']) {
-    test.skipIf(process.platform === 'win32')(`executes remote discovery, install and launch with ${scenario}`, async () => {
+    test.skipIf(process.platform === 'win32')(`executes remote discovery and launch with ${scenario}`, async () => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber ssh paths-'));
       tempDirs.push(home);
       const xdg = path.join(home, 'cache directory');
@@ -88,8 +88,6 @@ printf '4321\\n'`);
       manager.remoteServerRunning = async () => true;
       const parsed = { destination: 'user@example.test', args: [] };
 
-      await manager.installOpenChamberManaged(parsed, '/unused.sock', '1.2.3', 'auto');
-      expect(fs.readFileSync(path.join(home, 'install-args'), 'utf8')).toBe('add\n-g\n@openchamber/web@1.2.3\n');
       const result = await manager.ensureRemoteServer({
         id: 'ssh-paths', auth: {}, remoteOpenchamber: { mode: 'managed', installMethod: 'auto' },
       }, parsed, '/unused.sock');
@@ -341,37 +339,6 @@ printf '4321\\n'`);
     });
     expect(settings.desktopHosts).toEqual([{ id: 'ssh-1', label: 'SSH Host', url: localUrl, apiUrl: localUrl, clientToken: 'ssh-client-token' }]);
   });
-  test.skipIf(process.platform === 'win32')('finds the newest nvm npm that the SSH login shell does not have on PATH', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-ssh-nvm-'));
-    const executable = (file, script) => {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
-    };
-    // Numeric order, not text order: v9 sorts after v24 as text.
-    for (const version of ['v9.11.2', 'v24.18.0']) {
-      const bin = path.join(home, '.nvm', 'versions', 'node', version, 'bin');
-      executable(path.join(bin, 'node'), 'exit 0');
-      executable(path.join(bin, 'npm'), `printf '%s' "$PATH" > "$HOME/npm-path"; printf '${version}' > "$HOME/npm-version"`);
-    }
-    const env = { HOME: home, PATH: '/usr/bin:/bin' };
-    const manager = new ElectronSshManager({
-      settingsFilePath: path.join(home, 'settings.json'),
-      appVersion: '1.2.3',
-      emit: () => undefined,
-    });
-    manager.runRemoteCommand = async (_parsed, _controlPath, script) =>
-      execFileSync('/bin/sh', ['-c', script], { env, encoding: 'utf8', timeout: 5000 });
-
-    try {
-      await manager.installOpenChamberManaged({ destination: 'user@example.test', args: [] }, '/unused.sock', '1.2.3', 'auto');
-      expect(fs.readFileSync(path.join(home, 'npm-version'), 'utf8')).toBe('v24.18.0');
-      expect(fs.readFileSync(path.join(home, 'npm-path'), 'utf8').split(':')[0])
-        .toBe(path.join(home, '.nvm', 'versions', 'node', 'v24.18.0', 'bin'));
-    } finally {
-      fs.rmSync(home, { recursive: true, force: true });
-    }
-  });
-
   test.skipIf(process.platform === 'win32')('starts the managed server with an nvm-installed omp that the SSH login shell does not have on PATH', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-ssh-nvm-omp-'));
     tempDirs.push(home);
@@ -407,7 +374,7 @@ printf '4321\\n'`);
     expect(fs.readFileSync(path.join(home, 'launch-omp'), 'utf8')).toBe(path.join(nvmBin, 'omp'));
   });
 
-  test('installs OpenChamber into a home-owned npm prefix instead of the root-owned global one', async () => {
+  test('refuses to install a server on the remote host, naming what to do instead', async () => {
     const commands = [];
     const manager = new ElectronSshManager({
       settingsFilePath: path.join(os.tmpdir(), 'unused-settings.json'),
@@ -420,11 +387,15 @@ printf '4321\\n'`);
       return '';
     };
 
-    await manager.installOpenChamberManaged({ destination: 'user@example.test', args: [] }, '/tmp/control.sock', '1.2.3', 'auto');
-
-    expect(commands).toHaveLength(1);
-    expect(commands[0]).toContain('--prefix "$HOME/.openchamber/npm-global"');
-    expect(commands[0]).not.toMatch(/npm install -g @openchamber/);
+    // `@openchamber/web` on npm is the upstream project's package: installing it
+    // would put an OpenCode-based server behind this desktop.
+    await expect(manager.installOpenChamberManaged(
+      { destination: 'user@example.test', args: [] },
+      '/tmp/control.sock',
+      '1.2.3',
+      'auto',
+    )).rejects.toThrow(/cannot install a server on a remote host/);
+    expect(commands).toEqual([]);
   });
 
   test('lists every remote OpenChamber binary with its reported version', async () => {
@@ -493,25 +464,6 @@ printf '4321\\n'`);
       4321,
       '/home/pi/.bun/bin/openchamber',
     )).rejects.toThrow(/omp CLI is not installed.*@oh-my-pi\/pi-coding-agent/s);
-  });
-  test('prefers a bun that only exists in the home directory over npm', async () => {
-    const commands = [];
-    const manager = new ElectronSshManager({
-      settingsFilePath: path.join(os.tmpdir(), 'unused-settings.json'),
-      appVersion: '1.2.3',
-      emit: () => undefined,
-    });
-    // A login shell over SSH does not put ~/.bun/bin on PATH.
-    manager.resolveRemoteTool = async (_parsed, _controlPath, name) =>
-      (name === 'bun' ? '/home/pi/.bun/bin/bun' : '/usr/bin/npm');
-    manager.runRemoteCommand = async (_parsed, _controlPath, script) => {
-      commands.push(script);
-      return '';
-    };
-
-    await manager.installOpenChamberManaged({ destination: 'user@example.test', args: [] }, '/tmp/control.sock', '1.2.3', 'auto');
-
-    expect(commands).toEqual(["'/home/pi/.bun/bin/bun' add -g @openchamber/web@1.2.3"]);
   });
   test('stops a remote server it started through the CLI, not the authenticated HTTP route', async () => {
     const scripts = [];

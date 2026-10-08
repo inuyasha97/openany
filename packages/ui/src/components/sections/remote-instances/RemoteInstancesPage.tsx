@@ -2288,7 +2288,9 @@ export const RemoteInstancesPage: React.FC = () => {
                   ...current,
                   remoteOpenchamber: {
                     ...current.remoteOpenchamber,
-                    mode: value === 'external' ? 'external' : 'managed',
+                    // Only an already-running server is offered: a published
+                    // build cannot install the server on the remote host.
+                    mode: value === 'managed' ? 'managed' : 'external',
                   },
                 }))
               }
@@ -2297,7 +2299,6 @@ export const RemoteInstancesPage: React.FC = () => {
                 <SelectValue placeholder={t('settings.remoteInstances.page.field.modePlaceholder')} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="managed">{t('settings.remoteInstances.page.field.modeManaged')}</SelectItem>
                 <SelectItem value="external">{t('settings.remoteInstances.page.field.modeExternal')}</SelectItem>
               </SelectContent>
             </Select>

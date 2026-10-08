@@ -329,7 +329,10 @@ export const createDesktopSshInstance = (id: string, sshCommand: string): Deskto
     sshCommand,
     connectionTimeoutSec: 60,
     remoteOpenchamber: {
-      mode: 'managed',
+      // A published build has no way to install the server on the remote (that
+      // needs a package it can fetch there), so a new instance points at a
+      // server that is already running.
+      mode: 'external',
       keepRunning: true,
       bindHost: '127.0.0.1',
       installMethod: 'auto',
