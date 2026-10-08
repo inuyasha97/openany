@@ -56,6 +56,24 @@ const createFakeAdapter = ({ projectImpl } = {}) => {
     async sendToSession(id, frame) {
       runtime.sent.push([id, frame]);
     },
+    async setThinkingLevel(id, level) {
+      runtime.thinkingLevels.push([id, level]);
+    },
+    thinkingLevels: [],
+    fastModes: [],
+    async setFastMode(id, enabled) {
+      runtime.fastModes.push([id, enabled]);
+      return { enabled, active: enabled };
+    },
+    async cycleThinkingLevel() {
+      return 'high';
+    },
+    branchCalls: [],
+    forkResult: null,
+    async forkSession(input) {
+      runtime.branchCalls.push(input);
+      return runtime.forkResult ?? { id: 'ses_fork', sessionPath: '/s/fork.json', cwd: '/repo', title: 'fork' };
+    },
     async abort(id) {
       runtime.aborted.push(id);
     },
@@ -378,5 +396,63 @@ describe('createOmpRuntimeHost', () => {
     expect(runtime.sent).toEqual([]);
 
     runtime.settleLogin({ providerId: 'anthropic' });
+  });
+
+  it('surfaces an ask as a form and answers it over the session process', async () => {
+    const frames = [];
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: (frame) => frames.push(frame) });
+    await host.createSession({ cwd: '/repo' });
+
+    runtime.emit('ses_new', { type: 'extension_ui_request', id: 'r1', method: 'select', title: 'Which one?', options: ['a'] });
+
+    const created = frames.find((frame) => frame.properties.events[0]?.type === 'form.created');
+    expect(created.properties.directory).toBe('/repo');
+    expect(created.properties.events[0].properties.form).toMatchObject({ id: 'r1', sessionID: 'ses_new', title: 'Which one?' });
+    expect(host.listForms('ses_new')).toHaveLength(1);
+    expect(host.listPermissions('ses_new')).toEqual([]);
+
+    expect(await host.replyForm('ses_new', 'r1', 'a')).toBe(true);
+    expect(runtime.sent).toEqual([['ses_new', { type: 'extension_ui_response', id: 'r1', value: 'a' }]]);
+    expect(host.listForms('ses_new')).toEqual([]);
+  });
+
+  it('cancels a form and refuses to answer it through the permission route', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+
+    runtime.emit('ses_a', { type: 'extension_ui_request', id: 'r1', method: 'editor', title: 'Why?' });
+    expect(await host.replyPermission('ses_a', 'r1', 'once', 'text')).toBe(false);
+    expect(host.listForms('ses_a')).toHaveLength(1);
+
+    expect(await host.cancelForm('ses_a', 'r1')).toBe(true);
+    expect(runtime.sent).toEqual([['ses_a', { type: 'extension_ui_response', id: 'r1', cancelled: true }]]);
+  });
+
+  it('routes the thinking level, its cycle and fast mode to the runtime', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+
+    expect(await host.setThinkingLevel('ses_a', 'high')).toBe('high');
+    expect(await host.cycleThinkingLevel('ses_a')).toBe('high');
+    expect(await host.setFastMode('ses_a', false)).toEqual({ enabled: false, active: false });
+    expect(runtime.thinkingLevels).toEqual([['ses_a', 'high']]);
+    expect(runtime.fastModes).toEqual([['ses_a', false]]);
+  });
+
+  it('announces the session a branch creates', async () => {
+    const frames = [];
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: (frame) => frames.push(frame) });
+    await host.createSession({ cwd: '/repo' });
+    frames.length = 0;
+
+    const forked = await host.branchSession('ses_new', 'e7');
+
+    expect(runtime.branchCalls).toEqual([{ id: 'ses_new', entryId: 'e7', directory: '/repo' }]);
+    expect(forked).toEqual({ id: 'ses_fork', sessionPath: '/s/fork.json', cwd: '/repo', title: 'fork' });
+    expect(frames[0].properties.sessionID).toBe('ses_fork');
+    expect(frames[0].properties.events[0].type).toBe('session.created');
+    expect(frames[0].properties.events[0].properties.info.directory).toBe('/repo');
   });
 });

@@ -19,7 +19,11 @@ const parseJsonBody = express.json({ limit: '1mb' });
 // the other routes need by far. Only this route gets the larger budget.
 const parsePromptBody = express.json({ limit: '64mb' });
 
-const createBodySchema = z.object({ cwd: z.string().min(1).optional() }).optional();
+const createBodySchema = z.object({
+  cwd: z.string().min(1).optional(),
+  /** Forks a new session off an existing one, continuing its transcript. */
+  parentSession: z.string().min(1).optional(),
+}).optional();
 const promptImageSchema = z.object({
   type: z.literal('image'),
   data: z.string().min(1),
@@ -33,6 +37,22 @@ const promptBodySchema = z.object({
 const renameBodySchema = z.object({ title: z.string().min(1) });
 const moveBodySchema = z.object({ directory: z.string().min(1) });
 const modelBodySchema = z.object({ provider: z.string().min(1), modelId: z.string().min(1) });
+// OMP's `ThinkingLevel` (`@oh-my-pi/pi-agent-core`): `inherit` defers to a
+// higher-level selector and `off` disables reasoning, so both are accepted.
+const THINKING_LEVELS = ['inherit', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const thinkingBodySchema = z.object({ level: z.enum(THINKING_LEVELS) });
+const fastModeBodySchema = z.object({ enabled: z.boolean() });
+const branchBodySchema = z.object({ entryId: z.string().min(1) });
+/**
+ * A form reply is either an answer keyed by field key (`{ value: "a" }`, the
+ * shape the UI already builds) or the plain value, and a cancellation is
+ * `{ cancelled: true }`.
+ */
+const formReplySchema = z.union([
+  z.object({ cancelled: z.literal(true) }),
+  z.object({ answer: z.record(z.string(), z.unknown()) }),
+  z.object({ value: z.union([z.string(), z.array(z.string())]) }),
+]);
 const permissionReplySchema = z.object({ reply: z.enum(['once', 'always', 'reject']), value: z.string().optional() });
 const mcpEnabledSchema = z.object({ enabled: z.boolean() });
 const loginBodySchema = z.object({ providerId: z.string().min(1) });
@@ -41,6 +61,9 @@ const isUnknownSession = (error) => {
   const message = error instanceof Error ? error.message : '';
   return message.startsWith('unknown omp session');
 };
+
+/** OMP's own refusal when `branch` names no forkable entry (`OmpRpcError`). */
+const isBranchFailure = (error) => error instanceof Error && error.command === 'branch';
 
 const respondWithError = (res, error, fallbackMessage) => {
   if (isUnknownSession(error)) {
@@ -55,7 +78,22 @@ const serializeSession = (session) => ({
   sessionPath: session.sessionPath,
   cwd: session.cwd,
   title: session.title,
+  // Set only on a session forked from another one; JSON drops it when absent.
+  parentSessionPath: session.parentSessionPath,
 });
+
+/**
+ * The value a form reply carries. A projected form has exactly one field keyed
+ * `value`, so the UI's answer record (`{ value: "a" }`) and a bare value both
+ * resolve to the same thing; an array (a multi-select answer) passes through.
+ */
+const formValue = (body) => {
+  if ('value' in body) return body.value;
+  const answer = body.answer ?? {};
+  if (typeof answer.value !== 'undefined') return answer.value;
+  const values = Object.values(answer);
+  return values.length === 1 ? values[0] : values;
+};
 
 export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
   const rejectIfDisabled = async (res) => {
@@ -82,12 +120,40 @@ export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
     if (!parsed.success) {
       return res.status(400).json({ error: 'cwd must be a non-empty string' });
     }
-    const cwd = parsed.data?.cwd;
+    const input = {};
+    if (parsed.data?.cwd !== undefined) input.cwd = parsed.data.cwd;
+    if (parsed.data?.parentSession !== undefined) input.parentSession = parsed.data.parentSession;
     try {
-      const handle = await (await getHost()).createSession(cwd !== undefined ? { cwd } : {});
+      const handle = await (await getHost()).createSession(input);
       return res.status(201).json({ session: { id: handle.id, sessionFile: handle.sessionFile ?? null } });
     } catch (error) {
       return respondWithError(res, error, 'Failed to create OMP session');
+    }
+  });
+
+  /**
+   * Forks a session at a message entry. OMP branches inside the live process,
+   * so the answer is the new session descriptor; an unknown `entryId` is OMP's
+   * own refusal and leaves the original session untouched.
+   */
+  app.post('/api/agents/omp/sessions/:id/branch', parseJsonBody, async (req, res) => {
+    if (await rejectIfDisabled(res)) return;
+    const parsed = branchBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'entryId must be a non-empty string' });
+    }
+    try {
+      const session = await (await getHost()).branchSession(req.params.id, parsed.data.entryId);
+      return res.status(201).json({ session: serializeSession(session) });
+    } catch (error) {
+      if (isUnknownSession(error)) {
+        return res.status(404).json({ error: 'Unknown OMP session' });
+      }
+      if (isBranchFailure(error)) {
+        // OMP rejects a branch that names no user-message entry, in its own words.
+        return res.status(400).json({ error: error.message });
+      }
+      return respondWithError(res, error, 'Failed to branch OMP session');
     }
   });
 
@@ -178,6 +244,46 @@ export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
     }
   });
 
+  /**
+   * Sets the session's thinking level. OMP answers `set_thinking_level` from
+   * its `ThinkingLevel` enum; anything else is a 400 that names the accepted
+   * values, so the picker can never send a level the runtime refuses.
+   */
+  app.post('/api/agents/omp/sessions/:id/thinking', parseJsonBody, async (req, res) => {
+    if (await rejectIfDisabled(res)) return;
+    const parsed = thinkingBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: `level must be one of: ${THINKING_LEVELS.join(', ')}` });
+    }
+    try {
+      const level = await (await getHost()).setThinkingLevel(req.params.id, parsed.data.level);
+      return res.json({ level });
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to set OMP thinking level');
+    }
+  });
+
+  /** Toggles OMP's fast mode. `active` is false while the provider cannot use a fast tier. */
+  app.post('/api/agents/omp/sessions/:id/fast-mode', parseJsonBody, async (req, res) => {
+    if (await rejectIfDisabled(res)) return;
+    const parsed = fastModeBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'enabled must be a boolean' });
+    }
+    try {
+      const result = await (await getHost()).setFastMode(req.params.id, parsed.data.enabled);
+      return res.json({ enabled: result.enabled, active: result.active });
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to toggle OMP fast mode');
+    }
+  });
+
+  /**
+   * The session's busy state. OMP reports no error state: a failed turn is an
+   * event on the stream (`stopReason: "error"`, `notice`, `auto_retry_*`), not
+   * a status, so this route never invents one. `busy` covers compaction as well
+   * as streaming, or the composer would accept a send it should queue.
+   */
   app.get('/api/agents/omp/sessions/:id/status', async (req, res) => {
     if (await rejectIfDisabled(res)) return;
     try {
@@ -290,6 +396,39 @@ export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
       return res.json({ ok: true });
     } catch (error) {
       return respondWithError(res, error, 'Failed to answer OMP permission');
+    }
+  });
+
+  /**
+   * The questions the agent is waiting on (`ask` and any extension that asks
+   * through the same channel), already projected as canonical forms.
+   */
+  app.get('/api/agents/omp/sessions/:id/forms', async (req, res) => {
+    if (await rejectIfDisabled(res)) return;
+    try {
+      return res.json({ forms: await (await getHost()).listForms(req.params.id) });
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to list OMP forms');
+    }
+  });
+
+  /** Answers or cancels one question; an unknown request id is a 404. */
+  app.post('/api/agents/omp/sessions/:id/forms/:requestId', parseJsonBody, async (req, res) => {
+    if (await rejectIfDisabled(res)) return;
+    const parsed = formReplySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'send { value } (or { answer }) to answer, or { cancelled: true } to cancel' });
+    }
+    try {
+      const host = await getHost();
+      const { requestId } = req.params;
+      const ok = 'cancelled' in parsed.data
+        ? await host.cancelForm(req.params.id, requestId)
+        : await host.replyForm(req.params.id, requestId, formValue(parsed.data));
+      if (!ok) return res.status(404).json({ error: 'Unknown OMP form' });
+      return res.json({ ok: true });
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to answer OMP form');
     }
   });
 };

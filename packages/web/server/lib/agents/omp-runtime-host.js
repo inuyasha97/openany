@@ -138,6 +138,24 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
       return handle;
     },
 
+    /**
+     * Forks the session at `entryId`. OMP branches inside the live process and
+     * re-keys the session, so the returned descriptor is the only description
+     * of the fork the runtime gives back; an unknown entry id rejects with
+     * OMP's own message and leaves the original session untouched.
+     */
+    async branchSession(id, entryId) {
+      const forked = await runtime.forkSession({ id, entryId, directory: directories.get(id) });
+      const info = {
+        id: forked.id,
+        sessionPath: forked.sessionPath ?? '',
+        cwd: forked.cwd ?? directories.get(id) ?? '',
+        title: forked.title ?? '',
+      };
+      announceSession(info);
+      return info;
+    },
+
     getSession: (id) => runtime.getSession(id),
 
     async getMessages(id) {
@@ -163,6 +181,22 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
 
     listPermissions: (id) => approvals.pending(id),
 
+    listForms: (id) => approvals.forms(id),
+
+    async replyForm(id, requestId, value) {
+      const frame = approvals.resolveForm(id, requestId, value);
+      if (!frame) return false;
+      await runtime.sendToSession(id, frame);
+      return true;
+    },
+
+    async cancelForm(id, requestId) {
+      const frame = approvals.cancelForm(id, requestId);
+      if (!frame) return false;
+      await runtime.sendToSession(id, frame);
+      return true;
+    },
+
     async replyPermission(id, requestId, reply, value) {
       const envelope = approvals.resolve(id, requestId, reply, value);
       if (!envelope) return false;
@@ -184,8 +218,34 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
 
     setModel: (id, provider, modelId) => runtime.setModel(id, provider, modelId),
 
+    /**
+     * Sets the session's thinking level. OMP validates the enum and answers
+     * without the level it applied, so the caller echoes the accepted level
+     * unless the runtime reports one back.
+     */
+    async setThinkingLevel(id, level) {
+      const applied = await runtime.setThinkingLevel(id, level);
+      return typeof applied === 'string' ? applied : level;
+    },
+
+    cycleThinkingLevel: (id) => runtime.cycleThinkingLevel(id),
+
+    async setFastMode(id, enabled) {
+      const result = await runtime.setFastMode(id, enabled);
+      if (result && typeof result === 'object') {
+        return { enabled: result.enabled === true, active: result.active === true };
+      }
+      return { enabled, active: enabled };
+    },
+
     getSessionStatus: (id) => runtime.getSessionStatus(id),
 
+    /**
+     * The model catalog the picker reads. The adapter normalizes each OMP
+     * `Model` with top-level `reasoning`, `efforts` (empty when the model has
+     * no thinking config, so the picker hides the effort control) and
+     * `defaultLevel`, so the host forwards it unchanged.
+     */
     listModels: () => runtime.listModels(),
 
     listCommands: () => runtime.listCommands(),

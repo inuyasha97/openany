@@ -18,13 +18,20 @@ const createHost = (overrides = {}) => {
     deleteSession: vi.fn(async () => true),
     moveSession: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
-    getSessionStatus: vi.fn(async () => ({ busy: false })),
+    setThinkingLevel: vi.fn(async (_id, level) => level),
+    cycleThinkingLevel: vi.fn(async () => 'high'),
+    setFastMode: vi.fn(async (_id, enabled) => ({ enabled, active: enabled })),
+    getSessionStatus: vi.fn(async () => ({ busy: false, compacting: false, queuedCount: 0, tokensPerSecond: null, contextUsage: null })),
+    branchSession: vi.fn(async (id, entryId) => ({ id: 'ses_fork', sessionPath: '/s/fork.json', cwd: '/repo', title: '', parentSessionPath: `/s/${id}.json`, entryId })),
     listModels: vi.fn(async () => []),
     listCommands: vi.fn(async () => []),
     listLoginProviders: vi.fn(async () => []),
     login: vi.fn(async (providerId) => ({ providerId })),
     listPermissions: vi.fn(async () => []),
     replyPermission: vi.fn(async () => true),
+    listForms: vi.fn(async () => []),
+    replyForm: vi.fn(async () => true),
+    cancelForm: vi.fn(async () => true),
     listMcpServers: vi.fn(async () => []),
     setMcpEnabled: vi.fn(async () => true),
     removeMcpServer: vi.fn(async () => true),
@@ -207,9 +214,136 @@ describe('OMP routes', () => {
   it('serves status, models and commands', async () => {
     const app = createApp(createHost());
 
-    expect((await request(app).get('/api/agents/omp/sessions/ses_1/status')).body).toEqual({ busy: false });
+    expect((await request(app).get('/api/agents/omp/sessions/ses_1/status')).body).toEqual({
+      busy: false,
+      compacting: false,
+      queuedCount: 0,
+      tokensPerSecond: null,
+      contextUsage: null,
+    });
     expect((await request(app).get('/api/agents/omp/models')).body).toEqual({ models: [] });
     expect((await request(app).get('/api/agents/omp/commands')).body).toEqual({ commands: [] });
+  });
+
+  it('passes the model catalog through unchanged', async () => {
+    const models = [
+      { id: 'm1', provider: 'p', name: 'M1', reasoning: true, efforts: ['low', 'high'], defaultLevel: 'low' },
+      { id: 'm2', provider: 'p', name: 'M2', reasoning: false, efforts: [] },
+    ];
+    const host = createHost({ listModels: vi.fn(async () => models) });
+    const response = await request(createApp(host)).get('/api/agents/omp/models');
+
+    expect(response.body).toEqual({ models });
+  });
+
+  it('sets the thinking level and rejects one OMP does not know', async () => {
+    const host = createHost();
+    const app = createApp(host);
+
+    const ok = await request(app).post('/api/agents/omp/sessions/ses_1/thinking').send({ level: 'high' });
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ level: 'high' });
+    expect(host.setThinkingLevel).toHaveBeenCalledWith('ses_1', 'high');
+
+    const bad = await request(app).post('/api/agents/omp/sessions/ses_1/thinking').send({ level: 'extra' });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toBe('level must be one of: inherit, off, minimal, low, medium, high, xhigh, max');
+    expect(host.setThinkingLevel).toHaveBeenCalledTimes(1);
+  });
+
+  it('echoes the level the runtime reports back', async () => {
+    const host = createHost({ setThinkingLevel: vi.fn(async () => 'max') });
+    const response = await request(createApp(host)).post('/api/agents/omp/sessions/ses_1/thinking').send({ level: 'high' });
+
+    expect(response.body).toEqual({ level: 'max' });
+  });
+
+  it('toggles fast mode and requires a boolean', async () => {
+    const host = createHost();
+    const app = createApp(host);
+
+    expect((await request(app).post('/api/agents/omp/sessions/ses_1/fast-mode').send({ enabled: true })).body).toEqual({ enabled: true, active: true });
+    expect(host.setFastMode).toHaveBeenCalledWith('ses_1', true);
+
+    const bad = await request(app).post('/api/agents/omp/sessions/ses_1/fast-mode').send({ enabled: 'yes' });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toBe('enabled must be a boolean');
+  });
+
+  it('creates a session from a parent session', async () => {
+    const host = createHost();
+    const response = await request(createApp(host)).post('/api/agents/omp/sessions').send({ cwd: '/repo', parentSession: '/s/parent.json' });
+
+    expect(response.status).toBe(201);
+    expect(host.createSession).toHaveBeenCalledWith({ cwd: '/repo', parentSession: '/s/parent.json' });
+  });
+
+  it('branches a session and reports the new one', async () => {
+    const host = createHost();
+    const response = await request(createApp(host)).post('/api/agents/omp/sessions/ses_1/branch').send({ entryId: 'e7' });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({
+      session: { id: 'ses_fork', sessionPath: '/s/fork.json', cwd: '/repo', title: '', parentSessionPath: '/s/ses_1.json' },
+    });
+    expect(host.branchSession).toHaveBeenCalledWith('ses_1', 'e7');
+  });
+
+  it('answers an unknown entry id with OMP\'s own message and leaves no session behind', async () => {
+    const error = Object.assign(new Error('Invalid entry ID for branching'), { command: 'branch' });
+    const host = createHost({
+      branchSession: vi.fn(async () => {
+        throw error;
+      }),
+    });
+    const response = await request(createApp(host)).post('/api/agents/omp/sessions/ses_1/branch').send({ entryId: 'nope' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Invalid entry ID for branching' });
+  });
+
+  it('requires an entry id and 404s a branch on an unknown session', async () => {
+    const host = createHost({
+      branchSession: vi.fn(async () => {
+        throw new Error('unknown omp session: missing');
+      }),
+    });
+    const app = createApp(host);
+
+    expect((await request(app).post('/api/agents/omp/sessions/ses_1/branch').send({})).status).toBe(400);
+    const missing = await request(app).post('/api/agents/omp/sessions/missing/branch').send({ entryId: 'e7' });
+    expect(missing.status).toBe(404);
+    expect(missing.body).toEqual({ error: 'Unknown OMP session' });
+  });
+
+  it('lists and answers forms', async () => {
+    const form = { id: 'r1', sessionID: 'ses_1', title: 'Which one?', fields: [{ key: 'value', type: 'string', title: 'Which one?', options: [{ value: 'a', label: 'a' }] }] };
+    const host = createHost({ listForms: vi.fn(async () => [form]) });
+    const app = createApp(host);
+
+    expect((await request(app).get('/api/agents/omp/sessions/ses_1/forms')).body).toEqual({ forms: [form] });
+
+    const answered = await request(app).post('/api/agents/omp/sessions/ses_1/forms/r1').send({ answer: { value: 'a' } });
+    expect(answered.body).toEqual({ ok: true });
+    expect(host.replyForm).toHaveBeenCalledWith('ses_1', 'r1', 'a');
+
+    const plain = await request(app).post('/api/agents/omp/sessions/ses_1/forms/r1').send({ value: 'b' });
+    expect(plain.body).toEqual({ ok: true });
+    expect(host.replyForm).toHaveBeenLastCalledWith('ses_1', 'r1', 'b');
+
+    const cancelled = await request(app).post('/api/agents/omp/sessions/ses_1/forms/r1').send({ cancelled: true });
+    expect(cancelled.body).toEqual({ ok: true });
+    expect(host.cancelForm).toHaveBeenCalledWith('ses_1', 'r1');
+
+    expect((await request(app).post('/api/agents/omp/sessions/ses_1/forms/r1').send({})).status).toBe(400);
+  });
+
+  it('answers 404 when a form was never asked', async () => {
+    const host = createHost({ replyForm: vi.fn(async () => false), cancelForm: vi.fn(async () => false) });
+    const app = createApp(host);
+
+    expect((await request(app).post('/api/agents/omp/sessions/ses_1/forms/r9').send({ value: 'a' })).body).toEqual({ error: 'Unknown OMP form' });
+    expect((await request(app).post('/api/agents/omp/sessions/ses_1/forms/r9').send({ cancelled: true })).status).toBe(404);
   });
 
   it('lists and answers permissions', async () => {
