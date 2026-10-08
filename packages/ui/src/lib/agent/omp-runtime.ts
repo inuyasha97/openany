@@ -140,6 +140,12 @@ export const mapOmpPrompt = (
   files: ReadonlyArray<FileInputLite> | undefined,
 ): { text: string; images: OmpPromptImage[] } => {
   const blocks: string[] = []
+  // A prompt that starts with `/name args` is expanded by OMP itself — file
+  // commands, `/skill:<name>`, extension commands — so a command has to lead the
+  // text: context in front of it would hide the slash and the command would go
+  // out as literal text.
+  const leads = text.trimStart().startsWith("/")
+  if (leads && text.length > 0) blocks.push(text)
   for (const [index, item] of (context ?? []).entries()) {
     if (typeof item.text !== "string" || item.text.trim().length === 0) {
       throw new Error(`OMP cannot send context item ${index + 1}: it carries no text`)
@@ -147,7 +153,7 @@ export const mapOmpPrompt = (
     if (item.description?.trim()) blocks.push(item.description)
     blocks.push(item.text)
   }
-  if (text.length > 0) blocks.push(text)
+  if (!leads && text.length > 0) blocks.push(text)
   let prompt = blocks.join("\n\n")
 
   const images: OmpPromptImage[] = []

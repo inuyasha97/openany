@@ -128,10 +128,25 @@ describe("OmpRuntimeClient", () => {
       context: [{ text: "quoted code" }],
       skills: { names: ["deploy"], instructionFor: (names) => `use: ${names.join(",")}` },
     })
-    // The instruction rides after the attached context and before the text, the
-    // same place the command path puts it: OMP has no attach-by-id mechanism,
-    // so the instruction is the delivery.
-    expect(calls[0].body).toEqual({ text: "quoted code\n\nuse: deploy\n\n/deploy" })
+    // The slash text leads (OMP expands a leading `/name`), and the instruction
+    // rides after the attached context: OMP has no attach-by-id mechanism, so
+    // the instruction is the delivery.
+    expect(calls[0].body).toEqual({ text: "/deploy\n\nquoted code\n\nuse: deploy" })
+  })
+
+  test("leads with the command text so OMP expands it", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendCommand({
+      id: "ses_a",
+      command: "review",
+      arguments: "the diff",
+      context: [{ text: "quoted code" }],
+    })
+    // OMP expands a prompt that starts with `/name args`; context in front of it
+    // would hide the slash and the command would go out as literal text.
+    expect(calls[0].body).toEqual({ text: "/review the diff\n\nquoted code" })
   })
 
   test("rejects an unsupported operation with a clear error", async () => {
