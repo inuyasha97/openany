@@ -1970,6 +1970,29 @@ describe("forkFromMessage composer restore", () => {
     expect(selectedSessions).toEqual([{ sessionId: forkedSession.id, directoryHint: "/canonical/worktree" }])
   })
 
+  test("an in-place branch reloads the session and does not navigate", async () => {
+    // OMP past the first user message rewrites the open session under the same id.
+    sessionForkResult = sourceSession
+    const source = createStore({}, { session: [sourceSession], part: { "message-fork": [textPart] } })
+    const { forkFromMessage, setActionRefs, InPlaceBranchError } = await import("./session-actions")
+    setActionRefs(createChildStores([[sourceSession.directory, source]]), () => sourceSession.directory)
+
+    await expect(forkFromMessage(sourceSession.id, "message-fork")).rejects.toThrow(InPlaceBranchError)
+    expect(selectedSessions).toEqual([])
+    expect(inputState.pendingComposerRestore).toBeNull()
+  })
+
+  test("a failed branch leaves the original session selected", async () => {
+    sessionForkError = new Error("OMP request failed: 400")
+    const source = createStore({}, { session: [sourceSession], part: { "message-fork": [textPart] } })
+    const { forkFromMessage, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([[sourceSession.directory, source]]), () => sourceSession.directory)
+
+    await expect(forkFromMessage(sourceSession.id, "message-fork")).rejects.toThrow("OMP request failed: 400")
+    expect(selectedSessions).toEqual([])
+    expect(inputState.pendingComposerRestore).toBeNull()
+  })
+
   test("stages a file-only prompt with empty text without replacing source attachments", async () => {
     const source = createStore({}, {
       session: [sourceSession],

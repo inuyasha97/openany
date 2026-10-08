@@ -209,6 +209,14 @@ export async function startBtwSession(input: StartBtwInput): Promise<Session> {
       directory: input.directory,
     });
 
+    // OMP branches the open session in place past its first user message: the
+    // id does not change. Writing the btw marker onto that id would tag the
+    // parent as its own child, so a btw fork that did not produce a new
+    // session is refused rather than corrupting the parent.
+    if (forked.id === input.parentSessionId) {
+      throw new Error("OMP does not create a new session for this branch point, so a /btw session cannot be started here");
+    }
+
     // The server may canonicalize the worktree path; the prompt must use the
     // same directory identity as the forked session.
     const sessionDirectory = forked.directory || input.directory;

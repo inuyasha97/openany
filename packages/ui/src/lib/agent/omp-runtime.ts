@@ -15,7 +15,7 @@
 
 import { z } from "zod"
 import { runtimeFetch } from "@/lib/runtime-fetch"
-import type { FileDiffInfo, FormInfo, SessionRevert } from "@/lib/opencode/wire"
+import type { FileDiffInfo, FormAnswer, FormInfo, SessionRevert } from "@/lib/opencode/wire"
 import type {
   Agent,
   Command,
@@ -36,6 +36,7 @@ import type {
   MessagePage,
   MoveSessionOptions,
   PendingRequestListOptions,
+  SendCommandParams,
   SendPromptParams,
   SessionListOptions,
   SessionPage,
@@ -43,14 +44,24 @@ import type {
 import type { RoutedAgentEvent } from "./events"
 
 const CAPABILITIES: AgentCapabilities = {
-  fork: false,
+  // `branch { entryId }` forks the transcript; `new_session { parentSession }`
+  // links the fork to its parent.
+  fork: true,
   commands: true,
   mcp: true,
+  // OMP picks a subagent inside the model's own `task` call. There is no
+  // session agent to list or select, and `get_state` exposes no role the
+  // composer could switch, so both agent capabilities stay false.
   agents: false,
   permissions: true,
   modelSelection: true,
   agentSelection: false,
-  forms: false,
+  // The model's `ask` tool reaches the host as `extension_ui_request` frames,
+  // which the server projects as forms (see `listPendingForms`/`replyForm`).
+  forms: true,
+  // OMP keeps no file snapshots: `branch` forks the transcript, not the files,
+  // and there is no per-turn diff API. Both stay false so no affordance
+  // promises a revert or a turn diff OMP cannot produce.
   revert: false,
   turnDiff: false,
   skills: true,
@@ -174,11 +185,37 @@ const sessionRecordSchema = z.object({
 })
 
 const sessionListSchema = z.object({ sessions: z.array(sessionRecordSchema) })
-const sessionCreatedSchema = z.object({ session: z.object({ id: z.string().min(1), sessionFile: z.string().nullable().optional() }) })
+/** A created or forked session handle; `sessionFile` and `sessionPath` are the same file. */
+const sessionHandleSchema = z.object({
+  session: z.object({
+    id: z.string().min(1),
+    sessionPath: z.string().nullable().optional(),
+    sessionFile: z.string().nullable().optional(),
+    cwd: z.string().optional(),
+    title: z.string().optional(),
+  }),
+})
 const okSchema = z.object({ ok: z.boolean() })
 const commandSchema = z.object({ name: z.string(), source: z.string(), description: z.string().optional() })
 const commandsSchema = z.object({ commands: z.array(commandSchema) })
-const statusSchema = z.object({ busy: z.boolean() })
+/** OMP's own context-usage numbers (`ContextUsage` in `pi-tui`); optional on the route. */
+const contextUsageSchema = z.object({
+  tokens: z.number(),
+  contextWindow: z.number(),
+  percent: z.number(),
+})
+/**
+ * The session state route. `busy` is the host's own `isStreaming ||
+ * isCompacting`; the rest is detail OMP reports alongside it. OMP has no error
+ * state here: a failed turn is an event (`stopReason: "error"`), not a status.
+ */
+const statusSchema = z.object({
+  busy: z.boolean(),
+  compacting: z.boolean().optional(),
+  queuedCount: z.number().optional(),
+  tokensPerSecond: z.number().nullable().optional(),
+  contextUsage: contextUsageSchema.nullable().optional(),
+})
 const permissionSchema = z.object({
   id: z.string(),
   sessionID: z.string(),
@@ -187,6 +224,11 @@ const permissionSchema = z.object({
   message: z.string().optional(),
 })
 const permissionsSchema = z.object({ permissions: z.array(permissionSchema) })
+// OMP's askable frames are projected to forms server-side; the field union is
+// wide, so only the envelope is validated and the fields are trusted JSON from
+// OpenChamber's own server, like the message projection above.
+const formSchema = z.object({ id: z.string(), sessionID: z.string(), title: z.string() }).passthrough()
+const formsSchema = z.object({ forms: z.array(formSchema) })
 const mcpServersSchema = z.object({
   servers: z.array(
     z.object({
@@ -264,8 +306,13 @@ export class OmpRuntimeClient implements AgentRuntime {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(cwd ? { cwd } : {}),
     })
-    const parsed = await readJson(response, sessionCreatedSchema)
-    return toAgentSession({ id: parsed.session.id, sessionPath: parsed.session.sessionFile ?? "", cwd: cwd ?? "", title: "" })
+    const parsed = await readJson(response, sessionHandleSchema)
+    return toAgentSession({
+      id: parsed.session.id,
+      sessionPath: parsed.session.sessionPath ?? parsed.session.sessionFile ?? "",
+      cwd: parsed.session.cwd ?? cwd ?? "",
+      title: parsed.session.title ?? "",
+    })
   }
 
   async getSession(id: string, directory?: string | null): Promise<AgentSession> {
@@ -405,7 +452,15 @@ export class OmpRuntimeClient implements AgentRuntime {
         scoped.map(async (session) => {
           const response = await this.fetchImpl(`${this.basePath}/sessions/${encodeURIComponent(session.id)}/status`)
           const status = await readJson(response, statusSchema)
-          return [session.id, status.busy ? ({ type: "busy" } as const) : ({ type: "idle" } as const)] as const
+          // `busy` already folds in a compaction running without a stream, so
+          // the local "is this session active" readers keep working; the rest
+          // rides along for consumers that want the detail.
+          const state: SessionStatus = status.busy ? { type: "busy" } : { type: "idle" }
+          if (status.compacting !== undefined) state.compacting = status.compacting
+          if (status.queuedCount !== undefined) state.queuedCount = status.queuedCount
+          if (status.tokensPerSecond !== undefined) state.tokensPerSecond = status.tokensPerSecond
+          if (status.contextUsage !== undefined) state.contextUsage = status.contextUsage
+          return [session.id, state] as const
         }),
       )
       return Object.fromEntries(entries)
@@ -494,28 +549,8 @@ export class OmpRuntimeClient implements AgentRuntime {
   // The parameters are omitted (a narrower signature still satisfies the
   // contract), so an implemented method is the only place that reads them.
 
-  selectAgent(): Promise<void> {
-    return unsupported("selectAgent")
-  }
-
-  forkSession(): Promise<AgentSession> {
-    return unsupported("forkSession")
-  }
-
   listAgents(): Promise<Agent[]> {
     return unsupported("listAgents")
-  }
-
-  replyForm(): Promise<boolean> {
-    return unsupported("replyForm")
-  }
-
-  cancelForm(): Promise<boolean> {
-    return unsupported("cancelForm")
-  }
-
-  listPendingForms(): Promise<FormInfo[]> {
-    return unsupported("listPendingForms")
   }
 
   stageRevert(): Promise<SessionRevert> {
@@ -534,7 +569,95 @@ export class OmpRuntimeClient implements AgentRuntime {
     return unsupported("getSessionTurnDiff")
   }
 
-  sendCommand(): Promise<void> {
-    return unsupported("sendCommand")
+  // --- Fork: `branch { entryId }` copies the transcript through an entry.
+
+  async forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<AgentSession> {
+    const response = await this.fetchImpl(`${this.basePath}/sessions/${encodeURIComponent(sessionId)}/branch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      // `before` is the transcript cut the fork copies through; OMP names it
+      // `entryId`. A cut the session does not have is OMP's own 400, which the
+      // caller surfaces without touching the original session.
+      body: JSON.stringify(options?.before ? { entryId: options.before } : {}),
+    })
+    const parsed = await readJson(response, sessionHandleSchema)
+    return toAgentSession({
+      id: parsed.session.id,
+      sessionPath: parsed.session.sessionPath ?? parsed.session.sessionFile ?? "",
+      cwd: parsed.session.cwd ?? options?.directory ?? "",
+      title: parsed.session.title ?? "",
+    })
+  }
+
+  // --- Forms: OMP's `ask` tool asks through `extension_ui_request` frames the
+  // server projects as forms. A reply carries every answer at once; a cancel
+  // tells OMP the question was dismissed so the turn does not stall.
+
+  async listPendingForms(options?: PendingRequestListOptions): Promise<FormInfo[]> {
+    const sessions = await this.fetchSessions()
+    const directories = options?.directories?.filter((value): value is string => Boolean(value))
+    const scoped = directories && directories.length > 0
+      ? sessions.filter((session) => directories.includes(session.cwd))
+      : sessions
+    const lists = await Promise.all(
+      scoped.map(async (session) => {
+        const response = await this.fetchImpl(`${this.basePath}/sessions/${encodeURIComponent(session.id)}/forms`)
+        // SAFETY: the server projects these from OMP's askable frames; the body
+        // is trusted JSON from OpenChamber's own server.
+        return (await readJson(response, formsSchema)).forms as unknown as FormInfo[]
+      }),
+    )
+    return lists.flat()
+  }
+
+  async replyForm(sessionID: string, formID: string, answer: FormAnswer, directory?: string | null): Promise<boolean> {
+    void directory
+    const response = await this.fetchImpl(
+      `${this.basePath}/sessions/${encodeURIComponent(sessionID)}/forms/${encodeURIComponent(formID)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // The whole answer record travels in one body: a question left out of
+        // it would leave the `ask` tool waiting.
+        body: JSON.stringify({ answer }),
+      },
+    )
+    if (!response.ok) throw new Error(`OMP request failed: ${response.status}`)
+    return true
+  }
+
+  async cancelForm(sessionID: string, formID: string, directory?: string | null): Promise<boolean> {
+    void directory
+    const response = await this.fetchImpl(
+      `${this.basePath}/sessions/${encodeURIComponent(sessionID)}/forms/${encodeURIComponent(formID)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cancelled: true }),
+      },
+    )
+    if (!response.ok) throw new Error(`OMP request failed: ${response.status}`)
+    return true
+  }
+
+  // --- Slash commands: OMP expands `/name args` inside `prompt` (file
+  // commands, `/skill:<name>`, extension commands, MCP prompts), so a command
+  // is sent as prompt text through the same attachment folding as a prompt.
+
+  async sendCommand(params: SendCommandParams): Promise<void> {
+    const text = params.arguments?.trim() ? `/${params.command} ${params.arguments.trim()}` : `/${params.command}`
+    await this.sendPrompt({
+      runtimeKey: params.runtimeKey,
+      id: params.id,
+      // Unused by the OMP prompt path; the contract requires the field.
+      providerID: "",
+      model: params.model,
+      agent: params.agent,
+      text,
+      files: params.files,
+      context: params.context,
+      delivery: params.delivery,
+      directory: params.directory,
+    })
   }
 }

@@ -24,10 +24,38 @@ describe("OmpRuntimeClient", () => {
     expect(client.id).toBe("omp")
     expect(client.capabilities).toMatchObject({
       rename: true, delete: true, move: true, commands: true, skills: true, permissions: true, mcp: true, modelSelection: true,
-      attachments: true, attachmentKinds: "images",
-      forms: false, revert: false, turnDiff: false, agentSelection: false,
+      attachments: true, attachmentKinds: "images", fork: true, forms: true,
+      revert: false, turnDiff: false, agents: false, agentSelection: false,
     })
     expect(client.translateEvent()).toEqual([])
+  })
+
+  test("advertises only capabilities the client implements", () => {
+    const { client } = makeClient({})
+    // Capability name -> the contract method that backs it. A capability that
+    // is on must be callable; the ones OMP cannot back stay off.
+    const backing: Record<string, string> = {
+      fork: "forkSession",
+      commands: "sendCommand",
+      mcp: "listMcpServers",
+      permissions: "replyPermission",
+      modelSelection: "selectModel",
+      forms: "replyForm",
+      skills: "listSkills",
+      rename: "renameSession",
+      delete: "deleteSession",
+      move: "moveSession",
+      attachments: "sendPrompt",
+    }
+    // SAFETY: probing the client's own methods by name is the point of this
+    // guard; the cast only opens the class for reflection.
+    const methods = client as unknown as Record<string, unknown>
+    for (const [name, enabled] of Object.entries(client.capabilities)) {
+      if (!enabled || name === "attachmentKinds") continue
+      const method = backing[name]
+      expect(method).toBeDefined()
+      expect(typeof methods[method]).toBe("function")
+    }
   })
 
   test("lists sessions as AgentSessions carrying the runtime identity", async () => {
@@ -92,6 +120,81 @@ describe("OmpRuntimeClient", () => {
   test("rejects an unsupported operation with a clear error", async () => {
     const { client } = makeClient({})
     await expect(client.listAgents()).rejects.toThrow("OMP runtime does not support listAgents")
+  })
+
+  test("sendCommand posts the command as prompt text", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendCommand({ id: "ses_a", command: "review", arguments: "the diff", directory: "/repo" })
+    expect(calls).toEqual([
+      { url: "/api/agents/omp/sessions/ses_a/prompt", method: "POST", body: { text: "/review the diff" } },
+    ])
+  })
+
+  test("sendCommand with no arguments sends the bare command", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendCommand({ id: "ses_a", command: "init", arguments: "  ", directory: "/repo" })
+    expect((calls[0].body as { text: string }).text).toBe("/init")
+  })
+
+  test("carries the status detail beside the busy tag", async () => {
+    const { client } = makeClient({
+      "GET /api/agents/omp/sessions": { body: { sessions } },
+      "GET /api/agents/omp/sessions/ses_a/status": {
+        body: { busy: true, compacting: true, queuedCount: 2, tokensPerSecond: 42, contextUsage: { tokens: 10, contextWindow: 100, percent: 10 } },
+      },
+    })
+    expect(await client.getActiveStatus("/repo")).toEqual({
+      ses_a: { type: "busy", compacting: true, queuedCount: 2, tokensPerSecond: 42, contextUsage: { tokens: 10, contextWindow: 100, percent: 10 } },
+    })
+  })
+
+  test("forks a session at an entry and reads the new session back", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/branch": { body: { session: { id: "ses_fork", sessionPath: "/s/fork.json", cwd: "/repo", title: "Fork" } } },
+    })
+    const forked = await client.forkSession("ses_a", { before: "e7", directory: "/repo" })
+    expect(calls[0]).toEqual({ url: "/api/agents/omp/sessions/ses_a/branch", method: "POST", body: { entryId: "e7" } })
+    expect(forked.id).toBe("ses_fork")
+    expect(forked.directory).toBe("/repo")
+  })
+
+  test("forks the whole transcript when no entry is given", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/branch": { body: { session: { id: "ses_fork", sessionFile: "/s/fork.json" } } },
+    })
+    await client.forkSession("ses_a", { directory: "/repo" })
+    expect(calls[0].body).toEqual({})
+  })
+
+  test("a failed branch keeps the original session", async () => {
+    const { client } = makeClient({})
+    await expect(client.forkSession("ses_a", { before: "missing", directory: "/repo" })).rejects.toThrow("OMP request failed: 404")
+  })
+
+  test("lists pending forms, answers them in one reply and cancels one", async () => {
+    const form = { id: "f1", sessionID: "ses_a", title: "Which?", fields: [{ key: "value", type: "string", options: [{ label: "a" }, { label: "b" }] }] }
+    const { client, calls } = makeClient({
+      "GET /api/agents/omp/sessions": { body: { sessions } },
+      "GET /api/agents/omp/sessions/ses_a/forms": { body: { forms: [form] } },
+      "POST /api/agents/omp/sessions/ses_a/forms/f1": { body: { ok: true } },
+    })
+    expect(await client.listPendingForms({ directories: ["/repo"] })).toEqual([form])
+    expect(await client.replyForm("ses_a", "f1", { value: "a" })).toBe(true)
+    expect(await client.cancelForm("ses_a", "f1")).toBe(true)
+    expect(calls[2]).toEqual({
+      url: "/api/agents/omp/sessions/ses_a/forms/f1",
+      method: "POST",
+      body: { answer: { value: "a" } },
+    })
+    expect(calls[3]).toEqual({
+      url: "/api/agents/omp/sessions/ses_a/forms/f1",
+      method: "POST",
+      body: { cancelled: true },
+    })
   })
 
   test("surfaces an HTTP failure instead of an empty result", async () => {

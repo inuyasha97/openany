@@ -21,7 +21,6 @@ import type { WorktreeMetadata } from "@/types/worktree"
 import { openChamberClient } from "@/lib/openchamber/client"
 import { getAgentRuntimeForSession } from "@/lib/agent/registry"
 import type { SkillMentions } from "@/lib/agent/contract"
-import { buildSkillMentionInstruction } from "@/lib/skillMentionInstruction"
 import { runtimeFetch } from "@/lib/runtime-fetch"
 import { useConfigStore } from "@/stores/useConfigStore"
 import { useProjectsStore } from "@/stores/useProjectsStore"
@@ -31,7 +30,6 @@ import { useGlobalSessionsStore, resolveGlobalSessionDirectory } from "@/stores/
 import { useDirectoryStore } from "@/stores/useDirectoryStore"
 import { useSessionFoldersStore } from "@/stores/useSessionFoldersStore"
 import { selectCommandsForDirectory, useCommandsStore } from "@/stores/useCommandsStore"
-import { selectSkillsForDirectory, useSkillsStore } from "@/stores/useSkillsStore"
 import { getDeferredSafeStorage } from "@/stores/utils/safeStorage"
 import { markPendingUserSendAnimation } from "@/lib/userSendAnimation"
 import { normalizePath } from "@/lib/pathNormalization"
@@ -73,6 +71,7 @@ import {
   revertToMessage as revertToMessageAction,
   forkFromMessage as forkFromMessageAction,
   forkAfterMessage as forkAfterMessageAction,
+  InPlaceBranchError,
   fetchMessagesForSession,
   type ArchiveSessionsOptions,
   type DeleteSessionOptions,
@@ -209,61 +208,31 @@ export async function routeMessage(params: {
   const contextFiles = (params.additionalParts ?? []).flatMap((part) => part.files ?? [])
   const sendFiles = [...(params.files ?? []), ...contextFiles]
 
-  let skills = params.skills
-  // Slash commands use the command route; skills attach to a normal prompt.
-  // A runtime that declares neither sends the text as a plain prompt.
+  const skills = params.skills
+  // OMP expands a prompt that starts with `/name args` itself: file commands,
+  // `/skill:<name>`, extension commands and MCP prompts all resolve inside
+  // `prompt`, so there is no command route to pick. A name the command list
+  // already knows is sent through `sendCommand` (the same text, with the
+  // command's files and context folded in); anything else — including a name
+  // nothing knows — is sent as a plain prompt and OMP decides whether to
+  // expand it or pass it through.
   const canUseCommands = sessionRuntime.capabilities.commands
-  const canUseSkills = sessionRuntime.capabilities.skills
-  if (params.content.startsWith("/") && (canUseCommands || canUseSkills)) {
+  if (params.content.startsWith("/") && canUseCommands) {
     const [head, ...tail] = params.content.split(" ")
     const cmdName = head.slice(1)
+    let matchedCommand = selectCommandsForDirectory(useCommandsStore.getState(), requestDirectory)
+      .find((c) => c.name === cmdName)
 
-    // Commands and skills are resolved for the session's own directory. A
-    // project root and one of its worktrees can define different commands
-    // under the same name. OpenCode 2.x lists skills separately and accepts
-    // them as prompt attachments rather than commands.
-    let matchedCommand = canUseCommands
-      ? selectCommandsForDirectory(useCommandsStore.getState(), requestDirectory).find((c) => c.name === cmdName)
-      : undefined
-    let matchedSkill = canUseSkills
-      ? selectSkillsForDirectory(useSkillsStore.getState(), requestDirectory).find((s) => s.name === cmdName)
-      : undefined
-
-    // The command list is no longer pre-warmed at bootstrap (listing it
-    // initializes the directory's whole MCP fleet), so a name known to neither
-    // store gets one live, directory-scoped lookup. That lookup decides the
-    // route: a successful no-match is a plain prompt, while a failed lookup is
-    // a send failure, because treating it as a prompt would silently send the
-    // raw "/name" text instead of running the command.
-    // The skills list is loaded per directory on demand too, so a skill of a
-    // directory the store has not loaded yet gets the same live lookup. A
-    // failed skills load is a send failure for the same reason. Commands keep
-    // precedence when both lookups match.
-    if (!matchedCommand && !matchedSkill) {
-      const [liveCommands, skillsLoaded] = await Promise.all([
-        canUseCommands ? sessionRuntime.listCommands(requestDirectory) : Promise.resolve([]),
-        canUseSkills ? useSkillsStore.getState().loadSkills(requestDirectory) : Promise.resolve(true),
-      ])
+    // The command list is not pre-warmed at bootstrap (listing it initializes
+    // the directory's whole MCP fleet), so a name the store does not know gets
+    // one live, directory-scoped lookup. A failed lookup is not a send failure
+    // any more: the text goes out as a prompt and OMP expands whatever it is.
+    if (!matchedCommand) {
+      const liveCommands = await sessionRuntime.listCommands(requestDirectory).catch(() => [])
       matchedCommand = liveCommands.find((c) => c.name === cmdName)
-      if (!matchedCommand && canUseSkills) {
-        if (!skillsLoaded) {
-          throw new Error(`Could not load skills to resolve /${cmdName}`)
-        }
-        matchedSkill = selectSkillsForDirectory(useSkillsStore.getState(), requestDirectory)
-          .find((s) => s.name === cmdName)
-      }
     }
 
     if (matchedCommand) {
-      // The command route takes files only, so attached context (a quoted
-      // selection, pinned knowledge, prepared conflict instructions) is
-      // admitted ahead of it as synthetic messages. Sending "/name args" as
-      // a prompt instead would skip the command's template entirely: OpenCode
-      // 2.x expands it only on the command route.
-      //
-      // `session.command` assigns the message id itself, so there is no id to
-      // hang an optimistic user message on. The command's message arrives
-      // through the stream instead.
       params.appendSubmissions?.()
       const commandContext = [...contextItems, ...skillInstructionContext()]
       await sessionRuntime.sendCommand({
@@ -279,15 +248,6 @@ export async function routeMessage(params: {
         directory: requestDirectory,
       })
       return 'command'
-    }
-
-    if (matchedSkill) {
-      skills = {
-        names: [...new Set([matchedSkill.name, ...(params.skills?.names ?? [])])],
-        // Callers without a composer (multi-run) pass no builder; the skill
-        // still has to be named when it cannot be attached.
-        instructionFor: params.skills?.instructionFor ?? buildSkillMentionInstruction,
-      }
     }
   }
 
@@ -2114,8 +2074,14 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       const { toast } = await import("sonner")
       toast.success(`Forked from ${existingSession.title}`)
     } catch (error) {
-      console.error("Failed to fork session:", error)
       const { toast } = await import("sonner")
+      if (error instanceof InPlaceBranchError) {
+        // OMP rewrote this session instead of making a new one: the transcript
+        // was reloaded, so there is nothing to navigate to.
+        toast.info("Branched this conversation in place — no new session was created")
+        return
+      }
+      console.error("Failed to fork session:", error)
       toast.error("Failed to fork session")
     }
   },
@@ -2130,8 +2096,12 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       const { toast } = await import("sonner")
       toast.success(`Forked from ${existingSession.title}`)
     } catch (error) {
-      console.error("Failed to fork session:", error)
       const { toast } = await import("sonner")
+      if (error instanceof InPlaceBranchError) {
+        toast.info("Branched this conversation in place — no new session was created")
+        return
+      }
+      console.error("Failed to fork session:", error)
       toast.error("Failed to fork session")
     }
   },

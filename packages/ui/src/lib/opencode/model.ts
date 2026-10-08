@@ -112,7 +112,23 @@ export function compact<T extends object>(value: T): T {
 // Session
 // ---------------------------------------------------------------------------
 
-export type SessionStatus = SessionStatusWire
+/**
+ * Extra session state a runtime may report beside the `type` tag.
+ *
+ * OMP reads `get_state`, which is richer than OpenCode's busy flag: it knows
+ * whether a compaction is running without a stream, how many messages are
+ * queued, the live token rate and the context-window usage. All optional, so a
+ * runtime that reports only `type` leaves them absent and every existing
+ * `status.type` reader is unaffected.
+ */
+export type SessionStatusDetail = {
+  compacting?: boolean
+  queuedCount?: number
+  tokensPerSecond?: number | null
+  contextUsage?: { tokens: number; contextWindow: number; percent: number } | null
+}
+
+export type SessionStatus = SessionStatusWire & SessionStatusDetail
 
 export type SessionOutcome = "succeeded" | "failed" | "interrupted"
 

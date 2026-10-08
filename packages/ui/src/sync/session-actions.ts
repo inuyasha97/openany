@@ -2546,6 +2546,20 @@ const isTurnBoundary = (message: Message): boolean =>
   TURN_BOUNDARY_ROLES.has(message.role) || readSubagentRun(message) !== undefined
 
 /**
+ * OMP's `branch` creates a new session only when it cuts at the session's
+ * first user message; a deeper cut rewrites the open session in place under
+ * the same id. A fork affordance that assumed a new session navigated nowhere.
+ * The action reloads the transcript and throws this so the caller can say what
+ * happened instead of opening a session id that never changed.
+ */
+export class InPlaceBranchError extends Error {
+  constructor() {
+    super("OMP branched the open session in place; no new session was created")
+    this.name = "InPlaceBranchError"
+  }
+}
+
+/**
  * Fork keeping an assistant turn: the new session holds everything through
  * `messageId`, so the agent there still sees the answer it just gave. The cut
  * is the first record after it that starts something new (a prompt, a
@@ -2566,6 +2580,13 @@ export async function forkAfterMessage(sessionId: string, messageId: string): Pr
     directory,
   })
   if (isStaleRuntime(expectedRuntimeKey)) return null
+  // See `forkFromMessage`: a deeper cut rewrites the open session in place, so
+  // there is no new session; reload it and report instead of opening a fork
+  // whose id never changed.
+  if (forkedSession.id === sessionId) {
+    await refetchSessionMessages(sessionId)
+    throw new InPlaceBranchError()
+  }
   const forkDirectory = resolveSessionOwnedDirectory(forkedSession) ?? directory
   openForkedSession(store, forkedSession, forkDirectory)
   await inheritForkMetadata(sessionId, forkedSession, forkDirectory, expectedRuntimeKey)
@@ -2644,6 +2665,14 @@ export async function forkFromMessage(sessionId: string, messageId: string): Pro
     directory,
   })
   if (isStaleRuntime(expectedRuntimeKey)) return
+  // OMP creates a new session only when the cut is the session's first user
+  // message; a deeper cut (`createBranchedSession`) rewrites the open session
+  // in place under the same id. There is no new session to navigate to, so the
+  // transcript is reloaded and the caller tells the user what happened.
+  if (forkedSession.id === sessionId) {
+    await refetchSessionMessages(sessionId)
+    throw new InPlaceBranchError()
+  }
   const target = createChatDraftIdentity(expectedRuntimeKey, resolveSessionOwnedDirectory(forkedSession) ?? directory, forkedSession.id)
   if (!target) throw new Error("Forked session has no composer directory")
 

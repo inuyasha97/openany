@@ -1008,13 +1008,9 @@ describe('routeMessage skill invocation', () => {
     useCommandsStore.setState({ commands: [], commandsByDirectory: {} });
   });
 
-  test('loads skills for an unloaded directory and attaches a skill found there', async () => {
-    liveSkillsLoad = async (directory) => {
-      useSkillsStore.setState({
-        skillsByDirectory: { [directory]: [{ name: 'late-skill', path: '/skills/late-skill/SKILL.md', scope: 'project', source: 'opencode' }] },
-      });
-      return true;
-    };
+  test('a slash token that matches no command never consults the skills store', async () => {
+    let skillsLoads = 0;
+    liveSkillsLoad = async () => { skillsLoads += 1; return true; };
 
     await routeMessage({
       sessionId: 'session-skill',
@@ -1024,10 +1020,14 @@ describe('routeMessage skill invocation', () => {
       modelID: 'model-a',
     });
 
+    // OMP expands `/skill:<name>` itself and inline skills ride on the
+    // composer's own mentions, so the slash path no longer loads skills to
+    // resolve a typed name. The text still goes out as a prompt.
+    expect(skillsLoads).toBe(0);
     expect(liveLookupCalls).toEqual(['/skills/project']);
     expect(sendCommandCalls).toHaveLength(0);
     expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].skills.names).toEqual(['late-skill']);
+    expect(sendMessageCalls[0].text).toBe('/late-skill go');
   });
 
   test('keeps command precedence when the live lookups find both', async () => {
@@ -1051,20 +1051,7 @@ describe('routeMessage skill invocation', () => {
     expect(sendMessageCalls).toHaveLength(0);
   });
 
-  test('fails the send instead of sending bare text when the skills load fails', async () => {
-    liveSkillsLoad = async () => false;
-
-    await expect(routeMessage({
-      sessionId: 'session-skill',
-      directory: '/skills/project',
-      content: '/unknown-thing',
-      providerID: 'provider-a',
-      modelID: 'model-a',
-    })).rejects.toThrow();
-    expect(sendMessageCalls).toHaveLength(0);
-  });
-
-  test('attaches a user-installed skill without caller-provided mentions', async () => {
+  test('a typed skill name goes out as prompt text for OMP to expand', async () => {
     useSkillsStore.setState({
       skillsByDirectory: { '/skills/project': [{ name: 'grill-with-docs', path: '/skills/grill-with-docs/SKILL.md', scope: 'user', source: 'opencode' }] },
     });
@@ -1077,19 +1064,20 @@ describe('routeMessage skill invocation', () => {
       modelID: 'model-a',
     });
 
+    // No skill is attached by the slash path any more: OMP expands
+    // `/skill:<name>` itself, and the composer's own mentions carry inline
+    // skills.
     expect(sendCommandCalls).toHaveLength(0);
     expect(sendMessageCalls).toHaveLength(1);
     expect(sendMessageCalls[0]).toMatchObject({
       text: '/grill-with-docs',
       directory: '/skills/project',
-      skills: { names: ['grill-with-docs'] },
     });
-    // Without a caller builder the skill is still named if it cannot attach.
-    expect(sendMessageCalls[0].skills.instructionFor(['grill-with-docs'])).toContain('/grill-with-docs');
-    expect(liveLookupCalls).toEqual([]);
+    expect(sendMessageCalls[0].skills).toBeUndefined();
+    expect(liveLookupCalls).toEqual(['/skills/project']);
   });
 
-  test('preserves trailing arguments in the skill prompt', async () => {
+  test('preserves trailing arguments when a typed skill name is sent as text', async () => {
     useSkillsStore.setState({
       skillsByDirectory: { '/skills/project': [{ name: 'grill-with-docs', path: '/skills/grill-with-docs/SKILL.md', scope: 'user', source: 'opencode' }] },
     });
@@ -1105,10 +1093,9 @@ describe('routeMessage skill invocation', () => {
     expect(sendCommandCalls).toHaveLength(0);
     expect(sendMessageCalls).toHaveLength(1);
     expect(sendMessageCalls[0].text).toBe('/grill-with-docs focus on auth');
-    expect(sendMessageCalls[0].skills.names).toEqual(['grill-with-docs']);
   });
 
-  test('merges the leading skill with inline mentions and preserves their instruction builder', async () => {
+  test('keeps the caller-provided inline mentions when a slash token leads the prompt', async () => {
     useSkillsStore.setState({
       skillsByDirectory: { '/skills/project': [{ name: 'grill-with-docs', path: '/skills/grill-with-docs/SKILL.md', scope: 'project', source: 'agents' }] },
     });
@@ -1133,7 +1120,9 @@ describe('routeMessage skill invocation', () => {
     expect(sendMessageCalls[0]).toMatchObject({
       runtimeKey: getRuntimeKey(),
       delivery: 'steer',
-      skills: { names: ['grill-with-docs', 'audit'] },
+      // The caller's mentions pass through untouched; the leading slash token
+      // is prompt text.
+      skills: { names: ['audit', 'grill-with-docs'] },
     });
     expect(sendMessageCalls[0].skills.instructionFor(['audit'])).toBe('use: audit');
     expect(sendMessageCalls[0].messageId).toBeTruthy();
@@ -1163,7 +1152,7 @@ describe('routeMessage skill invocation', () => {
     expect(liveLookupCalls).toEqual([]);
   });
 
-  test('sends a skill prompt with its quoted context', async () => {
+  test('a typed skill name with a quoted context stays a prompt, context included', async () => {
     useSkillsStore.setState({
       skillsByDirectory: { '/skills/project': [{ name: 'grill-with-docs', path: '/skills/grill-with-docs/SKILL.md', scope: 'user', source: 'opencode' }] },
     });
@@ -1190,7 +1179,7 @@ describe('routeMessage skill invocation', () => {
     expect(route).toBe('prompt');
     expect(sendCommandCalls).toHaveLength(0);
     expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].skills.names).toEqual(['grill-with-docs']);
+    expect(sendMessageCalls[0].skills).toBeUndefined();
     expect(sendMessageCalls[0].context).toEqual([{ id: expect.stringMatching(/^msg_/), text: additionalParts[0].text, metadata: additionalParts[0].metadata }]);
   });
 
@@ -1402,26 +1391,23 @@ describe('routeMessage skill invocation', () => {
     expect(sendMessageCalls).toHaveLength(0);
   });
 
-  test('fails the send instead of sending raw slash text when live discovery is rejected', async () => {
+  test('sends raw slash text as a prompt when live discovery is rejected', async () => {
     liveLookup = async () => { throw new Error('command list unavailable'); };
 
-    let error = null;
-    try {
-      await routeMessage({
-        sessionId: 'session-command',
-        directory: '/skills/project',
-        content: '/deploy staging',
-        providerID: 'provider-a',
-        modelID: 'model-a',
-      });
-    } catch (caught) {
-      error = caught;
-    }
+    const route = await routeMessage({
+      sessionId: 'session-command',
+      directory: '/skills/project',
+      content: '/deploy staging',
+      providerID: 'provider-a',
+      modelID: 'model-a',
+    });
 
-    expect(error).toBeInstanceOf(Error);
-    expect(error.message).toBe('command list unavailable');
+    // A failed lookup is no longer a send failure: the token may be a command
+    // OMP expands itself, so the text goes out as a prompt (Review Focus 1).
+    expect(route).toBe('prompt');
     expect(sendCommandCalls).toHaveLength(0);
-    expect(sendMessageCalls).toHaveLength(0);
+    expect(sendMessageCalls).toHaveLength(1);
+    expect(sendMessageCalls[0].text).toBe('/deploy staging');
   });
 });
 

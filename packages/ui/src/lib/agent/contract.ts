@@ -171,7 +171,6 @@ export type AgentRuntime = {
   getPermission(sessionID: string, requestID: string, directory?: string | null): Promise<FetchPermissionResult>
   listPermissions(options?: PendingRequestListOptions): Promise<PermissionRequest[]>
   selectModel(id: string, model: ModelRef, directory?: string | null): Promise<void>
-  selectAgent(id: string, agent: string, directory?: string | null): Promise<void>
   getActiveStatus(directory?: string | null): Promise<Record<string, SessionStatus> | null>
 
   forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<AgentSession>

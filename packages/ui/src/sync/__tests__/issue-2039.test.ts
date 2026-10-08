@@ -352,6 +352,7 @@ mock.module("../session-actions", () => ({
     return session
   }),
   forkAfterMessage: mock(async () => undefined),
+  InPlaceBranchError: class InPlaceBranchError extends Error {},
   deleteSession: mock(async () => true),
   deleteSessions: mock(async () => ({ deletedIds: [], failedIds: [] })),
   archiveSession: mock(async () => true),

@@ -54,7 +54,6 @@ const SURFACE_ALIASES: Record<string, string | undefined> = {
   getPermission: "fetchPermission",
   listPermissions: "listPendingPermissions",
   selectModel: "switchSessionModel",
-  selectAgent: "switchSessionAgent",
   replyForm: "replyToForm",
   sendPrompt: "sendMessage",
 }
@@ -106,7 +105,6 @@ export const createOpenCodeStubRuntime = (id = "omp"): AgentRuntime => ({
   getPermission: (sessionID, requestID, directory) => delegate("getPermission", [sessionID, requestID, directory]),
   listPermissions: (options) => delegate("listPermissions", [options]),
   selectModel: (sessionId, model, directory) => delegate("selectModel", [sessionId, model, directory]),
-  selectAgent: (sessionId, agent, directory) => delegate("selectAgent", [sessionId, agent, directory]),
   getActiveStatus: (directory) => delegate("getActiveStatus", [directory]),
 
   forkSession: (sessionId, options) => delegate("forkSession", [sessionId, options]),
