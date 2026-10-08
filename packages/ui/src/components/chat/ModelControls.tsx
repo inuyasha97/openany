@@ -56,6 +56,7 @@ import { getSyncParts } from '@/sync/sync-refs';
 import type { BtwSelection } from '@/stores/useBtwStore';
 import { listModelVariantIds, type ModelVariantSource } from '@/lib/modelVariants';
 import { getAgentRuntimeForSession } from '@/lib/agent/registry';
+import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 
 type IconComponent = IconName;
 
@@ -327,7 +328,12 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 }) => {
     const { t } = useI18n();
     const { isReady, isUnavailable } = useOpenCodeReadiness();
-    const { isReady: canSelectAgent } = useOpenCodeReadiness('agents');
+    const { isReady: agentsCatalogReady } = useOpenCodeReadiness('agents');
+    // OMP picks a subagent inside the model's own `task` call: there is no
+    // session agent to choose. `agentSelection` is the runtime's answer, so the
+    // picker is absent rather than present with nothing in it — the catalog
+    // being ready says the runtime has agents, not that it can apply one.
+    const canSelectAgent = agentsCatalogReady && resolveSessionCapabilities(controlledSessionId).agentSelection;
     const readinessLabel = isUnavailable ? t('common.unavailable') : t('common.loading');
     const providers = useConfigStore((state) => state.providers);
     const getAgentColor = useAgentColors();
@@ -3160,15 +3166,15 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                     {renderModelSelector()}
                     {renderEffortSelector()}
                     {inlineMobileSelection && renderVariantSelector()}
-                    {!selection && !isAutoSelected && renderAgentSelector()}
+                    {!selection && !isAutoSelected && canSelectAgent && renderAgentSelector()}
                 </div>
             </div>
 
             {renderMobileModelPanel()}
             {renderMobileVariantPanel()}
-            {!selection && !isAutoSelected && renderMobileAgentPanel()}
+            {!selection && !isAutoSelected && canSelectAgent && renderMobileAgentPanel()}
             {renderMobileModelTooltip()}
-            {!selection && !isAutoSelected && renderMobileAgentTooltip()}
+            {!selection && !isAutoSelected && canSelectAgent && renderMobileAgentTooltip()}
         </>
     );
 
