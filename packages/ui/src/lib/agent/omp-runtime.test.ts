@@ -117,6 +117,23 @@ describe("OmpRuntimeClient", () => {
     expect(calls[1]).toEqual({ url: "/api/agents/omp/sessions/ses_a/prompt", method: "POST", body: { text: "hi", messageId: "client-1" } })
   })
 
+  test("delivers the caller's skill instruction with the prompt", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendPrompt({
+      id: "ses_a",
+      providerID: "anthropic",
+      text: "/deploy",
+      context: [{ text: "quoted code" }],
+      skills: { names: ["deploy"], instructionFor: (names) => `use: ${names.join(",")}` },
+    })
+    // The instruction rides after the attached context and before the text, the
+    // same place the command path puts it: OMP has no attach-by-id mechanism,
+    // so the instruction is the delivery.
+    expect(calls[0].body).toEqual({ text: "quoted code\n\nuse: deploy\n\n/deploy" })
+  })
+
   test("rejects an unsupported operation with a clear error", async () => {
     const { client } = makeClient({})
     await expect(client.listAgents()).rejects.toThrow("OMP runtime does not support listAgents")

@@ -352,7 +352,19 @@ export class OmpRuntimeClient implements AgentRuntime {
   }
 
   async sendPrompt(params: SendPromptParams): Promise<string> {
-    const mapped = mapOmpPrompt(params.text, params.context, params.files)
+    // OMP cannot attach a skill by id, so the caller's instruction is the whole
+    // delivery: it rides with the context items ahead of the message, in the
+    // same position the command path puts it. Without this, an inline `/skill`
+    // mention reached OMP as a bare token and the model never saw the skill.
+    // `agentMentions` needs no equivalent: the mention is stripped from the text
+    // upstream and OMP has no session agent to route to.
+    const skillInstruction = params.skills?.names.length
+      ? params.skills.instructionFor(params.skills.names)
+      : null
+    const context = skillInstruction
+      ? [...(params.context ?? []), { text: skillInstruction }]
+      : params.context
+    const mapped = mapOmpPrompt(params.text, context, params.files)
     const body: OmpPromptBody = { text: mapped.text }
     if (params.messageId) body.messageId = params.messageId
     if (mapped.images.length > 0) body.images = mapped.images
