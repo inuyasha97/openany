@@ -42,12 +42,11 @@ in-flight probe and waits for its process to exit.
 profile; see `scripts/perf/DOCUMENTATION.md`.
 
 Quit, relaunch, and update installation await the in-process server's `stop()`
-before exiting Electron. This lets the backend release its terminals, managed
-OpenCode process, and guest services. `server-shutdown.mjs` bounds the server
-wait to 35 seconds, allowing the terminal runtime's 20-second grace plus the
-remaining backend cleanup. It uses the detached OpenCode killer only if normal
-shutdown fails or times out. An external OpenCode server remains externally
-owned. Closing to the tray does not stop the backend.
+before exiting Electron. This lets the backend release its terminals and guest
+services. `server-shutdown.mjs` bounds the server wait to 35 seconds, allowing
+the terminal runtime's 20-second grace plus the remaining backend cleanup. A
+remote instance's server remains externally owned. Closing to the tray does not
+stop the backend.
 
 Update installation bounds the full background-service shutdown, including SSH,
 to 40 seconds. This outer deadline leaves the backend's 35-second wait intact;
@@ -59,16 +58,6 @@ for the launch paths, controlled reproductions, and Windows validation limits.
 Same-origin session-chat iframes complete an authenticated parent-frame handshake before creating their SDK client. The parent supplies its active in-memory endpoint and credentials; when relay is active it also supplies the public relay descriptor without any pairing grant, because Electron preload and IPC are unavailable inside the iframe. The iframe establishes its own transport and rebinds its SDK before rendering. Additional windows retain their own per-window runtime bootstrap instead of being overwritten by the main window. Credentials are never placed in iframe URLs, and other child pages do not receive this runtime state.
 
 The preload bridge exposes desktop-only APIs to the web UI through `window.__OPENCHAMBER_DESKTOP__`. Privileged commands are checked in `main.mjs`, not only in the UI.
-
-The compatibility gate can reuse the embedded managed OpenCode CLI preflight
-through `desktop_managed_opencode_compatible`. Main matches the requested
-API origin to the local backend and reads the lifecycle-owned preflight promise.
-A pending check is shared; successful checks allow UI initialization before
-server health becomes ready. Restart invalidates the result. This avoids a second
-CLI version process during startup.
-External OpenCode, remote instances, HMR backends without an embedded handle,
-and unavailable IPC retain the HTTP compatibility check. The renderer discards
-IPC results if its endpoint changes while the read is pending.
 
 ## Main Files
 
@@ -86,8 +75,9 @@ IPC results if its endpoint changes while the read is pending.
 | `scripts/electron-dev.mjs` | Desktop dev launcher with Vite HMR support |
 | `scripts/ensure-electron.mjs` | Verifies the installed Electron binary is complete and repairs it via the postinstall under Bun |
 | `scripts/build-web-assets.mjs` | Builds `packages/web` and stages UI assets into `resources/web-dist` |
-| `scripts/prepare-opencode-cli.mjs` | Downloads and stages the pinned OpenCode CLI into `resources/opencode-cli` |
-| `scripts/opencode-cli-version.mjs` | Reads the pinned OpenCode CLI version and parses `opencode --version` output |
+| `scripts/verify-web-assets.mjs` | Fails packaging when `resources/web-dist` is missing or older than `packages/web/dist` |
+| `scripts/prepare-omp-cli.mjs` | Downloads and stages the pinned OMP binary into `resources/omp-cli` |
+| `scripts/omp-cli-version.mjs` | Holds the pinned OMP CLI version and parses `omp --version` output |
 | `scripts/bundle-main.mjs` | Bundles Electron main code into `dist-bundle/{entry,main,early-startup}.mjs` for packaging |
 | `scripts/rebuild-native.mjs` | Rebuilds native modules against the Electron runtime |
 | `scripts/package.mjs` | Runs `electron-builder`, with unsigned Windows builds when signing env is missing |
@@ -147,7 +137,7 @@ bun run lint:electron
 
 `electron:dev:bundled` builds and uses packaged web assets instead of the HMR server. Use it when testing behavior closer to a packaged app.
 
-Both dev variants run the staged OpenCode CLI from `resources/opencode-cli` (the one `prepare:opencode-cli` stages and packaged builds ship), not the `opencode` on PATH. `electron-dev.mjs` passes the directory to the backend as `OPENCHAMBER_BUNDLED_OPENCODE_CLI_DIR`; when the binary is missing it warns and falls back to PATH.
+Both dev variants run the staged OMP binary from `resources/omp-cli` (the one `prepare:omp-cli` stages and packaged builds ship), not the `omp` on PATH. `electron-dev.mjs` passes the directory to the backend as `OPENCHAMBER_BUNDLED_OMP_CLI_DIR`; when the binary is missing it warns and falls back to PATH.
 
 ## Packaging
 
@@ -162,10 +152,13 @@ bun run electron:build
 That runs, in order:
 
 1. `build:web-assets` to build the web UI and copy it into `packages/electron/resources/web-dist`.
-2. `prepare:opencode-cli` to download/cache the pinned OpenCode CLI and copy it into `packages/electron/resources/opencode-cli`.
-3. `bundle:main` to create `packages/electron/dist-bundle/{entry,main,early-startup}.mjs`.
-4. `rebuild:native` to rebuild native modules for Electron.
-5. `package.mjs` to run `electron-builder`; its `afterPack` hook stages the compiled macOS icon asset catalog.
+2. `verify:web-assets` to fail when the staged UI is missing or older than `packages/web/dist`.
+3. `prepare:omp-cli` to download/cache the pinned OMP binary and copy it into `packages/electron/resources/omp-cli`.
+4. `bundle:main` to create `packages/electron/dist-bundle/{entry,main,early-startup}.mjs`.
+5. `rebuild:native` to rebuild native modules for Electron.
+6. `package.mjs` to run `electron-builder`; its `afterPack` hook stages the compiled macOS icon asset catalog.
+
+The packaged app loads its UI from `resources/web-dist` over `openchamber-ui://app`, so that directory must match the current `packages/web/dist` build. Rebuild both with `bun run --cwd packages/web build` and `bun run --cwd packages/electron build:web-assets`; the packaging step now verifies the stage before `electron-builder` runs.
 
 Build output goes to `packages/electron/dist`.
 
@@ -177,13 +170,13 @@ macOS packaging needs Xcode/build tools for notarized builds and icon asset comp
 
 Windows packaging needs NSIS support through `electron-builder`. If no Windows signing env is set, `package.mjs` disables code signing and builds an unsigned installer. Windows updates use `latest.yml` for x64 and the `latest-arm64.yml` channel for ARM64 so each installation resolves an architecture-matching installer.
 
-Linux AppImages must be built natively. Set `OPENCHAMBER_TARGET_ARCH=x64` or `OPENCHAMBER_TARGET_ARCH=arm64` when packaging; the build rejects a target that does not match the Linux host. The same target selects the bundled OpenCode CLI, native Electron rebuild, and Electron Builder architecture. Linux identity is stable across architectures: executable `openchamber`, desktop file `openchamber.desktop`, icon `openchamber`, and `StartupWMClass=openchamber`.
+Linux AppImages must be built natively. Set `OPENCHAMBER_TARGET_ARCH=x64` or `OPENCHAMBER_TARGET_ARCH=arm64` when packaging; the build rejects a target that does not match the Linux host. The same target selects the bundled OMP binary, native Electron rebuild, and Electron Builder architecture. Linux identity is stable across architectures: executable `openchamber`, desktop file `openchamber.desktop`, icon `openchamber`, and `StartupWMClass=openchamber`.
 
-After packaging, run `bun run --cwd packages/electron verify:linux-appimage`. The verifier extracts the final AppImage and checks its ELF architecture, desktop identity, Electron executable, pinned OpenCode CLI version and architecture, and all packaged native `.node` modules.
+After packaging, run `bun run --cwd packages/electron verify:linux-appimage`. The verifier extracts the final AppImage and checks its ELF architecture, desktop identity, Electron executable, pinned OMP CLI version and architecture, and all packaged native `.node` modules.
 
 Running a packaged Linux AppImage requires FUSE (`libfuse.so.2`, typically `libfuse2` / `libfuse2t64` on Debian/Ubuntu). Without FUSE, start with `APPIMAGE_EXTRACT_AND_RUN=1`. Keep the AppImage on a writable path so in-app updates can replace it.
 
-Desktop clears AppImage `ARGV0` from `process.env` before probing the login shell and starting the in-process server. Leaving it set makes zsh rewrite argv[0] for integrated-terminal and managed-OpenCode child commands to the AppImage path.
+Desktop clears AppImage `ARGV0` from `process.env` before probing the login shell and starting the in-process server. Leaving it set makes zsh rewrite argv[0] for integrated-terminal and managed-child commands to the AppImage path.
 
 Linux updates are supported only when the packaged app is running from a writable AppImage. Update checks, downloads, and installation report an actionable error when `APPIMAGE` is missing, invalid, or read-only; a missing release feed (`latest-linux.yml` 404 before the first Linux publish) is treated as “no update available”. Authenticated Web clients connected to the embedded Desktop Host use this same `electron-updater` check, download, and restart flow rather than a package-manager command. macOS and Windows updater behavior is unchanged. Release builds keep `latest-linux.yml` (x64) and `latest-linux-arm64.yml` separate and validate each manifest against its AppImage before upload. Linux AppImages download full updates (no `.blockmap` differential channel yet).
 
@@ -199,20 +192,18 @@ On Windows and Linux, the General setting persisted as `desktopMinimizeToTrayEna
 
 The macOS menu bar item is enabled by default and can be disabled in General settings. The setting applies after restart. While disabled, Desktop skips the native tray controller, tray-specific subscriptions, polling, and quota refresh. Dock badges remain independent: unread activity, session membership, and badge preferences still update the Dock through the shared IPC command. Turning off the Dock badge clears its count without enabling the menu bar item.
 
-## Bundled OpenCode CLI
+## Bundled OMP CLI
 
-Packaged Desktop builds include the official OpenCode CLI release pinned by `opencodeCli.version` in `packages/electron/package.json` (OpenChamber requires OpenCode 2.x). OpenCode 2.x ships on npm rather than as GitHub release assets, so `prepare:opencode-cli` downloads the platform package tarball (`@opencode/cli-<os>-<arch>`, the same one OpenCode's own installer uses), caches it under `packages/electron/.cache/opencode-cli`, stages `opencode` or `opencode.exe` into `resources/opencode-cli`, and verifies `opencode --version` before packaging. Re-running the step is fast when the staged binary already matches the pinned version.
+Packaged Desktop builds include the OMP standalone binary pinned by `DEFAULT_OMP_CLI_VERSION` in `packages/electron/scripts/omp-cli-version.mjs`. OMP ships prebuilt Bun-embedded executables per platform on GitHub releases, so `prepare:omp-cli` downloads the matching artifact from `github.com/can1357/oh-my-pi/releases`, caches it under `packages/electron/.cache/omp-cli`, stages `omp` or `omp.exe` into `resources/omp-cli`, and verifies the binary runs before packaging. Re-running the step is fast when the staged binary already matches the pinned version.
 
-Managed local Desktop startup prefers OpenCode binaries in this order:
+The packaged server spawns the staged binary with `--mode rpc`. `resolveOmpCommand` resolves it in this order:
 
-1. `settings.opencodeBinary`.
-2. Environment overrides: `OPENCODE_BINARY`, `OPENCODE_PATH`, `OPENCHAMBER_OPENCODE_PATH`, or `OPENCHAMBER_OPENCODE_BIN`.
-3. The bundled Desktop CLI in `process.resourcesPath/opencode-cli`.
-4. System installs discovered from PATH.
-5. Known npm/Bun/Homebrew/Scoop/Chocolatey and other standard install locations.
-6. Platform discovery through `where opencode` on Windows or a login shell on macOS/Linux.
+1. `OPENCHAMBER_OMP_PATH`, `OPENCHAMBER_OMP_BIN`, or `OMP_BINARY`.
+2. `OPENCHAMBER_BUNDLED_OMP_CLI_DIR` (set by the dev launcher to the staged directory).
+3. The bundled binary in `process.resourcesPath/omp-cli`.
+4. `omp` on PATH.
 
-Use an explicit override when testing a different OpenCode CLI build or when a user needs to point Desktop at a custom binary. The configured path must point to the standalone CLI, not the OpenCode Desktop app executable.
+Use an explicit override when testing a different OMP build. Set `OPENCHAMBER_OMP_CLI_VERSION` for a one-off packaging run against another release.
 
 ## Common Env Vars
 
@@ -224,13 +215,13 @@ Use an explicit override when testing a different OpenCode CLI build or when a u
 | `OPENCHAMBER_HMR_UI_PORT` | Preferred Vite UI port for desktop dev, default `5173` |
 | `OPENCHAMBER_HMR_API_PORT` | Preferred API port for desktop dev, default `3901` |
 | `OPENCHAMBER_RUNTIME=desktop` | Set by Electron before starting the web server |
-| `OPENCHAMBER_OPENCODE_CLI_VERSION` | Optional packaging override for the bundled OpenCode CLI version; defaults to `opencodeCli.version` in `packages/electron/package.json` |
+| `OPENCHAMBER_OMP_PATH` | Points Desktop/the server at a specific `omp` binary; used by managed SSH instances to pass the remote path |
+| `OPENCHAMBER_OMP_CLI_VERSION` | Optional packaging override for the bundled OMP CLI version; defaults to `DEFAULT_OMP_CLI_VERSION` in `packages/electron/scripts/omp-cli-version.mjs` |
 | `OPENCHAMBER_TARGET_ARCH` | Explicit desktop package architecture (`x64` or `arm64`); Linux requires it to match the native host |
 | `OPENCHAMBER_DESKTOP_NOTIFY=true` | Enables desktop notification flow in the web server |
 | `OPENCHAMBER_SKIP_API_COMPRESSION=true` | Defaulted by Desktop to reduce local CPU overhead |
 | `OPENCHAMBER_STARTUP_PERF=1` | Enables privacy-safe startup phase timings in Desktop/server logs; disabled by default |
 | `OPENCHAMBER_DESKTOP_USER_DATA_DIR` | Test hook used by `profile:startup`: moves the Electron profile (single-instance lock, Chromium caches) so a measured launch does not share it with the installed app |
-| `OPENCODE_HOST` / `OPENCODE_PORT` / `OPENCODE_SKIP_START` | Connect Desktop to an external OpenCode server instead of starting one locally |
 
 ## Native Features Owned Here
 
@@ -252,7 +243,7 @@ Use an explicit override when testing a different OpenCode CLI build or when a u
 - Local and remote instance handling.
 - SSH host import, connections, logs, and port forwarding.
 - SSH uses OpenSSH ControlMaster on macOS/Linux. Windows uses independent hidden OpenSSH processes for setup commands and each long-lived forward because Win32 OpenSSH does not support ControlMaster reliably.
-- A managed SSH instance runs one server per remote host. The server outlives the SSH session by default (`keepRunning`), so every connect first asks the remote CLI (`openchamber status --json`) what is already running and reuses a server that fits the instance's password. `/api/system/info` is public, so an answer proves nothing about the password: the server has to accept it on `/auth/session`, or have none when the instance has none. Among the servers that fit, a CLI-started daemon of another app version, or one whose bind address no longer matches the instance's network setting, is stopped and replaced. A registered server that is passed over gets a line in the connect log saying why. Foreground servers and servers with another password are neither reused nor stopped. With `keepRunning` off, disconnecting stops an adopted daemon the same way it stops one this session started. The server is shared by every client that fits it, so that stop also ends it for any other client still connected. Starting a server without this lookup leaks one server plus its opencode per reconnect.
+- A managed SSH instance runs one server per remote host. The server outlives the SSH session by default (`keepRunning`), so every connect first asks the remote CLI (`openchamber status --json`) what is already running and reuses a server that fits the instance's password. `/api/system/info` is public, so an answer proves nothing about the password: the server has to accept it on `/auth/session`, or have none when the instance has none. Among the servers that fit, a CLI-started daemon of another app version, or one whose bind address no longer matches the instance's network setting, is stopped and replaced. A registered server that is passed over gets a line in the connect log saying why. Foreground servers and servers with another password are neither reused nor stopped. The managed start resolves the remote `omp` CLI (`$HOME/.omp/bin`, Bun global bins, `~/.local/bin`, the OpenChamber npm prefix, and nvm's newest node) and hands its path to the server as `OPENCHAMBER_OMP_PATH`. With `keepRunning` off, disconnecting stops an adopted daemon the same way it stops one this session started. The server is shared by every client that fits it, so that stop also ends it for any other client still connected. Starting a server without this lookup leaks one server plus its child processes per reconnect.
 - Tunnel lifecycle integration through the web server runtime.
 - Remote dev-server previews use a direct WebSocket tunnel when the instance has an HTTP address. Relay-only instances keep the encrypted relay transport in the renderer and bridge its raw bytes to the browser panel through a local Electron listener.
 - Auto-update checks, downloads, and restart/apply flow.
@@ -285,7 +276,7 @@ Development builds use a separate user data directory named `OpenChamber Dev`, s
 
 ## Things To Be Careful With
 
-- Keep desktop-specific code in this package. Do not move OpenCode feature backend logic into Electron.
+- Keep desktop-specific code in this package. Do not move agent-runtime backend logic into Electron.
 - Use hidden Windows process launches for background helpers. Avoid visible console flashes.
 - Keep `@openchamber/web`, `bun-pty`, `node-pty`, and native modules external in `bundle-main.mjs`; bundling them can break Electron startup. Keep `early-startup.mjs` external too: the entry and main bundles must share its one instance.
 - Keep `entry.mjs` small. Anything imported there delays Electron's `ready`; everything else belongs behind the `main.mjs` import.

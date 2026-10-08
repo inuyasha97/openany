@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { normalizeTargetArchitecture } from './target-architecture.mjs';
-import { parseOpenCodeCliVersion, readPinnedOpenCodeCliVersion } from './opencode-cli-version.mjs';
+import { parseOmpCliVersion, readPinnedOmpCliVersion } from './omp-cli-version.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const electronRoot = path.resolve(__dirname, '..');
@@ -71,14 +71,14 @@ const defaultCliVersion = (binaryPath) => {
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 15000,
   });
-  if (result.status !== 0) throw new Error(`Failed to run packaged OpenCode CLI: ${binaryPath}`);
-  return parseOpenCodeCliVersion(result.stdout);
+  if (result.status !== 0) throw new Error(`Failed to run packaged OMP CLI: ${binaryPath}`);
+  return parseOmpCliVersion(result.stdout);
 };
 
 export const verifyExtractedPayload = ({
   root,
   targetArchitecture,
-  expectedOpenCodeVersion,
+  expectedCliVersion,
   runCliVersion = defaultCliVersion,
 }) => {
   const desktopPath = path.join(root, 'openchamber.desktop');
@@ -90,11 +90,11 @@ export const verifyExtractedPayload = ({
   if (!/^Exec=AppRun(?:\s|$)/m.test(desktop)) throw new Error('Desktop identity mismatch: expected AppImage AppRun entrypoint');
 
   assertElfArchitecture(path.join(root, 'openchamber'), targetArchitecture, 'Electron executable');
-  const cliPath = path.join(root, 'resources', 'opencode-cli', 'opencode');
-  assertElfArchitecture(cliPath, targetArchitecture, 'OpenCode CLI');
+  const cliPath = path.join(root, 'resources', 'omp-cli', 'omp');
+  assertElfArchitecture(cliPath, targetArchitecture, 'OMP CLI');
   const actualVersion = runCliVersion(cliPath);
-  if (actualVersion !== expectedOpenCodeVersion) {
-    throw new Error(`OpenCode CLI version mismatch: expected ${expectedOpenCodeVersion}, got ${actualVersion || '(empty)'}`);
+  if (actualVersion !== expectedCliVersion) {
+    throw new Error(`OMP CLI version mismatch: expected ${expectedCliVersion}, got ${actualVersion || '(empty)'}`);
   }
 
   const unpackedModules = path.join(root, 'resources', 'app.asar.unpacked', 'node_modules');
@@ -111,7 +111,7 @@ export const verifyExtractedPayload = ({
     }
   }
   for (const modulePath of nativeModules) assertElfArchitecture(modulePath, targetArchitecture, 'Native module');
-  return { nativeModuleCount: nativeModules.length, openCodeVersion: actualVersion };
+  return { nativeModuleCount: nativeModules.length, cliVersion: actualVersion };
 };
 
 const findAppImage = (version, architecture) => {
@@ -146,10 +146,10 @@ const main = () => {
     const result = verifyExtractedPayload({
       root: extractAppImage(appImagePath, temporaryDirectory),
       targetArchitecture: target,
-      expectedOpenCodeVersion: readPinnedOpenCodeCliVersion(),
+      expectedCliVersion: readPinnedOmpCliVersion(),
     });
     console.log(`[electron] verified Linux ${target} AppImage: ${appImagePath}`);
-    console.log(`[electron] verified OpenCode CLI ${result.openCodeVersion} and ${result.nativeModuleCount} native modules`);
+    console.log(`[electron] verified OMP CLI ${result.cliVersion} and ${result.nativeModuleCount} native modules`);
   } finally {
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }

@@ -1,4 +1,3 @@
-import { canReuseManagedOpenCodePreflight } from './opencode-readiness.mjs';
 import { app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeTheme, net as electronNet, Notification, powerMonitor, powerSaveBlocker, protocol, session, shell, webContents } from 'electron';
 import contextMenu from 'electron-context-menu';
 import log from 'electron-log/main.js';
@@ -14,7 +13,6 @@ import updaterPkg from 'electron-updater';
 import { ElectronSshManager } from './ssh-manager.mjs';
 import { replaceFileWithRetry } from './windows-file-replace.mjs';
 import { createTrayController } from './tray.mjs';
-import { resolveManagedOpenCodeCwd } from './opencode-cwd.mjs';
 import { stopEmbeddedServer } from './server-shutdown.mjs';
 import { resolveStartupUrlProbePlan } from './startup-url-selection.mjs';
 import {
@@ -101,7 +99,7 @@ log.transports.console.level = isDev ? 'debug' : 'warn';
 // The in-process web server runs in this same Node process and uses plain
 // `console.log/warn/error`. Without piping console through electron-log,
 // that output never lands in ~/Library/Logs/OpenChamber/main.log and we
-// can't diagnose issues (e.g. OpenCode lifecycle, SSE disconnects) after
+// can't diagnose issues (e.g. agent lifecycle, SSE disconnects) after
 // the fact. Route all console calls through electron-log so server-side
 // diagnostics are persisted.
 Object.assign(console, log.functions);
@@ -218,7 +216,6 @@ const INSTALLED_APPS_CACHE_FILE = 'discovered-apps.json';
 // entries written by an older build are treated as stale and refresh immediately.
 const INSTALLED_APPS_CACHE_VERSION = 2;
 const LINUX_DESKTOP_ENTRIES_CACHE_TTL_MS = 30_000;
-const OPENCODE_SHUTDOWN_GRACE_MS = 100;
 const { autoUpdater } = updaterPkg;
 
 const state = {
@@ -414,7 +411,7 @@ const performConfirmedQuit = async ({ relaunch = false } = {}) => {
 
 // Hard-stop signals (`Ctrl+C` on `electron:dev`, an external `kill`/SIGTERM,
 // terminal close) bypass the normal app-quit flow — which would orphan the
-// in-process web server's managed OpenCode child. Run the same background
+// in-process web server's children. Run the same background
 // teardown the quit path uses (which kills the sidecar), then exit. The startup
 // reaper remains the backstop for an unhandled hard crash (SIGKILL).
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -1206,7 +1203,7 @@ import { pathLooksUserConfigured, mergePathValues } from '@openchamber/web/serve
 import { provideLoginShellEnvSnapshot } from '@openchamber/web/server/lib/openchamber/login-shell-env.js';
 
 // Merge the user's login-shell env (PATH, etc.) into this process before we
-// import/start the server in-process. The server and its children (opencode
+// import/start the server in-process. The server and its children (omp
 // CLI, git, etc.) inherit process.env directly now — there is no sidecar
 // subprocess to hand a custom env to.
 const inheritUserShellEnv = async () => {
@@ -1295,12 +1292,6 @@ const spawnLocalServer = async () => {
   }
   process.env.OPENCHAMBER_DIST_DIR = resolveWebDistDir();
   process.env.OPENCHAMBER_RUNTIME = 'desktop';
-  // OpenCode uses process cwd as a fallback directory; app userData would make
-  // packaged desktop look like a separate empty workspace.
-  process.env.OPENCHAMBER_OPENCODE_CWD = resolveManagedOpenCodeCwd({
-    env: process.env,
-    homedir: () => os.homedir(),
-  });
   process.env.OPENCHAMBER_DESKTOP_NOTIFY = 'true';
   if (desktopUiPassword) {
     process.env.OPENCHAMBER_UI_PASSWORD = desktopUiPassword;
@@ -1357,87 +1348,6 @@ const spawnLocalServer = async () => {
   return url;
 };
 
-const launchDetachedOpenCodeKiller = (processInfo) => {
-  if (!processInfo?.managed) return;
-  const pid = Number(processInfo.pid);
-  const port = Number(processInfo.port);
-  const hasPid = Number.isFinite(pid) && pid > 0;
-  const hasPort = Number.isFinite(port) && port > 0;
-  if (!hasPid && !hasPort) return;
-  const normalizedPid = hasPid ? String(Math.trunc(pid)) : '0';
-  const normalizedPort = Number.isFinite(port) && port > 0 ? String(Math.trunc(port)) : '0';
-
-  if (process.platform === 'win32') {
-    if (!hasPid) return;
-    const script = `
-$ErrorActionPreference = 'SilentlyContinue'
-$targetPid = ${normalizedPid}
-$graceMs = ${Math.max(0, Math.trunc(OPENCODE_SHUTDOWN_GRACE_MS))}
-function Stop-ProcessTree([int]$processId, [bool]$force) {
-  if ($processId -le 0) { return }
-  $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$processId"
-  foreach ($child in $children) {
-    Stop-ProcessTree ([int]$child.ProcessId) $force
-  }
-  if ($force) {
-    Stop-Process -Id $processId -Force
-  } else {
-    Stop-Process -Id $processId
-  }
-}
-Stop-ProcessTree $targetPid $false
-Start-Sleep -Milliseconds $graceMs
-Stop-ProcessTree $targetPid $true
-`;
-    const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
-    const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    const child = spawn(powershell, [
-      '-NoLogo',
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-WindowStyle',
-      'Hidden',
-      '-EncodedCommand',
-      encodedScript,
-    ], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.unref();
-    return;
-  }
-
-  if (hasPid) {
-    try {
-      process.kill(-pid, 'SIGTERM');
-    } catch {
-    }
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch {
-    }
-  }
-
-  const script = [
-    'pid="$1"',
-    'port="$2"',
-    'grace="$3"',
-    'if [ "$pid" -gt 0 ] 2>/dev/null; then kill -TERM "$pid" 2>/dev/null; kill -TERM "-$pid" 2>/dev/null; fi',
-    'sleep "$grace"',
-    'if [ "$pid" -gt 0 ] 2>/dev/null; then kill -KILL "-$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null; fi',
-    'if [ "$port" -gt 0 ] 2>/dev/null && command -v lsof >/dev/null 2>&1; then for target in $(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null; lsof -ti ":$port" 2>/dev/null); do [ "$target" = "$$" ] || kill -KILL "$target" 2>/dev/null; done; fi',
-  ].join('; ');
-  const child = spawn('/bin/sh', ['-c', script, 'openchamber-opencode-killer', normalizedPid, normalizedPort, String(OPENCODE_SHUTDOWN_GRACE_MS / 1000)], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
-  child.unref();
-};
-
 const killSidecar = async () => {
   const handle = state.serverHandle;
   state.serverHandle = null;
@@ -1445,7 +1355,6 @@ const killSidecar = async () => {
   if (!handle) return;
 
   await stopEmbeddedServer(handle, {
-    launchFallback: launchDetachedOpenCodeKiller,
     warn: (error) => log.warn('[electron] embedded server shutdown failed:', error),
   });
 };
@@ -2805,7 +2714,7 @@ const setupAutoUpdater = () => {
 // either take the app down or report why it did not.
 const UPDATE_INSTALL_GRACE_MS = 15_000;
 
-// Releasing terminals, the managed OpenCode child, and SSH sessions must not
+// Releasing terminals and SSH sessions must not
 // hold the installer hostage: a stuck session would otherwise keep the app on
 // the old version forever. The backend's own stop() is already bounded; this
 // bounds everything the install path waits on, beyond the backend's 35s limit.
@@ -3560,13 +3469,6 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
         browserWindow.setTitle(args.title);
       }
       return null;
-
-    case 'desktop_managed_opencode_compatible':
-      return canReuseManagedOpenCodePreflight({
-        apiBaseUrl: args.apiBaseUrl,
-        localOrigin: state.localOrigin,
-        server: state.serverHandle,
-      });
 
     case 'desktop_get_app_version':
       return APP_VERSION;

@@ -587,7 +587,6 @@ const loadWindowsEnv = () => {
   const localAppData = process.env.LOCALAPPDATA || path.join(homeDir, 'AppData', 'Local');
   const appData = process.env.APPDATA || path.join(homeDir, 'AppData', 'Roaming');
   const commonPaths = [
-    path.join(homeDir, '.opencode', 'bin'),
     path.join(homeDir, '.bun', 'bin'),
     path.join(homeDir, '.local', 'bin'),
     path.join(localAppData, 'Programs', 'Microsoft VS Code', 'bin'),

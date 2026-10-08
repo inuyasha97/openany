@@ -19,18 +19,18 @@ const REMOTE_BUN_CANDIDATE = '"${BUN_INSTALL:-$HOME/.bun}/bin/bun"';
 // login shell never runs. Use its newest installed node; with no nvm the path
 // does not exist and every probe skips it.
 const REMOTE_NVM_BIN = '${NVM_DIR:-$HOME/.nvm}/versions/node/v$(ls -1 "${NVM_DIR:-$HOME/.nvm}/versions/node" 2>/dev/null | sed "s/^v//" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)/bin';
-// The opencode CLI usually installs into the user's home, which an SSH login
-// shell does not have on PATH. The remote server only looks at OPENCODE_BINARY
-// and PATH, so resolve the CLI here and hand it over explicitly.
-const REMOTE_OPENCODE_CANDIDATES = [
-  '"$HOME/.opencode/bin/opencode"',
-  '"${BUN_INSTALL:-$HOME/.bun}/bin/opencode"',
-  '"${XDG_CACHE_HOME:-$HOME/.cache}/.bun/bin/opencode"',
-  '"$HOME/.local/bin/opencode"',
-  '"$HOME/.openchamber/npm-global/bin/opencode"',
-  `"${REMOTE_NVM_BIN}/opencode"`,
+// The omp CLI usually installs into the user's home, which an SSH login shell
+// does not have on PATH. The remote server resolves OMP from the path this flow
+// finds, handed over as OPENCHAMBER_OMP_PATH.
+const REMOTE_OMP_CANDIDATES = [
+  '"$HOME/.omp/bin/omp"',
+  '"${BUN_INSTALL:-$HOME/.bun}/bin/omp"',
+  '"${XDG_CACHE_HOME:-$HOME/.cache}/.bun/bin/omp"',
+  '"$HOME/.local/bin/omp"',
+  '"$HOME/.openchamber/npm-global/bin/omp"',
+  `"${REMOTE_NVM_BIN}/omp"`,
 ];
-const REMOTE_PATH_PREFIX = `$HOME/.opencode/bin:\${BUN_INSTALL:-$HOME/.bun}/bin:\${XDG_CACHE_HOME:-$HOME/.cache}/.bun/bin:$HOME/.local/bin:$HOME/.openchamber/npm-global/bin:${REMOTE_NVM_BIN}`;
+const REMOTE_PATH_PREFIX = `$HOME/.omp/bin:\${BUN_INSTALL:-$HOME/.bun}/bin:\${XDG_CACHE_HOME:-$HOME/.cache}/.bun/bin:$HOME/.local/bin:$HOME/.openchamber/npm-global/bin:${REMOTE_NVM_BIN}`;
 const REMOTE_BIN_CANDIDATES = [
   '"$HOME/.openchamber/npm-global/bin/openchamber"',
   '"${BUN_INSTALL:-$HOME/.bun}/bin/openchamber"',
@@ -1158,9 +1158,9 @@ export class ElectronSshManager {
   }
 
   async startRemoteServerManaged(parsed, controlPath, instance, desiredPort, binPath) {
-    const opencodePath = await this.resolveRemoteTool(parsed, controlPath, 'opencode', REMOTE_OPENCODE_CANDIDATES);
-    if (!opencodePath) {
-      throw new Error('The opencode CLI is not installed on the remote machine. Install it there, then connect again');
+    const ompPath = await this.resolveRemoteTool(parsed, controlPath, 'omp', REMOTE_OMP_CANDIDATES);
+    if (!ompPath) {
+      throw new Error('The omp CLI is not installed on the remote machine. Install it there (`bun add -g @oh-my-pi/pi-coding-agent`), then connect again');
     }
 
     const secret = this.configuredOpenChamberPassword(instance);
@@ -1171,7 +1171,7 @@ export class ElectronSshManager {
       throw new Error('Exposing the remote server to its network requires a UI password');
     }
 
-    let envPrefix = `PATH="${REMOTE_PATH_PREFIX}:$PATH" OPENCODE_BINARY=${shellQuote(opencodePath)} OPENCHAMBER_RUNTIME=ssh-remote`;
+    let envPrefix = `PATH="${REMOTE_PATH_PREFIX}:$PATH" OPENCHAMBER_OMP_PATH=${shellQuote(ompPath)} OPENCHAMBER_RUNTIME=ssh-remote`;
     if (secret) {
       envPrefix += ` OPENCHAMBER_UI_PASSWORD=${shellQuote(secret)}`;
     }
@@ -1247,8 +1247,9 @@ export class ElectronSshManager {
 
   // A managed server outlives the SSH session on purpose, so every connect has
   // to look for it before starting another: each server also supervises its own
-  // opencode, and servers nobody reconnects to pile up until the host runs out
-  // of memory. Returns the server to reuse, or null when a new one is needed.
+  // children (OMP, terminals), and servers nobody reconnects to pile up until
+  // the host runs out of memory. Returns the server to reuse, or null when a new
+  // one is needed.
   // `daemon` marks a server the remote CLI started in the background, the only
   // kind this manager may stop.
   async adoptRunningRemoteServer(instance, parsed, controlPath, binPath) {

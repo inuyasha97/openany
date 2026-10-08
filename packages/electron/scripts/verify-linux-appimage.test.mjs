@@ -20,7 +20,7 @@ const createPayload = () => {
     '[Desktop Entry]', 'Name=OpenChamber', 'Exec=AppRun --no-sandbox %U', 'Icon=openchamber', 'StartupWMClass=openchamber', '',
   ].join('\n'));
   writeElf(path.join(root, 'openchamber'), 'x64');
-  writeElf(path.join(root, 'resources/opencode-cli/opencode'), 'x64');
+  writeElf(path.join(root, 'resources/omp-cli/omp'), 'x64');
   for (const name of ['pty.node', 'sherpa-onnx.node']) {
     writeElf(path.join(root, 'resources/app.asar.unpacked/node_modules', name), 'x64');
   }
@@ -50,8 +50,8 @@ test('verifies identity, version, and native payload architecture', () => {
     const result = verifyExtractedPayload({
       root,
       targetArchitecture: 'x64',
-      expectedOpenCodeVersion: '1.17.18',
-      runCliVersion: () => '1.17.18',
+      expectedCliVersion: '18.1.11',
+      runCliVersion: () => '18.1.11',
     });
     assert.equal(result.nativeModuleCount, 2);
   } finally {
@@ -66,8 +66,8 @@ test('fails on a missing native module', () => {
     assert.throws(() => verifyExtractedPayload({
       root,
       targetArchitecture: 'x64',
-      expectedOpenCodeVersion: '1.17.18',
-      runCliVersion: () => '1.17.18',
+      expectedCliVersion: '18.1.11',
+      runCliVersion: () => '18.1.11',
     }), /Missing packaged native module: pty\.node/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -80,15 +80,15 @@ test('fails on wrong CLI version or native architecture', () => {
     assert.throws(() => verifyExtractedPayload({
       root,
       targetArchitecture: 'x64',
-      expectedOpenCodeVersion: '1.17.18',
-      runCliVersion: () => '1.17.17',
-    }), /OpenCode CLI version mismatch/);
+      expectedCliVersion: '18.1.11',
+      runCliVersion: () => '18.1.10',
+    }), /OMP CLI version mismatch/);
     writeElf(path.join(root, 'resources/app.asar.unpacked/node_modules/pty.node'), 'arm64');
     assert.throws(() => verifyExtractedPayload({
       root,
       targetArchitecture: 'x64',
-      expectedOpenCodeVersion: '1.17.18',
-      runCliVersion: () => '1.17.18',
+      expectedCliVersion: '18.1.11',
+      runCliVersion: () => '18.1.11',
     }), /Native module architecture mismatch/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

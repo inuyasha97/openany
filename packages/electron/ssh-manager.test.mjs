@@ -66,11 +66,11 @@ describe('ElectronSshManager', () => {
         fs.writeFileSync(file, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
       };
       executable(path.join(bin, 'bun'), 'printf "%s\\n" "$@" > "$HOME/install-args"');
-      executable(path.join(bin, 'opencode'), 'printf "1.2.3\\n"');
+      executable(path.join(bin, 'omp'), 'printf "1.2.3\\n"');
       executable(path.join(bin, 'openchamber'), `
 if [ "$1" = "--version" ]; then printf '1.2.3\\n'; exit 0; fi
 printf '%s' "$PATH" > "$HOME/launch-path"
-printf '%s' "$OPENCODE_BINARY" > "$HOME/launch-opencode"
+printf '%s' "$OPENCHAMBER_OMP_PATH" > "$HOME/launch-omp"
 printf '4321\\n'`);
       // An earlier candidate with a different version must not win discovery.
       executable(path.join(home, '.openchamber', 'npm-global', 'bin', 'openchamber'), 'printf "0.9.0\\n"');
@@ -95,7 +95,7 @@ printf '4321\\n'`);
       }, parsed, '/unused.sock');
       expect(result.remoteBinPath).toBe(path.join(bin, 'openchamber'));
       expect(result.remotePort).toBe(4321);
-      expect(fs.readFileSync(path.join(home, 'launch-opencode'), 'utf8')).toBe(path.join(bin, 'opencode'));
+      expect(fs.readFileSync(path.join(home, 'launch-omp'), 'utf8')).toBe(path.join(bin, 'omp'));
       const launchPath = fs.readFileSync(path.join(home, 'launch-path'), 'utf8').split(':');
       expect(launchPath).toContain(path.join(cache, '.bun', 'bin'));
       expect(launchPath).toContain(path.join(home, '.bun', 'bin'));
@@ -372,20 +372,20 @@ printf '4321\\n'`);
     }
   });
 
-  test.skipIf(process.platform === 'win32')('starts the managed server with an nvm-installed opencode that the SSH login shell does not have on PATH', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-ssh-nvm-opencode-'));
+  test.skipIf(process.platform === 'win32')('starts the managed server with an nvm-installed omp that the SSH login shell does not have on PATH', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-ssh-nvm-omp-'));
     tempDirs.push(home);
     const executable = (file, script) => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
     };
-    // opencode only under nvm's node, and no nvm entry on PATH: exactly what a
+    // omp only under nvm's node, and no nvm entry on PATH: exactly what a
     // non-interactive SSH login shell sees after `npm install -g` with nvm.
     const nvmBin = path.join(home, '.nvm', 'versions', 'node', 'v24.18.0', 'bin');
-    executable(path.join(nvmBin, 'opencode'), 'exit 0');
+    executable(path.join(nvmBin, 'omp'), 'exit 0');
     executable(path.join(home, '.openchamber', 'npm-global', 'bin', 'openchamber'), `
 if [ "$1" = "--version" ]; then printf '1.2.3\\n'; exit 0; fi
-printf '%s' "$OPENCODE_BINARY" > "$HOME/launch-opencode"
+printf '%s' "$OPENCHAMBER_OMP_PATH" > "$HOME/launch-omp"
 printf '4321\\n'`);
     const env = { HOME: home, PATH: '/usr/bin:/bin' };
     const manager = new ElectronSshManager({
@@ -398,13 +398,13 @@ printf '4321\\n'`);
     manager.remoteServerRunning = async () => true;
 
     const result = await manager.ensureRemoteServer(
-      { id: 'ssh-nvm-opencode', auth: {}, remoteOpenchamber: { mode: 'managed' } },
+      { id: 'ssh-nvm-omp', auth: {}, remoteOpenchamber: { mode: 'managed' } },
       { destination: 'user@example.test', args: [] },
       '/unused.sock',
     );
 
     expect(result.remotePort).toBe(4321);
-    expect(fs.readFileSync(path.join(home, 'launch-opencode'), 'utf8')).toBe(path.join(nvmBin, 'opencode'));
+    expect(fs.readFileSync(path.join(home, 'launch-omp'), 'utf8')).toBe(path.join(nvmBin, 'omp'));
   });
 
   test('installs OpenChamber into a home-owned npm prefix instead of the root-owned global one', async () => {
@@ -454,7 +454,7 @@ printf '4321\\n'`);
       appVersion: '1.2.3',
       emit: () => undefined,
     });
-    manager.resolveRemoteTool = async () => '/home/pi/.opencode/bin/opencode';
+    manager.resolveRemoteTool = async () => '/home/pi/.omp/bin/omp';
     manager.runRemoteCommand = async (_parsed, _controlPath, script) => {
       started = script;
       return '4321\n';
@@ -471,11 +471,11 @@ printf '4321\\n'`);
 
     expect(port).toBe(4321);
     expect(started).toContain("'/home/pi/.openchamber/npm-global/bin/openchamber' serve");
-    expect(started).toContain("OPENCODE_BINARY='/home/pi/.opencode/bin/opencode'");
-    expect(started).toContain('$HOME/.opencode/bin:');
+    expect(started).toContain("OPENCHAMBER_OMP_PATH='/home/pi/.omp/bin/omp'");
+    expect(started).toContain('$HOME/.omp/bin:');
   });
 
-  test('refuses to start when the remote machine has no opencode CLI', async () => {
+  test('refuses to start when the remote machine has no omp CLI', async () => {
     const manager = new ElectronSshManager({
       settingsFilePath: path.join(os.tmpdir(), 'unused-settings.json'),
       appVersion: '1.2.3',
@@ -492,7 +492,7 @@ printf '4321\\n'`);
       { id: 'ssh-1', auth: {}, remoteOpenchamber: { mode: 'managed' } },
       4321,
       '/home/pi/.bun/bin/openchamber',
-    )).rejects.toThrow(/opencode CLI is not installed/);
+    )).rejects.toThrow(/omp CLI is not installed.*@oh-my-pi\/pi-coding-agent/s);
   });
   test('prefers a bun that only exists in the home directory over npm', async () => {
     const commands = [];
@@ -540,7 +540,7 @@ printf '4321\\n'`);
       appVersion: '1.2.3',
       emit: () => undefined,
     });
-    manager.resolveRemoteTool = async () => '/home/pi/.opencode/bin/opencode';
+    manager.resolveRemoteTool = async () => '/home/pi/.omp/bin/omp';
     let started = '';
     manager.runRemoteCommand = async (_parsed, _controlPath, script) => {
       started = script;
@@ -580,7 +580,7 @@ printf '4321\\n'`);
         appVersion: '1.2.3',
         emit: () => undefined,
       });
-      manager.resolveRemoteTool = async () => '/home/pi/.opencode/bin/opencode';
+      manager.resolveRemoteTool = async () => '/home/pi/.omp/bin/omp';
       manager.remoteOpenChamberCandidates = async () => [{ binPath: '/home/pi/.bun/bin/openchamber', version: '1.2.3' }];
       manager.runRemoteCommand = async (_parsed, _controlPath, script) => {
         const probedPort = script.match(/127\.0\.0\.1:(\d+)\/api\/system\/info/);

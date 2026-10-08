@@ -8,12 +8,12 @@ Node runtime. Its Git commands use Node `child_process` and `simple-git`, not
 
 | Owner | Children and workload | End of ownership |
 |---|---|---|
-| `web/server/lib/opencode/lifecycle.js` | One managed `opencode serve`; Windows package-manager shims are resolved by `env-runtime.js` | Failed startup, restart, or backend shutdown closes the owned process tree. An explicit external OpenCode is not stopped. |
-| OpenCode | Agent shell tools, MCP servers, repository discovery, snapshots, and other upstream work | OpenCode owns command completion and cancellation. Managed server teardown also stops its descendants. |
+| `web/server/lib/agents/` + `packages/omp-adapter` | One `omp --mode rpc` process per session, plus the in-process `@openchamber/web` server | Failed startup, per-session close, or backend shutdown disposes the owned RPC process. A remote instance's server is externally owned. |
+| OMP | Agent shell tools, MCP servers, repository discovery, snapshots, and other upstream work | OMP owns command completion and cancellation. Managed session teardown also stops its descendants. |
 | `web/server/lib/git/service.js` | Git status, diff, branch and worktree reads plus explicit mutations | Command completion. Status includes several subprocesses and runs at most once per directory at a time (see the git module documentation); branch discovery can contact remotes. Git never waits on a terminal prompt: `GIT_TERMINAL_PROMPT=0` makes an unanswerable credential prompt fail instead of holding a hidden console open. These commands are independent of the selected terminal shell. |
 | `web/server/lib/fs/` | `git check-ignore` during file listing and search; explicit background exec jobs | Ignore checks finish with the command. Exec jobs have their own deadline. |
 | `web/server/lib/terminal/runtime.js` | `node-pty` on Electron, with ConPTY on Windows; interactive shells and command-mode project actions | Exit, explicit close, force-kill, idle cleanup, or backend shutdown. Pending creates and restarts retain ownership until cleanup finishes. |
-| `electron/main.mjs` | In-process backend and native SSH lifecycle | Quit, relaunch, and update installation await backend cleanup. A detached OpenCode killer remains a bounded-failure fallback. |
+| `electron/main.mjs` | In-process backend and native SSH lifecycle | Quit, relaunch, and update installation await backend cleanup. |
 
 Git refreshes also follow completed agent tools, visible repository views, and
 sidebar status requests. Client-side coalescing does not own server subprocess
@@ -28,15 +28,15 @@ Git entries, and multiple Console Window Hosts. The second contains the same
 group count without resource columns. Neither supplies PIDs, command lines,
 parent PIDs, or an exit timeline. The screenshots cannot attribute those
 processes to one launch path. The reported growth over normal use and the
-standalone OpenCode comparison remain important observations.
+standalone agent comparison remain important observations.
 
-Desktop 1.23.2 pins OpenCode 1.18.31. Binary selection can override that pin
-through settings or environment before considering the bundled CLI. The
-controlled macOS run verified the staged CLI reports 1.18.31 and used Electron
-43.7.0 with Node 24.21.0. The OpenCode release source pins Bun 1.3.14; this is
-not the version of Node executing OpenChamber's own Git launches.
+Desktop pins the OMP CLI (`DEFAULT_OMP_CLI_VERSION` in
+`packages/electron/scripts/omp-cli-version.mjs`), which `prepare:omp-cli` stages
+as a standalone binary; environment overrides can point the server at another
+build. The historical controlled macOS run used Electron 43.7.0 with Node
+24.21.0.
 
-The referenced OpenCode issues 30495 and 11527 were closed for inactivity.
+The referenced upstream issues 30495 and 11527 were closed for inactivity.
 Bun PR 34694 fixes inline-terminal final-output/ConDrv reference handling and
 was merged after Bun 1.3.14. It does not establish a cause for this report.
 `windowsHide` controls visibility and `unref` controls parent event-loop
@@ -66,7 +66,7 @@ liveness; neither establishes that children exit.
 - Desktop exited without calling the embedded backend's `stop()`. In real
   macOS Electron, three terminal commands ignoring SIGHUP and SIGTERM stayed
   alive and exit failed to finish within ten seconds. Awaiting backend teardown
-  closed all three and the managed OpenCode before Electron exited. This was
+  closed all three and the managed child before Electron exited. This was
   checked with both HMR and bundled UI, the same CLI, isolated profiles, and
   ten successful status reads plus ten directory listings per run. Ordinary
   commands accepting SIGHUP exited in both versions; that control alone did not

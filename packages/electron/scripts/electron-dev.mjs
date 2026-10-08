@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../../..');
 const electronDir = path.join(repoRoot, 'packages/electron');
-const bundledOpenCodeCliDir = path.join(electronDir, 'resources', 'opencode-cli');
+const bundledOmpCliDir = path.join(electronDir, 'resources', 'omp-cli');
 const preferredHmrUiPort = Number(process.env.OPENCHAMBER_HMR_UI_PORT || '5173');
 const preferredHmrApiPort = Number(process.env.OPENCHAMBER_HMR_API_PORT || '3901');
 
@@ -47,20 +47,20 @@ function spawnProcess(command, args, options = {}) {
   });
 }
 
-// Packaged builds resolve the staged OpenCode CLI through process.resourcesPath.
+// Packaged builds resolve the staged OMP CLI through process.resourcesPath.
 // In development that path points at Electron's own resources, so hand the
 // staged directory to the backend explicitly: the dev app must run the same
-// OpenCode the release ships, not whatever `opencode` sits on PATH.
-function resolveBundledOpenCodeCliEnv() {
-  const binary = path.join(bundledOpenCodeCliDir, process.platform === 'win32' ? 'opencode.exe' : 'opencode');
+// OMP the release ships, not whatever `omp` sits on PATH.
+function resolveBundledOmpCliEnv() {
+  const binary = path.join(bundledOmpCliDir, process.platform === 'win32' ? 'omp.exe' : 'omp');
   if (!fs.existsSync(binary)) {
     console.warn(
-      `[electron:dev] bundled OpenCode CLI missing at ${binary}; falling back to PATH. ` +
-        'Run `bun run --cwd packages/electron prepare:opencode-cli` to stage it.',
+      `[electron:dev] staged OMP CLI missing at ${binary}; falling back to PATH. ` +
+        'Run `bun run --cwd packages/electron prepare:omp-cli` to stage it.',
     );
     return {};
   }
-  return { OPENCHAMBER_BUNDLED_OPENCODE_CLI_DIR: bundledOpenCodeCliDir };
+  return { OPENCHAMBER_BUNDLED_OMP_CLI_DIR: bundledOmpCliDir };
 }
 
 function ensureElectronInstalled() {
@@ -221,7 +221,7 @@ async function main() {
   let hmrUiPort = '';
 
   ensureElectronInstalled();
-  const bundledOpenCodeCliEnv = resolveBundledOpenCodeCliEnv();
+  const bundledOmpCliEnv = resolveBundledOmpCliEnv();
 
   if (useBundledUi) {
     await runProcess('bun', ['run', '--cwd', 'packages/electron', 'build:web-assets']);
@@ -231,7 +231,7 @@ async function main() {
     devServer = spawnProcess('node', ['./scripts/dev-web-hmr.mjs'], {
       env: {
         ...process.env,
-        ...bundledOpenCodeCliEnv,
+        ...bundledOmpCliEnv,
         OPENCHAMBER_ELECTRON_DEV: '1',
         OPENCHAMBER_HMR_UI_PORT: hmrUiPort,
         OPENCHAMBER_HMR_API_PORT: hmrApiPort,
@@ -244,7 +244,7 @@ async function main() {
     cwd: electronDir,
     env: {
       ...process.env,
-      ...bundledOpenCodeCliEnv,
+      ...bundledOmpCliEnv,
       OPENCHAMBER_ELECTRON_DEV: '1',
       ...(useBundledUi ? { OPENCHAMBER_ELECTRON_USE_BUNDLED_UI: '1' } : {}),
       OPENCHAMBER_HMR_UI_PORT: hmrUiPort,

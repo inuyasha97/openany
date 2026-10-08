@@ -3,23 +3,22 @@
  * Stage the OMP standalone binary for the desktop build.
  *
  * OMP ships prebuilt Bun-embedded executables per platform on GitHub releases.
- * Mirrors prepare-opencode-cli.mjs: download the matching artifact, verify it
- * runs, stage under resources/omp-cli, ship via extraResources. The server
- * spawns it with `--mode rpc`.
+ * Download the matching artifact, verify it runs, stage under resources/omp-cli,
+ * ship via extraResources. The server spawns it with `--mode rpc`.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readPinnedOmpCliVersion } from './omp-cli-version.mjs';
 import { resolveTargetArchitecture } from './target-architecture.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const electronRoot = path.resolve(__dirname, '..');
 const outputDir = path.join(electronRoot, 'resources', 'omp-cli');
 const cacheRoot = path.join(electronRoot, '.cache', 'omp-cli');
-const OMP_CLI_VERSION = process.env.OPENCHAMBER_OMP_CLI_VERSION || '18.1.11';
 
-const arch = () => resolveTargetArchitecture().opencode; // 'arm64' | 'x64'
+const arch = () => resolveTargetArchitecture().cli; // 'arm64' | 'x64'
 const artifactForPlatform = (platform, a) => {
   if (platform === 'win32') return { name: `omp-windows-${a}.exe`, binary: 'omp.exe' };
   const os = platform === 'darwin' ? 'darwin' : 'linux';
@@ -34,17 +33,17 @@ const readVersion = (binaryPath) => {
 };
 
 const main = async () => {
-  if (!/^\d+\.\d+\.\d+/.test(OMP_CLI_VERSION)) throw new Error(`Invalid OMP CLI version: ${OMP_CLI_VERSION}`);
+  const version = readPinnedOmpCliVersion();
   const artifact = artifactForPlatform(process.platform, arch());
   const outputBinary = path.join(outputDir, artifact.binary);
-  const tag = OMP_CLI_VERSION.startsWith('v') ? OMP_CLI_VERSION : `v${OMP_CLI_VERSION}`;
-  const cacheDir = path.join(cacheRoot, OMP_CLI_VERSION, `${process.platform}-${arch()}`);
+  const tag = version.startsWith('v') ? version : `v${version}`;
+  const cacheDir = path.join(cacheRoot, version, `${process.platform}-${arch()}`);
   const archivePath = path.join(cacheDir, artifact.name);
   const url = `https://github.com/can1357/oh-my-pi/releases/download/${tag}/${artifact.name}`;
 
   fs.mkdirSync(cacheDir, { recursive: true });
   if (!fs.existsSync(archivePath)) {
-    console.log(`[electron] downloading OMP CLI ${OMP_CLI_VERSION}: ${artifact.name}`);
+    console.log(`[electron] downloading OMP CLI ${version}: ${artifact.name}`);
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Failed to download ${url}: ${response.status} ${response.statusText}`);
     fs.writeFileSync(archivePath, Buffer.from(await response.arrayBuffer()));
@@ -59,7 +58,7 @@ const main = async () => {
 
   const prepared = readVersion(outputBinary);
   if (!prepared) throw new Error(`Prepared OMP binary did not run: ${outputBinary}`);
-  console.log(`[electron] prepared OMP CLI ${OMP_CLI_VERSION}: ${outputBinary} (${prepared})`);
+  console.log(`[electron] prepared OMP CLI ${version}: ${outputBinary} (${prepared})`);
 };
 
 main().catch((error) => {
