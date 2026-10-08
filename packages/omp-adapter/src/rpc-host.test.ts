@@ -1,7 +1,20 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, test } from "bun:test"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import type { OmpRpcChild } from "./rpc-client"
 import type { OmpSessionStore } from "./session-store"
 import { createOmpHost, resolveOmpCommand } from "./rpc-host"
+
+/**
+ * A real directory to open sessions in: `openSession` refuses a cwd that does
+ * not exist (`session_directory_missing`), so a literal path like `/repo` makes
+ * the suite pass or fail by machine.
+ */
+const WORK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omp-host-"))
+afterAll(() => {
+  fs.rmSync(WORK_DIR, { recursive: true, force: true })
+})
 
 type FakeChild = {
   child: OmpRpcChild
@@ -50,7 +63,7 @@ const lastFrame = (fake: { written: string[] }) => JSON.parse(fake.written.at(-1
 const openFakeSession = async (
   fake: FakeChild,
   store: OmpSessionStore = emptyStore(),
-  input: { cwd?: string } = { cwd: "/repo" },
+  input: { cwd?: string } = { cwd: WORK_DIR },
   readFile: (file: string) => string = () => "",
 ) => {
   const host = createOmpHost({ spawn: () => fake.child, store, readFile })
@@ -113,7 +126,7 @@ describe("createOmpHost", () => {
 
   test("records the parent session when creating a fork", async () => {
     const fake = fakeChild()
-    const openPromise = createOmpHost({ spawn: () => fake.child, store: emptyStore() }).openSession({ cwd: "/repo", parentSession: "/s/parent.jsonl" })
+    const openPromise = createOmpHost({ spawn: () => fake.child, store: emptyStore() }).openSession({ cwd: WORK_DIR, parentSession: "/s/parent.jsonl" })
     fake.emit(JSON.stringify({ type: "ready" }))
     await Promise.resolve()
     const created = lastFrame(fake)
@@ -194,7 +207,7 @@ describe("createOmpHost", () => {
       timestamp: "2026-01-01T00:00:00.000Z",
       message: { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1000 },
     })
-    const { host, handle } = await openFakeSession(fake, emptyStore(), { cwd: "/repo" }, () => sessionText)
+    const { host, handle } = await openFakeSession(fake, emptyStore(), { cwd: WORK_DIR }, () => sessionText)
 
     // The cut is the UI's projected id; the host asks OMP which entries it will
     // branch at, then maps the cut's timestamp onto the session file's entry id.
@@ -308,7 +321,7 @@ describe("createOmpHost", () => {
       move: async () => { throw new Error("unused") },
     }
     const host = createOmpHost({ spawn: () => fake.child, store })
-    const handlePromise = host.openSession({ cwd: "/repo" })
+    const handlePromise = host.openSession({ cwd: WORK_DIR })
     fake.emit(JSON.stringify({ type: "ready" }))
     await Promise.resolve()
     const stateReq = lastFrame(fake)
@@ -428,5 +441,34 @@ describe("resolveOmpCommand", () => {
 
   test("falls back to the PATH lookup name", () => {
     expect(resolveOmpCommand({ env: {}, resourcesPath: null, exists: () => false })).toBe("omp")
+  })
+})
+
+describe("a session whose directory is gone", () => {
+  test("openSession names the directory instead of blaming the binary", async () => {
+    let spawned = 0
+    const host = createOmpHost({ spawn: () => { spawned += 1; return fakeChild().child }, store: emptyStore() })
+
+    await expect(host.openSession({ cwd: "/definitely/not/a/directory" }))
+      .rejects.toThrow(/folder no longer exists: \/definitely\/not\/a\/directory/)
+    // Nothing was spawned: the failure is decided before the process starts.
+    expect(spawned).toBe(0)
+  })
+
+  test("the error carries the code the routes map to a 409", async () => {
+    const host = createOmpHost({ spawn: () => fakeChild().child, store: emptyStore() })
+    const error = await host.openSession({ cwd: "/definitely/not/a/directory" }).catch((caught) => caught)
+    expect(error).toMatchObject({ code: "session_directory_missing", directory: "/definitely/not/a/directory" })
+  })
+
+  test("a directory that exists still opens", async () => {
+    const fake = fakeChild()
+    const host = createOmpHost({ spawn: () => fake.child, store: emptyStore() })
+    const pending = host.openSession({ cwd: os.tmpdir() })
+    fake.emit(JSON.stringify({ type: "ready" }))
+    await Promise.resolve()
+    const req = lastFrame(fake)
+    fake.emit(JSON.stringify({ id: req.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_1" } }))
+    await expect(pending).resolves.toMatchObject({ id: "ses_1" })
   })
 })

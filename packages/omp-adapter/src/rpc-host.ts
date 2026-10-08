@@ -138,6 +138,38 @@ export const resolveOmpCommand = (options: ResolveOmpCommandOptions = {}): strin
   return explicit[0] ?? "omp"
 }
 
+/**
+ * A session's own directory is gone — a deleted project, a moved folder, a temp
+ * directory that was cleaned up.
+ *
+ * OMP starts an agent in the session's directory, and it refuses to move a
+ * process to a different one (`switch_session` answers `{ cancelled: true }`,
+ * verified against the pinned CLI). So a session whose directory no longer
+ * exists cannot be opened at all: there is no directory to start in, and no
+ * other directory OMP would accept. This error names that, because the raw
+ * failure Node produces for a missing working directory — `ENOENT: no such file
+ * or directory, posix_spawn 'omp'` — reads as a missing agent binary, and is not
+ * one.
+ */
+export class OmpSessionDirectoryMissingError extends Error {
+  readonly code = "session_directory_missing"
+  readonly directory: string
+  constructor(directory: string) {
+    super(`This session's folder no longer exists: ${directory}. OMP cannot open a session whose folder is gone.`)
+    this.name = "OmpSessionDirectoryMissingError"
+    this.directory = directory
+  }
+}
+
+/** A cwd has to be a directory that exists; a missing one makes Node blame the command. */
+const isExistingDirectory = (directory: string): boolean => {
+  try {
+    return fs.statSync(directory).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
   const command = options.command ?? resolveOmpCommand({ env: options.env })
   const args = options.args ?? ["--mode", "rpc"]
@@ -155,7 +187,13 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
   // Askable frames OMP is still waiting on, keyed by the current session id.
   const pendings = new Map<string, Map<string, OmpPendingRequest>>()
 
-  const spawnClient = (cwd?: string) => new OmpRpcClient({ command, args, cwd, env: options.env, spawn })
+  const spawnClient = (cwd?: string) => {
+    // Node reports a missing working directory as `ENOENT … posix_spawn
+    // '<command>'`, which blames the binary. Name the real cause instead of
+    // letting that reach the caller.
+    if (cwd !== undefined && !isExistingDirectory(cwd)) throw new OmpSessionDirectoryMissingError(cwd)
+    return new OmpRpcClient({ command, args, cwd, env: options.env, spawn })
+  }
 
   const withProcessClient = async <T>(run: (client: OmpRpcClient) => Promise<T>, cwd?: string): Promise<T> => {
     const client = spawnClient(cwd)

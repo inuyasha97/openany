@@ -79,6 +79,13 @@ const respondWithError = (res, error, fallbackMessage) => {
   if (isUnknownSession(error)) {
     return res.status(404).json({ error: 'Unknown OMP session' });
   }
+  if (error?.code === 'session_directory_missing') {
+    // The session's folder is gone (a deleted project, a moved folder). OMP
+    // cannot start an agent there and refuses to move a process to another
+    // directory, so there is nothing to open — say that, rather than the
+    // spawn's `ENOENT … 'omp'`, which blames the binary.
+    return res.status(409).json({ error: error.message, code: 'session_directory_missing' });
+  }
   const message = error instanceof Error ? error.message : fallbackMessage;
   return res.status(500).json({ error: message || fallbackMessage });
 };

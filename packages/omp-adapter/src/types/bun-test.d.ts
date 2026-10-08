@@ -18,8 +18,14 @@ declare module "bun:test" {
       toThrow(expected?: string | RegExp | (new (...args: never[]) => unknown)): Promise<void>
       toBeInstanceOf(expected: unknown): Promise<void>
     }
+    resolves: {
+      toMatchObject(expected: unknown): Promise<void>
+      toEqual(expected: unknown): Promise<void>
+      toBe(expected: unknown): Promise<void>
+    }
   }
   export function expect(value: unknown): ExpectResult
   export function beforeEach(fn: () => void | Promise<void>): void
   export function afterEach(fn: () => void | Promise<void>): void
+  export function afterAll(fn: () => void | Promise<void>): void
 }

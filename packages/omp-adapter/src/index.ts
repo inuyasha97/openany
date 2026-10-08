@@ -8,6 +8,7 @@ export type { OmpEventProjector } from "./mapping-events"
 export { toOmpModelInfo, toOmpSessionInfo } from "./mapping"
 export type { OmpSessionInfoLike } from "./mapping"
 export { OmpRuntime } from "./runtime"
+export { OmpSessionDirectoryMissingError } from "./rpc-host"
 export type {
   OmpContextUsage,
   OmpEvent,
