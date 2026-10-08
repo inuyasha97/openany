@@ -1,92 +1,42 @@
+/**
+ * The state that must survive a Vite HMR reload: the shutdown latch and the
+ * signal-attachment latch. Both exist so a module-graph reload does not attach
+ * a second set of signal handlers or lose the fact that a shutdown is already
+ * under way.
+ *
+ * The OpenCode-era version of this module also carried a managed process, its
+ * port, base URL, working directory, and a provider password. This fork runs no
+ * such process: the agent runtime is hosted in process, so none of those values
+ * had a writer or a reader left, and they are gone.
+ */
 export const createHmrStateRuntime = (dependencies) => {
   const {
     globalThisLike,
-    os,
-    processLike,
     stateKey,
   } = dependencies;
-
-  const getInitialOpenCodeWorkingDirectory = () => {
-    const configured = typeof processLike.env.OPENCHAMBER_OPENCODE_CWD === 'string'
-      ? processLike.env.OPENCHAMBER_OPENCODE_CWD.trim()
-      : '';
-    return configured || os.homedir();
-  };
 
   const getOrCreateHmrState = () => {
     if (!globalThisLike[stateKey]) {
       globalThisLike[stateKey] = {
-        openCodeProcess: null,
-        openCodePort: null,
-        openCodeWorkingDirectory: getInitialOpenCodeWorkingDirectory(),
         isShuttingDown: false,
         signalsAttached: false,
-        userProvidedOpenCodePassword: undefined,
-        openCodeAuthPassword: null,
-        openCodeAuthSource: null,
       };
     }
     return globalThisLike[stateKey];
   };
 
-  const ensureUserProvidedOpenCodePassword = (hmrState) => {
-    if (typeof hmrState.userProvidedOpenCodePassword !== 'undefined') {
-      return;
-    }
-    // Same precedence as OpenCode 2: OPENCODE_PASSWORD, then the legacy name.
-    const initialPassword = [processLike.env.OPENCODE_PASSWORD, processLike.env.OPENCODE_SERVER_PASSWORD]
-      .map((value) => (typeof value === 'string' ? value.trim() : ''))
-      .find((value) => value.length > 0) || '';
-    hmrState.userProvidedOpenCodePassword = initialPassword || null;
-  };
-
-  const getUserProvidedOpenCodePassword = (hmrState) => (
-    typeof hmrState.userProvidedOpenCodePassword === 'string' && hmrState.userProvidedOpenCodePassword.length > 0
-      ? hmrState.userProvidedOpenCodePassword
-      : null
-  );
-
-  const resolveOpenCodeAuthFromState = ({ hmrState, userProvidedOpenCodePassword }) => ({
-    openCodeAuthPassword:
-      typeof hmrState.openCodeAuthPassword === 'string' && hmrState.openCodeAuthPassword.length > 0
-        ? hmrState.openCodeAuthPassword
-        : userProvidedOpenCodePassword,
-    openCodeAuthSource:
-      typeof hmrState.openCodeAuthSource === 'string' && hmrState.openCodeAuthSource.length > 0
-        ? hmrState.openCodeAuthSource
-        : (userProvidedOpenCodePassword ? 'user-env' : null),
-  });
-
   const syncStateFromRuntime = (hmrState, runtime) => {
-    hmrState.openCodeProcess = runtime.openCodeProcess;
-    hmrState.openCodePort = runtime.openCodePort;
-    hmrState.openCodeBaseUrl = runtime.openCodeBaseUrl;
     hmrState.isShuttingDown = runtime.isShuttingDown;
     hmrState.signalsAttached = runtime.signalsAttached;
-    hmrState.openCodeWorkingDirectory = runtime.openCodeWorkingDirectory;
-    hmrState.openCodeAuthPassword = runtime.openCodeAuthPassword;
-    hmrState.openCodeAuthSource = runtime.openCodeAuthSource;
   };
 
-  const restoreRuntimeFromState = ({ hmrState, userProvidedOpenCodePassword }) => {
-    const auth = resolveOpenCodeAuthFromState({ hmrState, userProvidedOpenCodePassword });
-    return {
-      openCodeProcess: hmrState.openCodeProcess,
-      openCodePort: hmrState.openCodePort,
-      openCodeBaseUrl: hmrState.openCodeBaseUrl ?? null,
-      isShuttingDown: hmrState.isShuttingDown,
-      signalsAttached: hmrState.signalsAttached,
-      openCodeWorkingDirectory: hmrState.openCodeWorkingDirectory,
-      openCodeAuthPassword: auth.openCodeAuthPassword,
-      openCodeAuthSource: auth.openCodeAuthSource,
-    };
-  };
+  const restoreRuntimeFromState = ({ hmrState }) => ({
+    isShuttingDown: hmrState.isShuttingDown,
+    signalsAttached: hmrState.signalsAttached,
+  });
 
   return {
     getOrCreateHmrState,
-    ensureUserProvidedOpenCodePassword,
-    getUserProvidedOpenCodePassword,
-    resolveOpenCodeAuthFromState,
     syncStateFromRuntime,
     restoreRuntimeFromState,
   };

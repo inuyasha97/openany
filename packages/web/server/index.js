@@ -599,16 +599,13 @@ const isAgentMemoryEnabled = async () => {
   return settings?.agentMemoryToolEnabled === true;
 };
 
-// HMR-persistent state via globalThis
-// These values survive Vite HMR reloads to prevent zombie OpenCode processes
+// HMR-persistent state via globalThis: the shutdown and signal latches, which
+// must not be duplicated when a module reload replaces this graph.
 const hmrStateRuntime = createHmrStateRuntime({
   globalThisLike: globalThis,
-  os,
-  processLike: process,
   stateKey: '__openchamberHmrState',
 });
 const hmrState = hmrStateRuntime.getOrCreateHmrState();
-hmrStateRuntime.ensureUserProvidedOpenCodePassword(hmrState);
 
 // Non-HMR state (safe to reset on reload)
 let healthCheckInterval = null;
@@ -639,47 +636,24 @@ let realtimeProxyRuntime = null;
 let relayServiceInstance = null;
 let relayReconcileTimer = null;
 let messageStreamRuntime = null;
-const userProvidedOpenCodePassword = hmrStateRuntime.getUserProvidedOpenCodePassword(hmrState);
-const initialOpenCodeAuthState = hmrStateRuntime.resolveOpenCodeAuthFromState({
-  hmrState,
-  userProvidedOpenCodePassword,
-});
-let openCodeAuthPassword = initialOpenCodeAuthState.openCodeAuthPassword;
-let openCodeAuthSource = initialOpenCodeAuthState.openCodeAuthSource;
 
 // Sync helper - call after modifying any HMR state variable
 const syncToHmrState = () => {
   hmrStateRuntime.syncStateFromRuntime(hmrState, {
-    openCodeProcess,
-    openCodePort,
-    openCodeBaseUrl,
     isShuttingDown,
     signalsAttached,
-    openCodeAuthPassword,
-    openCodeAuthSource,
   });
 };
 
 // Sync helper - call to restore state from HMR (e.g., on module reload)
 const syncFromHmrState = () => {
-  const restored = hmrStateRuntime.restoreRuntimeFromState({
-    hmrState,
-    userProvidedOpenCodePassword,
-  });
-  openCodeProcess = restored.openCodeProcess;
-  openCodePort = restored.openCodePort;
-  openCodeBaseUrl = restored.openCodeBaseUrl;
+  const restored = hmrStateRuntime.restoreRuntimeFromState({ hmrState });
   isShuttingDown = restored.isShuttingDown;
   signalsAttached = restored.signalsAttached;
-  openCodeAuthPassword = restored.openCodeAuthPassword;
-  openCodeAuthSource = restored.openCodeAuthSource;
 };
 
 // Module-level variables that shadow HMR state
 // These are synced to/from hmrState to survive HMR reloads
-let openCodeProcess = hmrState.openCodeProcess;
-let openCodePort = hmrState.openCodePort;
-let openCodeBaseUrl = hmrState.openCodeBaseUrl ?? null;
 let isShuttingDown = hmrState.isShuttingDown;
 let signalsAttached = hmrState.signalsAttached;
 
@@ -1757,7 +1731,7 @@ async function main(options = {}) {
   // user can see is exactly a port the tunnel will dial.
   const devServerScanner = createDevServerScanner({ spawn, platform: process.platform });
   const listDevServers = () => devServerScanner.discover({
-    ownPorts: [port, openCodePort].filter((value) => Number.isInteger(value) && value > 0),
+    ownPorts: [port].filter((value) => Number.isInteger(value) && value > 0),
   });
 
   createDevTunnelRuntime({
@@ -1810,7 +1784,7 @@ async function main(options = {}) {
     writeConfig,
     // Dev-server discovery must not offer OpenChamber's own listeners back to
     // the user as something to preview.
-    getOwnPorts: () => [port, openCodePort].filter((value) => Number.isInteger(value) && value > 0),
+    getOwnPorts: () => [port].filter((value) => Number.isInteger(value) && value > 0),
     devServerScanner,
     buildAugmentedPath,
     projectConfigRuntime,
