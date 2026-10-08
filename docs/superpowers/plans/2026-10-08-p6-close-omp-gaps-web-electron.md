@@ -273,14 +273,18 @@ Expected: PASS, including new cases for the 400 and the happy path.
 
 - [ ] **Step 7: Write the failing UI test for the effort control**
 
+`ModelControls.tsx` takes no `models` prop — it reads the selected provider and its models from `useConfigStore`. Seed the store and assert against the rendered component:
+
 ```ts
 test("a model without thinking offers no effort control", () => {
-  render(<ModelControls models={[{ id: "m1", provider: "p", reasoning: false, efforts: [] }]} />);
+  seedStore({ currentProvider: { id: "p", models: [{ id: "m1", reasoning: false, efforts: [] }] }, currentModelId: "m1" });
+  render(<ModelControls />);
   expect(screen.queryByTestId("effort-select")).toBeNull();
 });
 
 test("a model with efforts offers exactly those levels", () => {
-  render(<ModelControls models={[{ id: "m1", provider: "p", reasoning: true, efforts: ["low", "high"], defaultLevel: "low" }]} />);
+  seedStore({ currentProvider: { id: "p", models: [{ id: "m1", reasoning: true, efforts: ["low", "high"], defaultLevel: "low" }] }, currentModelId: "m1" });
+  render(<ModelControls />);
   expect(screen.getByTestId("effort-select").children).toHaveLength(2);
 });
 ```
@@ -506,6 +510,19 @@ test("a failed branch leaves the original session selected", async () => { /* 40
 ---
 
 ### Task 6: Delete the promises OMP cannot keep
+
+**Corrected during implementation.** The plan assumed the revert, turn-diff and
+agent-list call sites were dead. They are not: `stageRevert`/`commitRevert`/
+`clearRevert` back the revert machinery, `getSessionTurnDiff` backs the diff
+view's turn scope, and `listAgents` backs the Agents settings page. Deleting
+the methods would delete whole features, which is not this task's call.
+`selectAgent` had no callers and is gone; `sendSyntheticMessage` never existed.
+
+The task is therefore: **gate each affordance on its capability flag** so it is
+never offered when the runtime cannot back it (revert and the turn-diff scope
+hidden, the Agents page's list explained or the page hidden), delete only what
+is genuinely unreachable, and keep the guard test that every advertised
+capability maps to an implemented method.
 
 **Files:**
 - Modify: `packages/ui/src/lib/agent/contract.ts`, `omp-runtime.ts`, `packages/ui/src/lib/agent/testing/opencode-stub-runtime.ts`
