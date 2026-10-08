@@ -199,7 +199,7 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
      },
 
     openchamber: {
-      displayName: 'OpenChamber',
+      displayName: 'OpenAny',
       category: 'system',
       outputLanguage: 'json',
       inputFields: []
