@@ -216,12 +216,12 @@ export const createSettingsHelpers = (dependencies) => {
       }
     }
 
-    // Absolute path to the opencode CLI binary (optional override).
+    // Absolute path to the omp CLI binary (optional override).
     // Accept empty-string to clear (we persist an empty string sentinel so the running
     // process can reliably drop a previously applied OPENCODE_BINARY override).
-    if (typeof candidate.opencodeBinary === 'string') {
-      const normalized = normalizeDirectoryPath(candidate.opencodeBinary).trim();
-      result.opencodeBinary = normalized;
+    if (typeof candidate.ompBinary === 'string') {
+      const normalized = normalizeDirectoryPath(candidate.ompBinary).trim();
+      result.ompBinary = normalized;
     }
     if (typeof candidate.workStatusPanelEnabled === 'boolean') {
       result.workStatusPanelEnabled = candidate.workStatusPanelEnabled;

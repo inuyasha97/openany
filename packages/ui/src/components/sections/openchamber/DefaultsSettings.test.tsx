@@ -72,7 +72,7 @@ mock.module('@/sync/session-ui-store', () => ({
 mock.module('@/lib/runtime-fetch', () => ({
   runtimeFetch: async (input: string) => {
     if (String(input).includes('/api/config/settings')) {
-      return new Response(JSON.stringify({ warming: false }), {
+      return new Response(JSON.stringify({}), {
         headers: { 'Content-Type': 'application/json' },
       });
     }

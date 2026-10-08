@@ -13,9 +13,9 @@ import { desktopHostsGet, desktopHostsSet } from '@/lib/desktopHosts';
 import { useI18n } from '@/lib/i18n';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 
-const INSTALL_COMMAND = 'curl -fsSL https://opencode.ai/v2/install | bash';
-const WINDOWS_INSTALL_COMMAND = 'npm install -g @opencode/cli';
-const DOCS_URL = 'https://opencode.ai/download';
+const INSTALL_COMMAND = 'bun install -g @oh-my-pi/pi-coding-agent';
+const WINDOWS_INSTALL_COMMAND = 'bun install -g @oh-my-pi/pi-coding-agent';
+const DOCS_URL = 'https://omp.sh';
 const POLL_INTERVAL_MS = 2500;
 
 type OnboardingPlatform = 'macos' | 'linux' | 'windows' | 'unknown';
@@ -34,11 +34,9 @@ function InstallCommand({ windows, onCopy, copyTitle }: { windows: boolean; onCo
           <span style={{ color: 'var(--syntax-keyword)' }}>{WINDOWS_INSTALL_COMMAND}</span>
         ) : (
           <>
-            <span style={{ color: 'var(--syntax-keyword)' }}>curl</span>
-            <span className="text-muted-foreground"> -fsSL </span>
-            <span style={{ color: 'var(--syntax-string)' }}>https://opencode.ai/v2/install</span>
-            <span className="text-muted-foreground"> | </span>
-            <span style={{ color: 'var(--syntax-keyword)' }}>bash</span>
+            <span style={{ color: 'var(--syntax-keyword)' }}>bun</span>
+            <span className="text-muted-foreground"> install -g </span>
+            <span style={{ color: 'var(--syntax-string)' }}>@oh-my-pi/pi-coding-agent</span>
           </>
         )}
       </code>
@@ -60,7 +58,7 @@ export function ChooserScreen({ onCliAvailable, localAvailable = true }: Chooser
   const [isDesktopApp, setIsDesktopApp] = React.useState(false);
   const [isApplyingPath, setIsApplyingPath] = React.useState(false);
   const [isManualChecking, setIsManualChecking] = React.useState(false);
-  const [opencodeBinary, setOpencodeBinary] = React.useState('');
+  const [ompBinary, setOmpBinary] = React.useState('');
   const [platform, setPlatform] = React.useState<OnboardingPlatform>('unknown');
   const [activeTab, setActiveTab] = React.useState<'local' | 'remote'>(() => localAvailable ? 'local' : 'remote');
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
@@ -89,8 +87,8 @@ export function ChooserScreen({ onCliAvailable, localAvailable = true }: Chooser
       try {
         const data = await loadDesktopSettings();
         if (!data || cancelled) return;
-        const value = data.opencodeBinary ?? '';
-        if (value) setOpencodeBinary(value);
+        const value = data.ompBinary ?? '';
+        if (value) setOmpBinary(value);
       } catch {
         // ignore
       }
@@ -115,7 +113,7 @@ export function ChooserScreen({ onCliAvailable, localAvailable = true }: Chooser
       const response = await runtimeFetch('/health');
       if (!response.ok) return false;
       const data = await response.json();
-      return data.openCodeRunning === true || data.isOpenCodeReady === true;
+      return data.isAgentReady === true;
     } catch {
       return false;
     }
@@ -190,7 +188,7 @@ export function ChooserScreen({ onCliAvailable, localAvailable = true }: Chooser
     try {
       const selected = await requestFileAccess();
       if (selected.success && selected.path && selected.path.trim().length > 0) {
-        setOpencodeBinary(selected.path.trim());
+        setOmpBinary(selected.path.trim());
       }
     } catch {
       // ignore
@@ -200,7 +198,7 @@ export function ChooserScreen({ onCliAvailable, localAvailable = true }: Chooser
   const handleApplyPath = React.useCallback(async () => {
     setIsApplyingPath(true);
     try {
-      await updateDesktopSettings({ opencodeBinary: opencodeBinary.trim() });
+      await updateDesktopSettings({ ompBinary: ompBinary.trim() });
       if (isDesktopApp) {
         await persistFirstChoice('local');
         await restartDesktopApp();
@@ -210,7 +208,7 @@ export function ChooserScreen({ onCliAvailable, localAvailable = true }: Chooser
     } finally {
       setTimeout(() => setIsApplyingPath(false), 1000);
     }
-  }, [isDesktopApp, opencodeBinary, persistFirstChoice]);
+  }, [isDesktopApp, ompBinary, persistFirstChoice]);
 
   const handleCopy = React.useCallback(async () => {
     const result = await copyTextToClipboard(platform === 'windows' ? WINDOWS_INSTALL_COMMAND : INSTALL_COMMAND);
@@ -225,10 +223,10 @@ export function ChooserScreen({ onCliAvailable, localAvailable = true }: Chooser
   const docsUrl = DOCS_URL;
   const binaryPlaceholder =
     platform === 'windows'
-      ? 'C:\\Users\\you\\AppData\\Roaming\\npm\\opencode.cmd'
+      ? 'C:\\Users\\you\\.bun\\bin\\omp.exe'
       : platform === 'linux'
-        ? '/home/you/.opencode/bin/opencode'
-        : '/Users/you/.opencode/bin/opencode';
+        ? '/home/you/.bun/bin/omp'
+        : '/Users/you/.bun/bin/omp';
 
   const showLocal = localAvailable && (!isDesktopApp || activeTab === 'local');
 
@@ -354,8 +352,8 @@ export function ChooserScreen({ onCliAvailable, localAvailable = true }: Chooser
                 <div className="space-y-2 pb-4">
                   <div className="flex gap-2">
                     <Input
-                      value={opencodeBinary}
-                      onChange={(e) => setOpencodeBinary(e.target.value)}
+                      value={ompBinary}
+                      onChange={(e) => setOmpBinary(e.target.value)}
                       placeholder={binaryPlaceholder}
                       disabled={isApplyingPath}
                       className="flex-1 font-mono text-xs"
@@ -363,7 +361,7 @@ export function ChooserScreen({ onCliAvailable, localAvailable = true }: Chooser
                     <Button type="button" variant="secondary" size="sm" onClick={handleBrowse} disabled={isApplyingPath || !isDesktopApp}>
                       {t('onboarding.localSetup.actions.browse')}
                     </Button>
-                    <Button type="button" size="sm" onClick={handleApplyPath} disabled={isApplyingPath || !opencodeBinary.trim()}>
+                    <Button type="button" size="sm" onClick={handleApplyPath} disabled={isApplyingPath || !ompBinary.trim()}>
                       {t('onboarding.localSetup.actions.apply')}
                     </Button>
                   </div>

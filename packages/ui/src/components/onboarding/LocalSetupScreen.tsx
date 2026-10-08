@@ -9,9 +9,9 @@ import { restartDesktopApp } from '@/lib/desktop';
 import { useI18n } from '@/lib/i18n';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 
-const INSTALL_COMMAND = 'curl -fsSL https://opencode.ai/v2/install | bash';
-const WINDOWS_INSTALL_COMMAND = 'npm install -g @opencode/cli';
-const DOCS_URL = 'https://opencode.ai/download';
+const INSTALL_COMMAND = 'bun install -g @oh-my-pi/pi-coding-agent';
+const WINDOWS_INSTALL_COMMAND = 'bun install -g @oh-my-pi/pi-coding-agent';
+const DOCS_URL = 'https://omp.sh';
 
 type OnboardingPlatform = 'macos' | 'linux' | 'windows' | 'unknown';
 
@@ -34,11 +34,9 @@ function InstallCommand({ windows, onCopy, copyTitle }: { windows: boolean; onCo
           <span style={{ color: 'var(--syntax-keyword)' }}>{WINDOWS_INSTALL_COMMAND}</span>
         ) : (
           <>
-            <span style={{ color: 'var(--syntax-keyword)' }}>curl</span>
-            <span className="text-muted-foreground"> -fsSL </span>
-            <span style={{ color: 'var(--syntax-string)' }}>https://opencode.ai/v2/install</span>
-            <span className="text-muted-foreground"> | </span>
-            <span style={{ color: 'var(--syntax-keyword)' }}>bash</span>
+            <span style={{ color: 'var(--syntax-keyword)' }}>bun</span>
+            <span className="text-muted-foreground"> install -g </span>
+            <span style={{ color: 'var(--syntax-string)' }}>@oh-my-pi/pi-coding-agent</span>
           </>
         )}
       </code>
@@ -69,7 +67,7 @@ export function LocalSetupScreen({
   const [isRetrying, setIsRetrying] = React.useState(false);
   const [isChecking, setIsChecking] = React.useState(false);
   const [checkError, setCheckError] = React.useState<string | null>(null);
-  const [opencodeBinary, setOpencodeBinary] = React.useState('');
+  const [ompBinary, setOmpBinary] = React.useState('');
   const [platform, setPlatform] = React.useState<OnboardingPlatform>('unknown');
 
   React.useEffect(() => {
@@ -109,9 +107,9 @@ export function LocalSetupScreen({
       try {
         const data = await loadDesktopSettings();
         if (!data || cancelled) return;
-        const value = data.opencodeBinary ?? '';
+        const value = data.ompBinary ?? '';
         if (value) {
-          setOpencodeBinary(value);
+          setOmpBinary(value);
         }
       } catch {
         // ignore
@@ -137,7 +135,7 @@ export function LocalSetupScreen({
       const response = await runtimeFetch('/health');
       if (!response.ok) return false;
       const data = await response.json();
-      return data.openCodeRunning === true || data.isOpenCodeReady === true;
+      return data.isAgentReady === true;
     } catch {
       return false;
     }
@@ -154,7 +152,7 @@ export function LocalSetupScreen({
     try {
       const selected = await requestFileAccess();
       if (selected.success && selected.path && selected.path.trim().length > 0) {
-        setOpencodeBinary(selected.path.trim());
+        setOmpBinary(selected.path.trim());
       }
     } catch {
       // ignore
@@ -164,7 +162,7 @@ export function LocalSetupScreen({
   const handleApplyPath = React.useCallback(async () => {
     setIsRetrying(true);
     try {
-      await updateDesktopSettings({ opencodeBinary: opencodeBinary.trim() });
+      await updateDesktopSettings({ ompBinary: ompBinary.trim() });
 
       // In desktop boot flow, restart the app so the native host can
       // re-evaluate the boot outcome with the updated binary path.
@@ -177,7 +175,7 @@ export function LocalSetupScreen({
     } finally {
       setTimeout(() => setIsRetrying(false), 1000);
     }
-  }, [isDesktopApp, opencodeBinary]);
+  }, [isDesktopApp, ompBinary]);
 
   const handleCopy = React.useCallback(async () => {
     const result = await copyTextToClipboard(platform === 'windows' ? WINDOWS_INSTALL_COMMAND : INSTALL_COMMAND);
@@ -210,10 +208,10 @@ export function LocalSetupScreen({
   const docsUrl = DOCS_URL;
   const binaryPlaceholder =
     platform === 'windows'
-      ? 'C:\\Users\\you\\AppData\\Roaming\\npm\\opencode.cmd'
+      ? 'C:\\Users\\you\\.bun\\bin\\omp.exe'
       : platform === 'linux'
-        ? '/home/you/.opencode/bin/opencode'
-        : '/Users/you/.opencode/bin/opencode';
+        ? '/home/you/.bun/bin/omp'
+        : '/Users/you/.bun/bin/omp';
 
   return (
     <div
@@ -300,8 +298,8 @@ export function LocalSetupScreen({
             <div className="text-sm text-muted-foreground">{t('onboarding.localSetup.field.alreadyInstalled')}</div>
             <div className="flex gap-2">
               <Input
-                value={opencodeBinary}
-                onChange={(e) => setOpencodeBinary(e.target.value)}
+                value={ompBinary}
+                onChange={(e) => setOmpBinary(e.target.value)}
                 placeholder={binaryPlaceholder}
                 disabled={isRetrying}
                 className="flex-1 font-mono text-xs"

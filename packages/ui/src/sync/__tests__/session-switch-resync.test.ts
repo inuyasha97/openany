@@ -300,13 +300,13 @@ describe("OpenChamber-native frames", () => {
     autoAcceptSnapshots.length = 0
   })
 
-  test("raises the restart-interrupted toast and dispatches the agent-completion notification", () => {
+  test("dispatches the agent-completion notification for a global frame", () => {
     const childStores = new ChildStoreManager()
     const routingIndex = createEventRoutingIndex()
     const event: SyncEvent = {
       type: "openchamber.notification",
       properties: {
-        kind: "opencode-restart-interrupted",
+        kind: "agent-completion",
         sessionId: "ses_a",
         directory: "/repo",
         title: "Agent finished",
@@ -318,13 +318,13 @@ describe("OpenChamber-native frames", () => {
     try {
       handleEvent("global", event, childStores, routingIndex, getRuntimeKey())
 
-      expect(infoToasts.map((entry) => entry.id)).toEqual(["opencode-restart-interrupted"])
+      expect(infoToasts).toHaveLength(0)
       expect(agentCompletions).toHaveLength(1)
       expect(agentCompletions[0]).toMatchObject({
         title: "Agent finished",
         body: "The turn completed",
         tag: "ses_a",
-        kind: "opencode-restart-interrupted",
+        kind: "agent-completion",
         sessionId: "ses_a",
         directory: "/repo",
         requireHidden: false,

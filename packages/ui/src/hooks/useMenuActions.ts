@@ -9,7 +9,6 @@ import { useUpdateStore } from '@/stores/useUpdateStore';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { sessionEvents } from '@/lib/sessionEvents';
 import { createWorktreeSession } from '@/lib/worktreeSessionCreator';
-import { showOpenCodeStatus } from '@/lib/openCodeStatus';
 import { addSelectionToChat } from '@/lib/addSelectionToChat';
 
 const getActiveElementSelectedText = (): string => {
@@ -90,8 +89,7 @@ type MenuAction =
   | 'next-session'
   | 'previous-project'
   | 'next-project'
-  | 'help-dialog'
-  | 'download-logs';
+  | 'help-dialog';
 
 export const useMenuActions = (
   onToggleMemoryDebug?: () => void
@@ -321,13 +319,6 @@ export const useMenuActions = (
         case 'help-dialog':
           toggleHelpDialog();
           break;
-
-        case 'download-logs': {
-          void showOpenCodeStatus().catch(() => {
-            toast.error('Failed to collect OpenCode status');
-          });
-          break;
-        }
       }
     },
     [

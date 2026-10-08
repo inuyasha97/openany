@@ -8,7 +8,6 @@ const SETTINGS_ENDPOINT = '/api/config/settings';
 // (the packaged desktop shell and the phone app are cross-origin, and an
 // older instance would refuse an unknown header).
 const settingsEndpoint = (): string => `${SETTINGS_ENDPOINT}?${SETTINGS_SURFACE_QUERY}=${getSettingsSurface()}`;
-const RELOAD_ENDPOINT = '/api/config/reload';
 
 const sanitizePayload = (data: unknown): SettingsPayload => {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid settings response');
@@ -50,14 +49,5 @@ export const createWebSettingsAPI = (): SettingsAPI => ({
 
     const payload = sanitizePayload(await response.json());
     return payload;
-  },
-
-  async restartOpenCode(): Promise<{ restarted: boolean }> {
-    const response = await runtimeFetch(RELOAD_ENDPOINT, { method: 'POST' });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: response.statusText }));
-      throw new Error(error.error || 'Failed to restart OpenCode');
-    }
-    return { restarted: true };
   },
 });

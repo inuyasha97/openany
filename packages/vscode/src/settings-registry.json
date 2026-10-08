@@ -28,7 +28,7 @@
     "homeDirectory": {
       "scope": "instance"
     },
-    "opencodeBinary": {
+    "ompBinary": {
       "scope": "instance"
     },
     "projects": {
@@ -153,9 +153,6 @@
     "routingFeatureAvailable": {
       "scope": "instance",
       "computed": true
-    },
-    "openCodeUpdateToastDismissedVersion": {
-      "scope": "instance"
     },
     "autoDeleteEnabled": {
       "scope": "instance"
@@ -547,9 +544,6 @@
       "scope": "profile"
     },
     "notificationTemplates": {
-      "scope": "profile"
-    },
-    "showOpenCodeUpdateNotifications": {
       "scope": "profile"
     },
     "reportUsage": {

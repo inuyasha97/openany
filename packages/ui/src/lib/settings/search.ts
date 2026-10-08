@@ -441,13 +441,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['delete', 'confirmation'],
   },
   {
-    id: 'sessions.warming',
-    page: 'sessions',
-    titleKey: 'settings.openchamber.defaults.field.sessionWarming',
-    descriptionKey: 'settings.openchamber.defaults.field.sessionWarmingInfo',
-    keywords: ['warming', 'warm', 'cache', 'prompt cache', 'keep-alive', 'idle'],
-  },
-  {
     id: 'sessions.permission-default',
     page: 'sessions',
     titleKey: 'settings.sessions.permissions.defaultMode',
@@ -580,27 +573,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     descriptionKey: 'settings.openchamber.desktopNetwork.field.allowLanAccessDescription',
     keywords: ['desktop', 'lan', 'network', 'phone', 'tablet'],
     isAvailable: (ctx) => ctx.isDesktopLocalOrigin,
-  },
-  {
-    id: 'sessions.opencode-binary',
-    page: 'general',
-    titleKey: 'settings.openchamber.opencodeCli.field.binaryPath',
-    keywords: ['opencode', 'cli', 'binary', 'path'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.opencode-restart',
-    page: 'general',
-    titleKey: 'settings.openchamber.opencodeCli.actions.restart',
-    keywords: ['opencode', 'restart', 'reload', 'plugin'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.opencode-update-notifications',
-    page: 'general',
-    titleKey: 'settings.openchamber.opencodeCli.field.showUpdateNotifications',
-    keywords: ['opencode', 'cli', 'updates'],
-    isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
     id: 'sessions.agent-control-tool',

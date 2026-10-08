@@ -1,8 +1,6 @@
 import React from 'react';
 import { Icon } from '@/components/icon/Icon';
-import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/i18n';
-import { showOpenCodeStatus } from '@/lib/openCodeStatus';
 import { getLastConversationMessage, type Message, type Part, type Session } from '@/lib/opencode/model';
 import { useLatestSessionError } from '@/sync/notification-store';
 import { useDirectoryStore, useSessionStatus, useSessionStatusSnapshotReady } from '@/sync/sync-context';
@@ -177,19 +175,15 @@ export const SessionErrorNotice: React.FC<SessionErrorNoticeProps> = ({ sessionI
 
   let title: string;
   let detail: string;
-  let hasDetails = true;
   if (reportedError) {
     title = t('chat.sessionError.title');
-    hasDetails = Boolean(reportedError.error?.message);
     const message = reportedError.error?.message ?? t('chat.sessionError.noDetails');
     detail = reportedError.error?.name ? `${reportedError.error.name}: ${message}` : message;
   } else if (storedFailureApplies) {
     title = storedFailure.outcome === 'interrupted' ? t('chat.sessionError.interrupted') : t('chat.sessionError.title');
-    hasDetails = storedFailure.parentToolError !== null;
     detail = storedFailure.parentToolError ?? t('chat.sessionError.noDetails');
   } else {
     title = t('chat.sessionError.noReply');
-    hasDetails = false;
     detail = t('chat.sessionError.noDetails');
   }
 
@@ -208,18 +202,6 @@ export const SessionErrorNotice: React.FC<SessionErrorNoticeProps> = ({ sessionI
             <div className="mt-1 pl-[1.375rem] typography-meta text-muted-foreground break-words">{visibleText}</div>
           )}
         </LongErrorText>
-        {!hasDetails ? (
-          <div className="pl-[1.375rem]">
-            <Button
-              variant="link"
-              size="xs"
-              onClick={() => { void showOpenCodeStatus(); }}
-              className="-ml-2 normal-case"
-            >
-              {t('chat.sessionError.showStatus')}
-            </Button>
-          </div>
-        ) : null}
       </div>
     </div>
   );

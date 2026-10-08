@@ -102,7 +102,6 @@ import { getRuntimeLiveStatusSeed, LIVE_STATUS_TTL_MS } from "./runtime-live-mem
 import { getRuntimeKey } from "@/lib/runtime-switch"
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
 import { isFilesystemError } from "@/lib/api/files-errors"
-import { formatMessage, useI18nStore } from "@/lib/i18n"
 import { sessionEvents } from "@/lib/sessionEvents"
 import { listGlobalSessionPages, splitGlobalSessionsByArchived, type SessionPageLister } from "@/stores/globalSessions"
 import { areRequestArraysReferentiallyEqual, collectScopedBlockingRequests } from "./scoped-blocking-requests"
@@ -560,35 +559,13 @@ const trimmedOrUndefined = (value: string | undefined): string | undefined => {
 
 /**
  * OpenChamber's own notification frame: the agent-completion notice for
- * desktop, VS Code and mobile (the web surface has its own stream), plus the
- * toast raised when a managed OpenCode restart interrupted a turn.
+ * desktop, VS Code and mobile (the web surface has its own stream).
  */
 const handleUiNotificationEvent = (notification: OpenchamberNotification, fallbackDirectory: string): void => {
   const kind = trimmedOrUndefined(notification.kind)
   const sessionId = trimmedOrUndefined(notification.sessionId)
   const directory = trimmedOrUndefined(notification.directory)
     ?? (fallbackDirectory !== "global" ? fallbackDirectory : "")
-
-  if (kind === "opencode-restart-interrupted") {
-    const dictionary = useI18nStore.getState().dictionary
-    const title = formatMessage(dictionary, "chat.toast.opencodeRestartInterrupted.title")
-    const options = {
-      id: "opencode-restart-interrupted",
-      description: formatMessage(dictionary, "chat.toast.opencodeRestartInterrupted.description"),
-      duration: Infinity,
-    }
-    if (sessionId && directory) {
-      toast.info(title, {
-        ...options,
-        action: {
-          label: formatMessage(dictionary, "chat.toast.opencodeRestartInterrupted.openSession"),
-          onClick: () => openSessionFromToast(sessionId, directory),
-        },
-      })
-    } else {
-      toast.info(title, options)
-    }
-  }
 
   // The local desktop shell already delivered this one natively.
   if (

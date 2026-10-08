@@ -2,7 +2,7 @@
  * OpenChamber client.
  *
  * The OpenChamber-owned surface the shared UI depends on: the directory
- * cursor, the server's filesystem routes (`/api/fs/*`, `/api/opencode/directory`),
+ * cursor, the server's filesystem routes (`/api/fs/*`),
  * the host's session-status snapshots, the runtime transport, and the server's
  * own health. Every call goes through `runtimeFetch`, so it follows the active
  * runtime's URL, credentials and relay.
@@ -416,7 +416,7 @@ class OpenChamberService {
 
   async createDirectory(
     dirPath: string,
-    options?: { allowOutsideWorkspace?: boolean; asProject?: boolean },
+    options?: { allowOutsideWorkspace?: boolean },
   ): Promise<{ success: boolean; path: string }> {
     const desktopFiles = getDesktopFilesApi()
     if (desktopFiles?.createDirectory) {
@@ -426,24 +426,6 @@ class OpenChamberService {
         const message = error instanceof Error ? error.message : String(error)
         throw new Error(message || "Failed to create directory")
       }
-    }
-
-    if (options?.asProject) {
-      const response = await runtimeFetch(`${this.baseUrl}/opencode/directory`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ path: dirPath, create: true }),
-      })
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: "Failed to create project directory" }))
-        throw new Error(error.error || "Failed to create project directory")
-      }
-
-      const result = await response.json()
-      return { success: true, path: result.path }
     }
 
     const payload = {

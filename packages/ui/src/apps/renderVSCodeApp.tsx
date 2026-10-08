@@ -6,7 +6,6 @@ import '@/index.css';
 import '@/lib/debug';
 import { SessionAuthGate } from '@/components/auth/SessionAuthGate';
 import { ThemeProvider } from '@/components/providers/ThemeProvider';
-import { OpenCodeCompatibilityGate } from '@/components/update/OpenCodeCompatibilityGate';
 import { ThemeSystemProvider } from '@/contexts/ThemeSystemContext';
 import type { RuntimeAPIs } from '@/lib/api/types';
 import { startAppearanceAutoSave } from '@/lib/appearanceAutoSave';
@@ -50,9 +49,7 @@ export function renderVSCodeApp(apis: RuntimeAPIs) {
         <ThemeSystemProvider>
           <ThemeProvider>
             <SessionAuthGate>
-              <OpenCodeCompatibilityGate>
-                <VSCodeApp apis={apis} />
-              </OpenCodeCompatibilityGate>
+              <VSCodeApp apis={apis} />
             </SessionAuthGate>
           </ThemeProvider>
         </ThemeSystemProvider>

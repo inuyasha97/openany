@@ -915,64 +915,6 @@ export async function refreshAfterOpenCodeRestart(options?: {
   await performConfigRefresh(options);
 }
 
-export async function reloadOpenCodeConfiguration(options?: {
-  message?: string;
-  delayMs?: number;
-  scopes?: ConfigChangeScope[];
-  mode?: ConfigRefreshMode;
-}) {
-  startConfigUpdate(options?.message || "Reloading OpenCode configuration…");
-
-  try {
-
-    const response = await runtimeFetch('/api/config/reload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-
-    const payload = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      const message = payload?.error || 'Failed to reload configuration';
-      throw new Error(message);
-    }
-
-    if (payload?.requiresManualRestart) {
-      finishConfigUpdate();
-      const error = new Error(
-        payload?.message || 'Restart your connected OpenCode server to apply the changes.',
-      );
-      (error as Error & { requiresManualRestart?: boolean }).requiresManualRestart = true;
-      throw error;
-    }
-
-    const refreshOptions = {
-      ...options,
-      scopes: options?.scopes ?? ["all"],
-      mode: options?.mode ?? "projects",
-    };
-
-    if (payload?.requiresReload) {
-      await refreshAfterOpenCodeRestart({
-        ...refreshOptions,
-        message: payload.message,
-        delayMs: payload.reloadDelayMs,
-      });
-    } else {
-      await refreshAfterOpenCodeRestart(refreshOptions);
-    }
-  } catch (error) {
-    console.error('[reloadOpenCodeConfiguration] Failed:', error);
-    if ((error as Error & { requiresManualRestart?: boolean })?.requiresManualRestart) {
-      throw error;
-    }
-    updateConfigUpdateMessage('Failed to reload configuration. Please try again.');
-    await sleep(2000);
-    finishConfigUpdate();
-    throw error;
-  }
-}
-
 let unsubscribeAgentsConfigChanges: (() => void) | null = null;
 
 if (!unsubscribeAgentsConfigChanges) {

@@ -499,7 +499,7 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
         handleClose();
         return;
       } else if (shouldCreateSelection) {
-        await openChamberClient.createDirectory(target, { asProject: true });
+        await openChamberClient.createDirectory(target);
       }
       const project = await addProject(selectedTarget);
       if (!project) {

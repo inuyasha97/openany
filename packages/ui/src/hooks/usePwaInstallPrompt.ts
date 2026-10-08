@@ -4,7 +4,6 @@ import { isWebRuntime } from '@/lib/desktop';
 import { usePwaDetection } from '@/hooks/usePwaDetection';
 import { useI18n } from '@/lib/i18n';
 import { getDeferredSafeStorage, getSafeSessionStorage } from '@/stores/utils/safeStorage';
-import { shouldShowPwaInstallToast } from '@/components/update/openCodeUpdateDedup';
 
 type InstallPromptOutcome = 'accepted' | 'dismissed';
 
@@ -15,6 +14,18 @@ type BeforeInstallPromptEvent = Event & {
 
 const INSTALL_TOAST_SESSION_KEY = 'pwa-install-toast-shown';
 const INSTALL_TOAST_DISMISSED_KEY = 'pwa-install-toast-dismissed';
+
+/**
+ * Three gates, any failure short-circuits: a persistent dismissal wins for all
+ * future visits, a per-tab flag avoids re-showing inside the same browsing
+ * session, and the re-entrancy guard stops a second toast when the effect
+ * already owns one.
+ */
+const shouldShowPwaInstallToast = (input: {
+  dismissed: string | null;
+  sessionShown: string | null;
+  hasActiveToast: boolean;
+}): boolean => input.dismissed !== 'true' && input.sessionShown !== 'true' && !input.hasActiveToast;
 
 export const usePwaInstallPrompt = () => {
   const { browserTab } = usePwaDetection();

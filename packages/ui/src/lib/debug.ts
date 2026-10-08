@@ -14,7 +14,6 @@ import {
 import { useSessionWorktreeStore } from '@/sync/session-worktree-store';
 import { getRecentSendFailures } from '@/sync/send-failure-log';
 import { getRecentSessionErrors } from '@/sync/session-error-log';
-import { buildOpenCodeStatusReport } from '@/lib/openCodeStatus';
 import { getAttachedSessionDirectory } from '@/sync/session-worktree-contract';
 import { useStreamingStore } from '@/sync/streaming';
 import { runtimeFetch } from '@/lib/runtime-fetch';
@@ -264,14 +263,13 @@ export const debugUtils = {
     };
 
     let settingsInfo: unknown = null;
-    let opencodeHealth: unknown = null;
+    let health: unknown = null;
 
     settingsInfo = await safeFetchJson('/api/config/settings');
 
     try {
-      // OpenChamber's own health route. Every field read below
-      // (`openCodePort`, `openCodeRunning`, `isOpenCodeReady`, ...) is
-      // OpenChamber's; OpenCode 2.0.8 removed `/api/health` entirely.
+      // OpenChamber's own health route: raw transport facts plus the runtime's
+      // agent-readiness flag.
       const resp = await runtimeFetch('/health');
       const contentType = resp.headers.get('content-type') || '';
       const body = await safeText(resp);
@@ -287,21 +285,16 @@ export const debugUtils = {
           parsed = null;
         }
       }
-      opencodeHealth = {
+      health = {
         status: resp.status,
         ok: resp.ok,
         contentType,
         type: isJson ? 'json' : 'html',
-        openCodePort: parsed?.openCodePort ?? null,
-        openCodeRunning: parsed?.openCodeRunning ?? null,
-        openCodeSecureConnection: parsed?.openCodeSecureConnection ?? null,
-        openCodeAuthSource: parsed?.openCodeAuthSource ?? null,
-        isOpenCodeReady: parsed?.isOpenCodeReady ?? null,
-        lastOpenCodeError: parsed?.lastOpenCodeError ?? null,
+        isAgentReady: parsed?.isAgentReady ?? null,
         preview: body ? body.slice(0, 120) : null,
       };
     } catch (error) {
-      opencodeHealth = { error: error instanceof Error ? error.message : String(error) };
+      health = { error: error instanceof Error ? error.message : String(error) };
     }
 
     let gitCheck: { isGitRepo: boolean | null; error?: string } = { isGitRepo: null };
@@ -329,7 +322,7 @@ export const debugUtils = {
         isVSCode: Boolean(runtimeApis?.runtime?.isVSCode),
         hasRuntimeApis: Boolean(runtimeApis),
         desktopServerOrigin: null,
-        health: opencodeHealth,
+        health,
       },
       location: typeof window !== 'undefined'
         ? {
@@ -380,16 +373,6 @@ export const debugUtils = {
 
     console.log('[DEBUG] App status snapshot:', report);
     return report;
-  },
-
-  /**
-   * The same text the status report dialog ("Show OpenCode status") shows, for a
-   * console or remote session that cannot press the shortcut.
-   */
-  async statusReport() {
-    const text = await buildOpenCodeStatusReport();
-    console.log(text);
-    return text;
   },
 
   /**

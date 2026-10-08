@@ -1,4 +1,3 @@
-import { OpenCodeCompatibilityGate } from '@/components/update/OpenCodeCompatibilityGate';
 import React from 'react';
 import { AppStartupOverlay } from '@/components/ui/AppStartupOverlay';
 import { MainLayout } from '@/components/layout/MainLayout';
@@ -70,10 +69,9 @@ import {
 import { SyncAppEffects } from '@/apps/AppEffects';
 import { resetAppForRuntimeEndpointChange } from '@/apps/runtimeEndpointReset';
 import { useAppFontEffects } from '@/apps/useAppFontEffects';
-import { OpenCodeUpdateToast } from '@/components/update/OpenCodeUpdateToast';
 import { ProjectConfigErrorToast } from '@/components/projects/ProjectConfigErrorToast';
 import { markStartupTrace, startupTraceEnabled } from '@/lib/startupTrace';
-import { fetchStartupDiagnostics, getInitRecoveryDescriptionKey, type StartupDiagnostics } from '@/lib/startupDiagnostics';
+import { getInitRecoveryDescriptionKey } from '@/lib/startupDiagnostics';
 
 // Lazy-loaded heavy views — loaded on demand to reduce initial bundle size.
 const OnboardingScreen = lazyWithChunkRecovery(() =>
@@ -96,56 +94,21 @@ const StartupInitializationRecovery: React.FC<{
   isRetrying: boolean;
 }> = ({ onRetry, isRetrying }) => {
   const { t } = useI18n();
-  const [diagnostics, setDiagnostics] = React.useState<StartupDiagnostics | null>(null);
-
-  React.useEffect(() => {
-    const controller = new AbortController();
-    const runtimeKey = getRuntimeKey();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    void fetchStartupDiagnostics(controller.signal).then((result) => {
-      if (!controller.signal.aborted && getRuntimeKey() === runtimeKey) {
-        setDiagnostics(result);
-      }
-    }).catch(() => {
-      // Keep generic recovery when the server cannot supply current diagnostics.
-    }).finally(() => clearTimeout(timeout));
-    return () => {
-      controller.abort();
-      clearTimeout(timeout);
-    };
-  }, []);
 
   const failure = useConfigStore((s) => s.lastInitFailure);
-  // Server diagnostics outrank the client's guess: they prove the server answered.
-  const failureMessage = diagnostics ? null : failure?.message ?? null;
+  const failureMessage = failure?.message ?? null;
 
   return (
     <div className="flex h-full flex-col items-center overflow-y-auto bg-background px-6 py-6 text-foreground">
       <div className="my-auto flex w-full max-w-xl shrink-0 flex-col items-center gap-4 text-center">
         <div className="flex flex-col gap-2">
           <h1 className="typography-title text-foreground">{t('startup.initRecovery.title')}</h1>
-          <p className="typography-body text-muted-foreground">{t(getInitRecoveryDescriptionKey(diagnostics, failure))}</p>
+          <p className="typography-body text-muted-foreground">{t(getInitRecoveryDescriptionKey(failure))}</p>
         </div>
         {failureMessage && (
           <dl className="w-full min-w-0 text-left" aria-live="polite">
             <dt className="typography-meta text-muted-foreground">{t('startup.initRecovery.lastError')}</dt>
             <dd className="max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-[var(--surface-muted)] px-3 py-2 font-mono typography-meta text-muted-foreground">{failureMessage}</dd>
-          </dl>
-        )}
-        {diagnostics && (
-          <dl className="w-full min-w-0 space-y-3 text-left" aria-live="polite">
-            {diagnostics.binary && (
-              <div>
-                <dt className="typography-meta text-muted-foreground">{t('startup.initRecovery.binary')}</dt>
-                <dd className="break-all font-mono typography-meta">{diagnostics.binary}</dd>
-              </div>
-            )}
-            {diagnostics.error && (
-              <div>
-                <dt className="typography-meta text-muted-foreground">{t('startup.initRecovery.error')}</dt>
-                <dd className="max-h-56 overflow-y-auto whitespace-pre-wrap break-words font-mono typography-meta text-[var(--status-error)]">{diagnostics.error}</dd>
-              </div>
-            )}
           </dl>
         )}
         <Button type="button" onClick={onRetry} disabled={isRetrying}>
@@ -252,7 +215,6 @@ const EmbeddedSessionChatContent: React.FC<{
   return (
     <>
       <SyncAppEffects embeddedBackgroundWorkEnabled={embeddedBackgroundWorkEnabled} />
-      <OpenCodeUpdateToast />
       <ChatView
         active={embeddedBackgroundWorkEnabled}
         // Always subscribe to message history in the mounted session-chat
@@ -986,7 +948,6 @@ function App({ apis }: AppProps) {
               <TooltipProvider delayDuration={300} skipDelayDuration={150}>
                 <div className={isDesktopRuntime ? 'h-full text-foreground bg-transparent' : 'h-full text-foreground bg-background'}>
                   <SyncAppEffects embeddedBackgroundWorkEnabled={embeddedBackgroundWorkEnabled} />
-                  <OpenCodeUpdateToast />
                   <ProjectConfigErrorToast />
                   <MainLayout />
                   <AppStartupOverlay ready={isInitialized && (!isDesktopRuntime || (bootOutcomeKnown && bootViewIsMain))} />
@@ -1012,5 +973,5 @@ function App({ apis }: AppProps) {
 }
 
 export default function CompatibleApp(props: AppProps) {
-  return <OpenCodeCompatibilityGate><App {...props} /></OpenCodeCompatibilityGate>;
+  return <App {...props} />;
 }
