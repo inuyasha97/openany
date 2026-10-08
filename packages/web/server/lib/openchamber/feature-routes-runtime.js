@@ -21,6 +21,10 @@ import { registerMessageQueueRoutes } from '../message-queue/runtime.js';
 import { registerRoutingPromptRewrite, registerRoutingRoutes } from '../routing/routes.js';
 import { registerSettingsUtilityRoutes } from '../openchamber/core-routes.js';
 import { registerProjectIconRoutes } from '../openchamber/project-icon-routes.js';
+import { registerConfigSettingsRoutes } from '../openchamber/config-settings-routes.js';
+import { registerConfigSnippetRoutes } from '../openchamber/config-snippet-routes.js';
+import { registerConfigSkillRoutes } from '../openchamber/config-skill-routes.js';
+import { registerConfigEntityRoutes } from '../openchamber/config-entity-routes.js';
 import { registerScheduledTaskRoutes } from '../scheduled-tasks/routes.js';
 import { registerOpenChamberSessionRoutes } from '../openchamber-sessions/routes.js';
 import { registerOpenChamberControlRoutes } from '../openchamber-control/routes.js';
@@ -41,10 +45,13 @@ const createWorktreeInstanceDisposer = (getOmpRuntime) => {
 };
 
 /**
- * Registers every OpenChamber-owned feature route. The OpenCode config-entity
- * routes (agents, commands, MCP, snippets, providers, plugins, skills) that
- * used to be registered here are gone with the OpenCode server: those config
- * files and their routes no longer exist.
+ * Registers every OpenChamber-owned feature route.
+ *
+ * The config-family routes the OpenCode server used to register here are back,
+ * served from OMP-backed storage: settings and snippets and skills (including
+ * the skill catalog), and the agent, command, MCP and AGENTS.md entity routes.
+ * What stays gone is what OMP has no home for — the OpenCode provider, plugin
+ * and websearch config routes, and the OpenCode process and proxy routes.
  */
 export const createFeatureRoutesRuntime = (dependencies) => {
   const {
@@ -102,8 +109,12 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       saveImportedTheme,
       deleteImportedTheme,
       readSettingsFromDiskMigrated,
+      readSettingsFromDisk,
+      formatSettingsResponse,
       persistSettings,
       sanitizeProjects,
+      sanitizeSkillCatalogs,
+      isUnsafeSkillRelativePath,
       getOwnPorts,
       devServerScanner,
       buildAugmentedPath,
@@ -130,6 +141,30 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       saveImportedTheme,
       deleteImportedTheme,
       clientReloadDelayMs,
+    });
+
+    // The config family: the settings document the whole UI reads and writes,
+    // the snippets and skills layers, and the agent, command, MCP and
+    // AGENTS.md entities. All of it reads and writes OMP's own files.
+    registerConfigSettingsRoutes(app, {
+      readSettingsFromDiskMigrated,
+      persistSettings,
+      formatSettingsResponse,
+    });
+
+    registerConfigSnippetRoutes(app, { resolveOptionalProjectDirectory });
+
+    registerConfigSkillRoutes(app, {
+      resolveProjectDirectory,
+      resolveOptionalProjectDirectory,
+      readSettingsFromDisk,
+      sanitizeSkillCatalogs,
+      isUnsafeSkillRelativePath,
+    });
+
+    registerConfigEntityRoutes(app, {
+      resolveProjectDirectory,
+      resolveOptionalProjectDirectory,
     });
 
     registerPermissionAutoAcceptRoutes(app, permissionAutoAcceptRuntime);

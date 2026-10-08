@@ -2,9 +2,15 @@
  * OMP MCP configuration files.
  *
  * OMP keeps MCP servers in `mcp.json` files, not behind an RPC command: a
- * user-level `<omp home>/mcp.json` and a project-level `<cwd>/.omp/mcp.json`.
+ * user-level `<agent dir>/mcp.json` and a project-level `<cwd>/.omp/mcp.json`.
  * The server reads and writes those files the way OMP does, so the MCP panel
  * works without an RPC surface.
+ *
+ * The user file is the agent directory's, not `~/.omp/mcp.json`: OMP builds its
+ * user-level candidates from the agent dir (`ls()` in its bundle returns
+ * `$s.agentDir`), so a file written beside `agent.db` is the one it loads.
+ * Both spellings OMP reads are honoured — `mcp.json` then `.mcp.json`, the
+ * canonical name winning a clash.
  *
  * Merge rules, matching OMP's own precedence:
  * - `mcpServers` are unioned, project first, user second (user wins a name).
@@ -16,11 +22,12 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { OPENCODE_CONFIG_DIR } from '../openchamber/agent-config-files.js';
 
-export const defaultOmpHome = () =>
-  process.env.OPENCHAMBER_OMP_HOME?.trim() || path.join(os.homedir(), '.omp');
+/** The directory OMP reads user MCP files from: its agent dir. */
+export const defaultOmpAgentDir = () =>
+  process.env.OPENCHAMBER_OMP_AGENT_DIR?.trim() || OPENCODE_CONFIG_DIR;
 
 /**
  * A missing file is `null`; an existing file that does not parse throws, so a
@@ -37,14 +44,38 @@ const writeJsonFile = (file, value) => {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 };
 
-export function createOmpConfig({ home } = {}) {
-  const ompHome = home ?? defaultOmpHome();
-  const userPath = path.join(ompHome, 'mcp.json');
-  const projectPath = (directory) => path.join(directory || process.cwd(), '.omp', 'mcp.json');
+/**
+ * OMP reads both spellings of each location. A missing pair is `null`; the
+ * canonical file wins a name clash and the two deny/force lists are unioned,
+ * because OMP applies both.
+ */
+const readJsonPair = (files) => {
+  const [primary, fallback] = files;
+  const secondary = readJsonFile(fallback);
+  const main = readJsonFile(primary);
+  if (!main && !secondary) return null;
+  const mergeList = (key) => [...new Set([...(secondary?.[key] ?? []), ...(main?.[key] ?? [])])];
+  const disabledServers = mergeList('disabledServers');
+  const enabledServers = mergeList('enabledServers');
+  return {
+    ...secondary,
+    ...main,
+    mcpServers: { ...(secondary?.mcpServers ?? {}), ...(main?.mcpServers ?? {}) },
+    ...(disabledServers.length > 0 ? { disabledServers } : {}),
+    ...(enabledServers.length > 0 ? { enabledServers } : {}),
+  };
+};
+
+export function createOmpConfig({ agentDir, home } = {}) {
+  const directory = agentDir ?? home ?? defaultOmpAgentDir();
+  const userPaths = [path.join(directory, 'mcp.json'), path.join(directory, '.mcp.json')];
+  const userPath = userPaths[0];
+  const projectPaths = (d) => [path.join(d, '.omp', 'mcp.json'), path.join(d, '.omp', '.mcp.json')];
+  const projectPath = (directory) => projectPaths(directory || process.cwd())[0];
 
   const listMcp = (directory) => {
-    const user = readJsonFile(userPath) ?? {};
-    const project = directory ? readJsonFile(projectPath(directory)) ?? {} : {};
+    const user = readJsonPair(userPaths) ?? {};
+    const project = directory ? readJsonPair(projectPaths(directory)) ?? {} : {};
     // OMP reads the deny and force-enable lists from the user file only: the
     // project `mcp.json` provider reads `mcpServers` and ignores both lists, so
     // honouring a project list here would report a server disabled that OMP
@@ -64,8 +95,10 @@ export function createOmpConfig({ home } = {}) {
   };
 
   const setMcpEnabled = (name, enabled) => {
-    const user = readJsonFile(userPath) ?? {};
-    const next = { ...user };
+    // The deny and force lists live in the canonical user file, whichever
+    // spelling the server itself came from: OMP applies both files' lists.
+    const user = readJsonPair(userPaths) ?? {};
+    const next = { ...readJsonFile(userPath) ?? {} };
     const disabled = new Set(user.disabledServers ?? []);
     const forced = new Set(user.enabledServers ?? []);
     if (enabled) {
@@ -83,8 +116,16 @@ export function createOmpConfig({ home } = {}) {
     return true;
   };
 
+  /** The file a name actually lives in, so an edit never duplicates it. */
+  const sourceFileFor = (name, files) => {
+    if (readJsonFile(files[0])?.mcpServers?.[name]) return files[0];
+    if (readJsonFile(files[1])?.mcpServers?.[name]) return files[1];
+    return files[0];
+  };
+
   const removeMcp = (name, scope = 'user', directory) => {
-    const file = scope === 'project' ? projectPath(directory) : userPath;
+    const files = scope === 'project' ? projectPaths(directory || process.cwd()) : userPaths;
+    const file = sourceFileFor(name, files);
     const config = readJsonFile(file);
     if (!config?.mcpServers?.[name]) return false;
     const { [name]: _removed, ...remaining } = config.mcpServers;

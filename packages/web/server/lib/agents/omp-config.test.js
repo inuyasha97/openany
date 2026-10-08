@@ -117,3 +117,33 @@ describe('createOmpConfig mutations', () => {
     ]);
   });
 });
+
+describe('createOmpConfig user file location', () => {
+  it('resolves the user file from the OMP agent dir, not from ~/.omp', async () => {
+    const { OPENCODE_CONFIG_DIR } = await import('../openchamber/agent-config-files.js');
+    const { defaultOmpAgentDir } = await import('./omp-config.js');
+
+    // OMP builds its user-level MCP candidates from the agent dir (`ls()` in
+    // its bundle returns the agent dir), so a file written one level up is a
+    // file it never reads.
+    expect(defaultOmpAgentDir()).toBe(OPENCODE_CONFIG_DIR);
+    expect(path.dirname(OPENCODE_CONFIG_DIR)).not.toBe(OPENCODE_CONFIG_DIR);
+  });
+
+  it('reads both spellings OMP reads, the canonical name winning a clash', () => {
+    write(path.join(home, '.mcp.json'), { mcpServers: { fallback: { command: 'fb' }, shared: { command: 'from-dot' } } });
+    write(path.join(home, 'mcp.json'), { mcpServers: { shared: { command: 'from-canonical' } } });
+
+    const byName = Object.fromEntries(createOmpConfig({ home }).listMcp().map((server) => [server.name, server]));
+
+    expect(Object.keys(byName).sort()).toEqual(['fallback', 'shared']);
+    expect(byName.shared.command).toBe('from-canonical');
+  });
+
+  it('removes a server from the file it actually lives in', () => {
+    write(path.join(home, '.mcp.json'), { mcpServers: { only: { command: 'x' } } });
+    expect(createOmpConfig({ home }).removeMcp('only')).toBe(true);
+    expect(read(path.join(home, '.mcp.json')).mcpServers).toEqual({});
+    expect(fs.existsSync(path.join(home, 'mcp.json'))).toBe(false);
+  });
+});

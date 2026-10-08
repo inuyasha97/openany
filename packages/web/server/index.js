@@ -613,14 +613,6 @@ hmrStateRuntime.ensureUserProvidedOpenCodePassword(hmrState);
 let healthCheckInterval = null;
 let server = null;
 let expressApp = null;
-let openCodeApiPrefix = '';
-let openCodeApiPrefixDetected = true;
-let lastOpenCodeError = null;
-let lastOpenCodeLaunchDiagnostics = null;
-let lastOpenCodeHealthFailure = null;
-let lastManagedOpenCodeProcess = null;
-let lastOpenCodeRestartDiagnostics = null;
-let isOpenCodeReady = false;
 let exitOnShutdown = true;
 let uiAuthController = null;
 // Fork-owned OMP agent runtime host; created on the first request.
@@ -708,14 +700,6 @@ const ENV_DESKTOP_NOTIFY = (() => {
   const argv1 = typeof process.argv?.[1] === 'string' ? process.argv[1] : '';
   return /openchamber-server/i.test(argv0) || /openchamber-server/i.test(argv1);
 })();
-let resolvedOpencodeBinary = null;
-let resolvedOpencodeBinarySource = null;
-let resolvedNodeBinary = null;
-let resolvedBunBinary = null;
-let useWslForOpencode = false;
-let resolvedWslBinary = null;
-let resolvedWslOpencodePath = null;
-let resolvedWslDistro = null;
 
 applyLoginShellEnvSnapshot();
 
@@ -1601,31 +1585,10 @@ async function main(options = {}) {
     gracefulShutdown,
     getHealthSnapshot: () => {
       return {
-        openCodePort,
-        openCodeRunning: false,
-        // No OpenCode connection exists in this fork, so there is nothing to
-        // secure and no auth source to name.
-        openCodeSecureConnection: false,
-        openCodeAuthSource: null,
-        openCodeApiPrefix: '',
-        openCodeApiPrefixDetected: true,
-        isOpenCodeReady,
-        lastOpenCodeError,
-        lastOpenCodeLaunchDiagnostics,
-        lastOpenCodeHealthFailure,
-        lastManagedOpenCodeProcess,
-        lastOpenCodeRestartDiagnostics,
-        opencodeBinaryResolved: resolvedOpencodeBinary || null,
-        opencodeBinarySource: resolvedOpencodeBinarySource || null,
-        opencodeLaunchBinary: null,
-        opencodeLaunchArgs: [],
-        opencodeLaunchWrapperType: null,
-        opencodeViaWsl: useWslForOpencode,
-        opencodeWslBinary: resolvedWslBinary || null,
-        opencodeWslPath: resolvedWslOpencodePath || null,
-        opencodeWslDistro: resolvedWslDistro || null,
-        nodeBinaryResolved: resolvedNodeBinary || null,
-        bunBinaryResolved: resolvedBunBinary || null,
+        // The server answers /health only while it is serving, so the answer
+        // itself is the agent-readiness signal the first-run screens and the
+        // isolated-spaces probe poll for.
+        isAgentReady: true,
         desktopNotifyEnabled: ENV_DESKTOP_NOTIFY,
         planModeExperimentalEnabled: PLAN_MODE_EXPERIMENT_ENABLED,
         apiOnly,
@@ -1840,8 +1803,12 @@ async function main(options = {}) {
     saveImportedTheme,
     deleteImportedTheme,
     readSettingsFromDiskMigrated,
+    readSettingsFromDisk,
+    formatSettingsResponse,
     persistSettings,
     sanitizeProjects,
+    sanitizeSkillCatalogs,
+    isUnsafeSkillRelativePath,
     // Dev-server discovery must not offer OpenChamber's own listeners back to
     // the user as something to preview.
     getOwnPorts: () => [port, openCodePort].filter((value) => Number.isInteger(value) && value > 0),

@@ -28,10 +28,9 @@ tunnel and static-route utilities for the web server runtime.
 - `packages/web/server/lib/opencode/bootstrap-runtime.js`: base app bootstrap runtime for status/auth/tts/notification/OpenChamber route wiring.
 - `packages/web/server/lib/opencode/network-runtime.js`: OpenCode URL construction, health-probe readiness checks, and API prefix runtime.
 - `packages/web/server/lib/opencode/project-directory-runtime.js`: request-scoped and settings-backed project directory resolution/validation runtime.
-- `packages/web/server/lib/opencode/config-entity-routes.js`: route registration for agent/command/MCP config orchestration. OpenCode 2 watches these files, so a write is live as soon as it lands and the route answers plain success.
-- `packages/web/server/lib/opencode/websearch-config.js`: writes OpenCode's `websearch` choice (`PUT /api/config/websearch` in `routes.js`; body `{ selection: false | null | "random" | "<provider id>" }`, `null` removes the key, so OpenCode falls back to the answer given in its chat consent form, which it keeps in its own store) to `OPENCODE_CONFIG` when set, else the user config. `GET /api/config/websearch` returns `{ projectPath }`: the project config whose `websearch` overrides that write (OpenCode merges user < project < `OPENCODE_CONFIG`), so Settings disables the choice and names the file instead of letting it snap back; `findWebSearchProjectOverride` in `config-v2.js` holds the rule. The pure transform is `writeWebSearchSelection` in `config-v2.js`, shared with the VS Code bridge (`api:config/websearch`).
-- `packages/web/server/lib/opencode/config-mutation-response.js`: shared response builders for applied config mutations and external manual-restart guidance.
-- `packages/web/server/lib/opencode/snippets.js`: opencode-snippets-compatible snippet file CRUD, discovery, and hashtag expansion.
+- `packages/web/server/lib/openchamber/config-entity-routes.js`: registers the OMP-backed agent/command/MCP/AGENTS.md routes. Writes land as markdown/`mcp.json` files the runtime reads itself, so the route answers plain success.
+- `packages/web/server/lib/openchamber/config-mutation-response.js`: shared response builder for applied config mutations.
+- `packages/web/server/lib/openchamber/snippets.js`: snippet file CRUD, discovery, and hashtag expansion over `~/.omp/agent/snippets` + `<project>/.omp/snippets` (legacy `~/.config/opencode` trees still read). Routes in `config-snippet-routes.js`.
 - `packages/web/server/lib/opencode/cli-options.js`: CLI/environment option parsing for server startup arguments.
 - `packages/web/server/lib/opencode/core-routes.js`: server status/system routes, auth/access guard routes, and settings utility route registration.
 - `packages/web/server/lib/opencode/shutdown-runtime.js`: graceful shutdown orchestration runtime for watcher/session/guest-services/terminal/process/server teardown.
@@ -100,7 +99,7 @@ and OpenChamber resolves the directory itself.
 - `packages/web/server/lib/opencode/session-runtime.js`: session status/attention/activity runtime for OpenCode SSE events.
 - `packages/web/server/lib/opencode/watcher.js`: global SSE watcher runtime for push/session event fanout.
 - `packages/web/server/lib/opencode/shared.js`: shared utilities for config, markdown, skills, and git helpers.
-- `packages/web/server/lib/opencode/config-v2.js`: the canonical OpenCode 2 shape layer — section-key resolution (v2 first, v1 fallback), permission map -> rule array translation, model `provider/model#variant` split/join, and the agent/command/MCP/provider/plugin entity conversions. Pure functions with no filesystem access; `packages/vscode/src/opencode-config-v2.ts` re-exports it so the web server and the extension host cannot write different files. See "Entity routes (v2 shapes)" below.
+- `packages/web/server/lib/openchamber/agent-config-files.js`: the OMP file layer (agent/command/skill paths, markdown parse/write, config layers). The OpenCode 2 shape layer (`config-v2.js`) is gone with the OpenCode server; the agent/command projections the UI still speaks live in `config-entity-routes.js`. See "Config entity routes on OMP (config-entity-routes.js)" below.
 - `packages/web/server/lib/ui-auth/ui-auth.js`: UI session authentication runtime (outside OpenCode module).
 - `packages/web/server/lib/ui-auth/ui-passkeys.js`: UI passkey storage and WebAuthn registration/authentication helpers (outside OpenCode module).
 
@@ -535,83 +534,29 @@ ConPTY or Console Window Host behavior.
   - `resolveProjectDirectory(req)`
   - `resolveOptionalProjectDirectory(req)`
 
-## Entity routes (v2 shapes)
+## Entity routes (OMP)
 
-Everything OpenChamber persists into OpenCode config now speaks OpenCode 2.
-This section is the contract the Settings UI builds on.
+Everything OpenChamber persists for agents, commands, MCP servers and the
+global behavior prompt lives in OMP's own storage (markdown files and
+`mcp.json`), not in an OpenCode config file. The "Config entity routes on OMP
+(config-entity-routes.js)" section below is the contract: file paths, entity
+projections, per-route JSON and the fields that have no OMP home.
 
-### Ownership: which directory is written
-
-OpenCode 2 still discovers the v1 directories, so OpenChamber READS all of them
-and WRITES only the v2 one:
-
-| Entity | Read from | Written to |
-|---|---|---|
-| Agents | `.opencode/{agent,agents,mode,modes}/**/*.md` | `.opencode/agents/<name>.md` |
-| Commands | `.opencode/{command,commands}/**/*.md` | `.opencode/commands/<name>.md` |
-| Skills | `.opencode/{skill,skills}/<id>/SKILL.md`, plus `.claude/skills` and `.agents/skills` | `.opencode/skills/<id>/SKILL.md` |
-| Plugin files | `.opencode/{plugin,plugins}/` — `.ts`/`.js` files and plugin package directories | `.opencode/plugins/<file>` |
-
-The same holds for the global config directory. Like OpenCode 2, agents,
-commands and skills are looked up in every `.opencode` from the working
-directory up to the worktree root, so a definition in a parent directory of a
-monorepo package counts; a nested id (`team/reviewer`) maps onto the path.
-Only files in the v2 `plugins/` directory are editable through the plugins
-page; a package directory or a v1 `plugin/` file is listed as a package that
-OpenCode loads and OpenChamber does not touch.
-
-The global config directory is what OpenCode 2 uses: `OPENCODE_CONFIG_DIR`
-when set, else `$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`. Config
-files are `opencode.json(c)` only: OpenCode 2 no longer discovers the v1-era
-`config.json`, so OpenChamber neither reads nor writes it. In a project both
-`<project>/opencode.json(c)` and `<project>/.opencode/opencode.json(c)` are
-discovered by OpenCode, `.opencode/` winning; OpenChamber reads and writes the
-highest-priority existing one (`.opencode/opencode.json` for a new file), so
-an entry that lives only in a lower file is visible through the resolved
-catalog but not editable here.
-
-### v1 read fallback policy
-
-Readers accept the v2 spelling first and fall back to the v1 spelling, because
-v2 itself still decodes the legacy keys and users will have mixed files for a
-while. When both exist for the same name, v2 wins — the precedence OpenCode's
-normalizer applies.
-
-| Entity | v2 | v1 still read |
-|---|---|---|
-| Agents | `agents` | `agent` |
-| Commands | `commands` | `command` |
-| Providers | `providers` | `provider` |
-| MCP servers | `mcp.servers` | `mcp.<name>` (each layer normalized on its own, then custom > project > user; a raw merge would let a user-file `mcp.servers.<name>` shadow a project-file `mcp.<name>` override) |
-| Plugins | `plugins` | `plugin` (including `[spec, options]` tuples) |
-| Permissions | `permissions` rule array | `permission` map, `tools` map |
-
-Writers emit v2 only. **Files are never moved.** Updating an entity that lives
-in a v1 file rewrites it at its own path in v2 shape, and a v1 JSON entry moves
-to the v2 section key inside the same file — unrelated v1 siblings are left
-alone. Every mutation response reports the `path` that changed.
-
-Two consequences worth knowing:
-
-- An agent markdown file may not mix native and legacy frontmatter keys. One
-  legacy key routes the whole file through OpenCode's v1 decoder
-  (`config/plugin/agent.ts`), which would silently drop a `permissions` array.
-  `fromAgentEntity` therefore emits native keys only.
-- Migrating a v1 provider entry drops the fields v2 accepts but ignores
-  (model `reasoning`, `attachment`, non-`deprecated` `status`, and unknown
-  custom keys). That is the documented native conversion, not data loss through
-  a bug. v1 model `interleaved` becomes `compatibility.reasoningField` the way
-  OpenCode's own migration does; the v2-only provider `canonical` and model
-  `compatibility` fields pass through every edit untouched.
-- A v1 agent `color` may be a theme name (`primary`); v2 decodes only
-  `#rrggbb` and OpenCode's migration maps anything else to `#aaaaaa`.
-  `toAgentEntity` applies the same mapping so a rewritten file stays decodable.
+The OpenCode 2 config surface is gone with the OpenCode server: there is no
+`opencode.json(c)` agent/command/provider/plugin/MCP section, no v1→v2 section
+migration, and no `/api/provider`, `/api/config/plugins`, `/api/config/websearch`
+or `/api/config/warming` route. Web search and warming had no OMP storage key at
+all; the provider and plugin routes had no production UI caller. What is kept is
+the entity *shape* the Settings stores still exchange — only the storage behind
+it changed.
 
 ### Canonical entity shapes
 
-One shape per entity, shared by the web routes and the VS Code bridge. The
-conversions live in `config-v2.js`; `packages/vscode/src/opencode-config-v2.ts`
-re-exports that module so both runtimes write identical files.
+One shape per entity, shared by the routes that serve it and the stores that
+consume it. The markdown projections live in `config-entity-routes.js`
+(`toAgentEntity` / `fromAgentEntity`, `toCommandEntity` / `fromCommandEntity`);
+they keep the OpenCode 2 spelling the Settings UI exchanged so the existing
+stores need no change. Only the storage behind the shape is OMP's.
 
 ```jsonc
 // PermissionRule — ordered array, last match wins.
@@ -619,9 +564,9 @@ re-exports that module so both runtimes write identical files.
 // skill, question, external_directory, provider.use, "*"
 { "action": "shell", "resource": "git push *", "effect": "ask" }  // effect: allow | deny | ask
 
-// AgentEntity
+// AgentEntity — frontmatter of agents/<name>.md; `system` is the markdown body.
 {
-  "system": "Review for correctness.",   // markdown body for .md agents
+  "system": "Review for correctness.",
   "description": "Reviewer",
   "model": "anthropic/claude-sonnet-4-5#high",
   "mode": "primary",                     // primary | subagent | all
@@ -633,54 +578,28 @@ re-exports that module so both runtimes write identical files.
   "permissions": [ /* PermissionRule */ ]
 }
 
-// CommandEntity
+// CommandEntity — frontmatter of commands/<name>.md; `template` is the body.
 {
-  "template": "Review the current changes.",  // markdown body for .md commands
+  "template": "Review the current changes.",
   "description": "Review",
   "agent": "reviewer",
   "model": "anthropic/claude-sonnet-4-5#high",
   "subagent": true
 }
 
-// McpEntity — `type` is required; v2 drops a v1 entry that only had `enabled`
+// McpEntity — projected from an OMP `mcpServers` entry; `type` is `local` or
+// `remote`. See the mapping table below for which fields OMP carries.
 { "type": "local", "command": ["npx", "@playwright/mcp"], "cwd": "…",
-  "environment": {}, "disabled": false, "codemode": true,
-  "timeout": { "startup": 0, "catalog": 30000, "execution": 30000 } }
+  "environment": {}, "disabled": false, "timeout": { "execution": 30000 } }
 { "type": "remote", "url": "https://mcp.example.com", "headers": {},
   "oauth": { "client_id": "…", "client_secret": "…", "scope": "…",
              "callback_port": 4242, "redirect_uri": "…" },
-  "disabled": false, "timeout": { "catalog": 30000, "execution": 30000 } }
-
-// ProviderEntity
-{
-  "canonical": "openai",                 // v2-only: built-in provider this entry inherits from
-  "name": "Campus LLM",
-  "package": "aisdk:@ai-sdk/openai-compatible",
-  "env": ["CAMPUS_KEY"],
-  "settings": { "baseURL": "https://llm.example.edu/v1" },
-  "headers": {}, "body": {},
-  "models": {
-    "fast-model": {
-      "modelID": "fast-model", "name": "Fast", "family": "…", "package": "aisdk:…",
-      "compatibility": { "reasoningField": "reasoning_content", "requireReasoning": true, "maxTokensField": "max_tokens" },
-      "settings": {}, "headers": {}, "body": {},
-      "capabilities": { "tools": true, "input": ["text","image"], "output": ["text"] },
-      "variants": [{ "id": "high", "settings": { "reasoningEffort": "high" } }],
-      "cost": { "input": 1, "output": 2, "cache": { "read": 0.1, "write": 0.2 } },
-      "limit": { "context": 200000, "output": 32000 },
-      "disabled": false
-    }
-  }
-}
-
-// PluginEntity — serialized as a bare string when there are no options
-{ "package": "./plugin/local.ts", "options": { "enabled": true } }
+  "disabled": false }
 ```
 
-`model` is always the joined string `providerID/modelID#variant`. Split it with
-`parseModelSelection(model)` → `{ providerID, modelID, variant? }` and join it
-back with `formatModelSelection(selection)`. Both are exported from
-`config-v2.js`.
+`model` is always the joined string `providerID/modelID#variant`. The
+projections split it with `parseModelSelection` and join it back with
+`formatModelSelection`.
 
 ### Request and response JSON per route
 
@@ -691,12 +610,13 @@ back with `formatModelSelection(selection)`. Both are exported from
   "scope": "project",              // project | user | null
   "isBuiltIn": false,
   "sources": {
-    "md":   { "exists": true, "path": "…/.opencode/agent/reviewer.md", "scope": "project",
-              "legacy": true,      // file uses v1-only frontmatter
+    "md":   { "exists": true, "path": "…/.omp/agents/reviewer.md", "scope": "project",
+              "legacy": true,      // file uses keys outside the native set
               "fields": ["description", "model", "permissions"] },
-    "json": { "exists": false, "path": "…/opencode.json", "scope": null,
-              "sectionKey": null,  // "agents" or "agent" when the entry exists
-              "legacy": false, "fields": [] },
+    // OMP has no JSON entity sections, so this is a typed marker, never a fake
+    // path/scope: the md/projectMd/userMd data stays in place.
+    "json": { "exists": false, "unsupported": true,
+              "code": "OMP_UNSUPPORTED_CONFIG_SECTION", "error": "…" },
     "projectMd": { "exists": true,  "path": "…" },
     "userMd":    { "exists": false, "path": "…" }
   }
@@ -706,9 +626,9 @@ back with `formatModelSelection(selection)`. Both are exported from
 `GET /api/config/agents/:name/config` — the canonical entity.
 ```jsonc
 {
-  "source": "md",                  // md | json | none
+  "source": "md",                  // md when a markdown file exists; otherwise 501
   "scope": "project",
-  "path": "…/.opencode/agent/reviewer.md",
+  "path": "…/.omp/agents/reviewer.md",
   "legacy": true,
   "config": { /* AgentEntity */ }
 }
@@ -717,7 +637,8 @@ back with `formatModelSelection(selection)`. Both are exported from
 `GET /api/config/agents/:name/permissions` — what applies to this agent.
 ```jsonc
 {
-  "global":    [ /* PermissionRule, from config `tools` + `permission` + `permissions` */ ],
+  "global":    [ /* PermissionRule; empty in practice — OMP's config.yml has no
+                    OpenCode `tools`/`permission` keys */ ],
   "agent":     [ /* PermissionRule, the agent's own rules */ ],
   "effective": [ { "action": "edit", "resource": "*", "effect": "allow", "source": "global" },
                  { "action": "edit", "resource": "*", "effect": "deny",  "source": "agent" } ],
@@ -747,27 +668,144 @@ with a `CommandEntity`.
 `subtask` is accepted as the v1 name for `subagent`.
 
 `GET /api/config/mcp` — array of `McpEntity` extended with
-`{ name, scope, sectionKey, legacy }`.
+`{ name, scope, sectionKey: "mcpServers", legacy: false }`, merged project-first
+with the user file winning a shared name.
 `GET /api/config/mcp/:name` — one such entry, or 404.
 `POST` / `PATCH` / `DELETE /api/config/mcp/:name` — body is an `McpEntity`
 (plus `scope` on create). Answers `{ success: true, message, path }`.
 
-`PUT /api/provider` — body accepts either spelling: v2 `{ package, settings,
-headers }` or v1 `{ npm, options }`. The stored entry is always a
-`ProviderEntity` under `providers`. Answers `{ providerId, path, config }`.
-`GET /api/provider/:providerId/source` reports which layers define it.
+## Config entity routes on OMP (config-entity-routes.js)
+
+`registerConfigEntityRoutes(app, dependencies)` registers the agent, command,
+MCP and global-behavior routes the OpenChamber stores drive, backed by OMP's
+own storage instead of an OpenCode server. Deps: `resolveProjectDirectory`,
+`resolveOptionalProjectDirectory` (from `project-directory-runtime.js`), and an
+optional `ompAgentDir` override that defaults to `OPENCODE_CONFIG_DIR`.
+
+Storage (all under the OMP agent directory — `~/.omp/agent`, or a profile's
+`~/.omp/profiles/<name>/agent`, overridable with `PI_CODING_AGENT_DIR`):
+
+| Entity | User path | Project path |
+|---|---|---|
+| Agents | `<agent dir>/agents/<name>.md` | `<project>/.omp/agents/<name>.md` |
+| Commands | `<agent dir>/commands/<name>.md` | `<project>/.omp/commands/<name>.md` |
+| MCP servers | `<agent dir>/mcp.json` | `<project>/.omp/mcp.json` |
+| AGENTS.md | `<agent dir>/AGENTS.md` | (read by OMP; not edited here) |
+
+Agents and commands are markdown files; a project file is found by walking
+`.omp/` from the requested directory up to the worktree root, so a definition
+in a parent directory of a monorepo package counts. Only `agents/` and
+`commands/` are written; a nested id (`team/reviewer`) maps onto the path.
+
+### The JSON half is typed-unsupported
+
+OMP's `config.yml` has no per-entity sections: there is no `opencode.json`
+agent/command/MCP entry to read or write. The deleted OpenCode routes fell back
+to one, so the port keeps the deleted control flow but surfaces the typed
+error instead of inventing a value:
+
+- `GET /:name/config` and `GET /:name/permissions` answer
+  `501 { error, code: "OMP_UNSUPPORTED_CONFIG_SECTION" }` when no markdown file
+  exists, because the OpenCode-shaped answer would have to come from the JSON
+  half. When a markdown file exists the route answers it in the same shape
+  (`source` is `"md"`; `"json"` is never produced).
+- `GET /:name` keeps the full sources envelope: `md`, `projectMd` and `userMd`
+  are real, and `json` is
+  `{ exists: false, unsupported: true, code, error }` — the markdown data stays
+  in the same shape without a fake `path`/`scope`/`fields`.
+- `POST` (create) never consults the JSON half: OMP cannot read such an entry,
+  so a differently-spelled duplicate is not a conflict. `PATCH`/`DELETE` on a
+  name with no markdown file hit the same typed error as `/config`.
+- `GET /:name/permissions` reads global rules from OMP's `config.yml` through
+  the same reader, but OMP's settings carry no OpenCode `tools`/`permission`
+  keys, so `global` is empty in practice.
+
+### MCP mapping and omissions
+
+An OMP `mcpServers.<name>` entry maps onto the UI's `McpEntity`. Fields with no
+OMP home are omitted rather than faked:
+
+| UI field | OMP backing |
+|---|---|
+| `type: "local"` | `type: "stdio"` + `command` (string) and `args` (array) |
+| `type: "remote"` | `type: "http"` (or `"sse"`) + `url` |
+| `command: [bin, ...args]` | `command` + `args` |
+| `cwd`, `environment` | `cwd`, `env` |
+| `headers`, `url` | `headers`, `url` |
+| `oauth.*` (snake_case) | `oauth.*` (camelCase: `clientId`, `clientSecret`, `scope`, `callbackPort`, `redirectUri`) |
+| `disabled` | the entry's `enabled` flag, plus the user file's `disabledServers` / `enabledServers` lists |
+| `timeout: { execution }` | the single OMP `timeout` number |
+
+Omitted — OMP's schema or the UI has no counterpart: `codemode`, `protocol`
+(OMP's `requestIdFormat` is a different concern), `timeout.startup` and
+`timeout.catalog` (OMP has one timeout), `oauth.auth_server_metadata_url`, and
+OMP's `auth` / `oauth.callbackPath` / `oauth.prompt` (no UI field). An explicit
+`oauth: false` has no OMP spelling and is dropped. A legacy `type: "sse"` server
+reads as `remote` and is rewritten as `"http"` on the next save. A create or
+update that would leave a stdio server without a `command` (or an http server
+without a `url`) is rejected — OMP's schema requires both.
+
+Like OMP, a project `mcp.json` is never rewritten for enable/disable: the
+disable lives in the user file's lists. The merged list is project-first with
+the user file winning a shared name, matching OMP's precedence.
+
+Note: `lib/agents/omp-config.js` (the `/api/agents/omp/mcp` surface) defaults
+its user file to `~/.omp/mcp.json`, while OMP's own resolver and the mcp schema
+place it at `~/.omp/agent/mcp.json` — the path these routes use.
+
+### AGENTS.md
+
+`GET /api/behavior/agents-md` answers `{ content, exists, path }`; `PUT`
+answers `{ success: true, message: "AGENTS.md saved." }`. `413` over 1 MB, and
+a `PUT` carrying `expectedContent` that no longer matches disk is refused with
+`409 { error, code: "AGENTS_MD_CONFLICT" }` instead of overwriting an edit made
+elsewhere.
 
 ## Public exports (config-entity-routes.js)
-- `registerConfigEntityRoutes(app, dependencies)`: registers configuration entity routes:
-  - Agents: `/api/config/agents/:name`, `/api/config/agents/:name/config`, `/api/config/agents/:name/permissions`
-  - Commands: `/api/config/commands/:name` and `/api/config/commands/:name/config`
-  - MCP servers: `/api/config/mcp` and `/api/config/mcp/:name`
-  - Snippets: `/api/config/snippets`, `/api/config/snippets/:name`, and `/api/config/snippets/expand`
-- Agent/command/MCP write routes persist config to disk and return plain success. OpenCode 2 watches those files and rebuilds the affected entity itself, so there is nothing left to apply.
+- `registerConfigEntityRoutes(app, dependencies)`: registers the OMP-backed config entity routes:
+  - Agents: `GET /api/config/agents/:name` (sources), `GET /api/config/agents/:name/config`, `GET /api/config/agents/:name/permissions`, `POST`/`PATCH`/`DELETE /api/config/agents/:name`
+  - Commands: the same five routes under `/api/config/commands/:name`
+  - MCP: `GET /api/config/mcp`, `GET`/`POST`/`PATCH`/`DELETE /api/config/mcp/:name`
+  - Global behavior: `GET`/`PUT /api/behavior/agents-md`
+- Agent/command writes are markdown-file CRUD in the same request/response shapes the deleted OpenCode routes served; MCP writes go to OMP's `mcp.json`. Mutations report plain applied success — the runtime reads the file itself, so nothing is left to apply.
+- The JSON config half has no OMP home and surfaces the typed `OMP_UNSUPPORTED_CONFIG_SECTION` error (see the section above).
+- Snippets are not here: they are registered by `registerConfigSnippetRoutes` (`config-snippet-routes.js`).
+
+## Public exports (config-settings-routes.js)
+- `registerConfigSettingsRoutes(app, dependencies)`: registers the settings document routes.
+  - `GET /api/config/settings` — reads the merged document through `readSettingsFromDiskMigrated({ surface: settingsSurfaceOf(req) })` and answers `formatSettingsResponse(settings)`: every registry key plus the server-computed flags (`hasManagedRemoteTunnelToken`, `hasDesktopUiPassword`, `agentMemoryFeatureAvailable`, `routingFeatureAvailable`, the LAN-access flags and the normalized device seeds). Errors are `500 { error }`.
+  - `PUT /api/config/settings` — body is a partial settings document. The whole write path is `persistSettings(body, { surface })`: it gates every key through `isPersistableSettingsKey` (registry keys only — never a computed flag, never a browser-local device field, never a desktop-shell-owned key), splits profile keys into `preferences.json` per surface kind, keeps instance keys in `settings.json`, drops secrets from the answer and returns the same shape as `GET`. Errors are `500 { error }`.
+  - The surface kind comes from `?surface=web|desktop|vscode|mobile` or the legacy `x-openchamber-surface` header (`settingsSurfaceOf`, `settings-files.js`); anything else reads the base document.
+- Deps: `readSettingsFromDiskMigrated`, `persistSettings`, `formatSettingsResponse` (all built in `index.js`).
+
+## Public exports (config-snippet-routes.js)
+- `registerConfigSnippetRoutes(app, dependencies)`: registers the snippet routes the snippets store drives. Snippets live in `~/.omp/agent/snippets` and `<project>/.omp/snippets`, with the legacy `~/.config/opencode` trees still read.
+  - `GET /api/config/snippets` — array of `{ name, content, aliases, description?, filePath, source }`.
+  - `POST /api/config/snippets/expand` — body `{ text }`, answers `{ text }` with `#name` hashtags expanded.
+  - `GET /api/config/snippets/:name` — one snippet, `404 { error }` when absent, `400` for an invalid name.
+  - `POST /api/config/snippets/:name` — body `{ content, aliases?, description?, scope? }`, answers `{ success: true, snippet }`; `409` when the name already exists, `400` for an invalid name.
+  - `PATCH /api/config/snippets/:name` — body `{ content?, aliases?, description? }`, answers `{ success: true, snippet }`; `404` / `400`.
+  - `DELETE /api/config/snippets/:name` — answers `{ success: true }`; `404` / `400`.
+  - Directory resolution is optional (`resolveOptionalProjectDirectory`): user-scoped snippets list without a project, and an unvalidatable `?directory=` is `400` rather than a silent fallback to another tree.
+- Deps: `resolveOptionalProjectDirectory`.
+
+## Public exports (config-skill-routes.js)
+- `registerConfigSkillRoutes(app, dependencies)`: registers the skill CRUD, supporting-file and catalog routes. Sources are OMP's own disk scan; there is no second authoritative skill list to merge, so the list body is `{ skills }` with no `externalSkills` / `openCodeSkillsUnavailable` flags.
+  - `GET /api/config/skills` — `{ skills: [{ name, path, scope, source, description?, content?, sources, renamable }] }`. `sources` is the `getSkillSources` envelope (`.omp`, `.opencode`, `.claude`, `.agents`, user and project), and `renamable` is the same managed-root policy `renameSkill` enforces.
+  - `GET /api/config/skills/:name` — `{ name, sources, scope, source, exists }`.
+  - `POST /api/config/skills/:name` — body `{ scope, source, description, instructions?, supportingFiles? }`; a project-scoped create requires a directory (`400` otherwise). Answers plain applied success.
+  - `PATCH /api/config/skills/:name` — `{ renameTo }` renames the skill directory and answers `{ success, message, name }`; any other body is a partial update.
+  - `DELETE /api/config/skills/:name` — deletes the skill directory.
+  - `GET|PUT|DELETE /api/config/skills/:name/files/*filePath` — read/write/delete one supporting file; an unsafe relative path is `400`, a missing skill is `404`, a permission error is `403`. `GET` answers `{ path, content }`, the writes answer `{ success, message }`.
+  - `GET /api/config/skills/catalog` — `{ ok: true, sources: [...], itemsBySource: {} }`; curated sources plus the user's `skillCatalogs` entries, enriched with GitHub stars/updated-at where the source is a GitHub repo.
+  - `GET /api/config/skills/catalog/source?sourceId=&refresh=` — `{ ok: true, items }`, each item carrying `sourceId`, `gitIdentityId` and `installed: { isInstalled, scope?, source? }`. `400` without `sourceId`, `404` for an unknown source.
+  - `POST /api/config/skills/scan` — body `{ source, subpath?, gitIdentityId? }`; `{ ok: true, items }`, `401` with the known git identities when the repo needs auth, `400` for an invalid source.
+  - `POST /api/config/skills/install` — body `{ source, subpath?, gitIdentityId?, scope, targetSource?, selections, conflictPolicy?, conflictDecisions? }`; `{ ok: true, installed, skipped, … }`, `409` on conflicts, `401` when auth is required, `400` for a project install without a directory.
+  - Skill routes are registered catalog-first so `/api/config/skills/:name` cannot swallow `catalog`, `scan` or `install`; directory resolution prefers an explicit request directory, then soft-falls back to the active project / `lastDirectory` so repository-local `.agents`/`.opencode` skills stay discoverable when the client omits `directory`.
+- Deps: `resolveProjectDirectory`, `resolveOptionalProjectDirectory`, `readSettingsFromDisk`, `sanitizeSkillCatalogs`, `isUnsafeSkillRelativePath`. The catalog/scan/install helpers are imported directly from `lib/skills-catalog/`, and git identities from `lib/git/identity-storage.js`.
 
 ## Public exports (config-mutation-response.js)
-- `buildAppliedResponse(message, details?)`: success payload for a config mutation that is already live (`{ success: true, message }`, no restart flags). `details` carries the file the write landed in (`{ path, scope, source }`) so the caller can name the config file that changed, including a v1 file rewritten in place in v2 shape.
-- `buildExternalManualRestartResponse(message)`: success payload when OpenCode is an external process and the operator must restart it manually (`requiresManualRestart: true`).
+- `buildAppliedResponse(message, details?)`: success payload for a config mutation that is already live (`{ success: true, message }`, no restart flags). `details` carries the file the write landed in (`{ path, scope, source }`) so the caller can name the config file that changed.
 
 ## Public exports (auth-state-runtime.js)
 - `createOpenCodeAuthStateRuntime(dependencies)`: creates runtime for managed OpenCode auth password state and request headers.
@@ -914,18 +952,6 @@ within a ten-minute overall deadline.
   - `PUT /api/projects/:projectId/icon`
   - `DELETE /api/projects/:projectId/icon`
   - `POST /api/projects/:projectId/icon/discover`
-
-## Public exports (skill-routes.js)
-- `registerSkillRoutes(app, dependencies)`: registers skills-related routes:
-  - Skills config CRUD and metadata under `/api/config/skills*`
-  - Skill rename via `PATCH /api/config/skills/:name` with `{ renameTo }` (directory rename preserves `SKILL.md` body and supporting files; restricted to managed skill roots under `.opencode/skills|skill`, `.claude/skills`, and `.agents/skills`)
-  - Skill list responses include authoritative `renamable` derived from the same managed-root policy used by rename
-  - Skills catalog listing/source pagination, scan, and install routes
-  - Supporting skill file read/write/delete routes
-  - Directory resolution prefers an explicit request directory, then soft-falls
-    back to the active project / `lastDirectory` so repository-local
-    `.agents/skills` and `.opencode/skills` remain discoverable when the client
-    omits `directory`. Requests without any project still list user-scoped skills.
 
 ## Public exports (proxy.js)
 - `registerOpenCodeProxy(app, dependencies)`: registers OpenCode proxy routes and middleware.
