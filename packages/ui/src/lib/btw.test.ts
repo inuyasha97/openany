@@ -205,7 +205,8 @@ describe('startBtwSession', () => {
   test('forks, marks the fork, links the parent, and routes the question to the fork', async () => {
     forkSessionImpl = (sessionId, options) => {
       expect(sessionId).toBe('parent-1');
-      // No parent turns at all: an omitted `before` forks the whole transcript.
+      // No parent turns at all: no fork point, so no cut is sent (the route
+      // refuses that body; this test only pins the call shape).
       expect(options?.before).toBeUndefined();
       return Promise.resolve(makeSession('fork-1', options?.directory ?? '/project'));
     };

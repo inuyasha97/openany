@@ -32,6 +32,21 @@ const compact = <T extends object>(value: T): T =>
 export const ompMessageId = (sessionId: string, role: string, timestamp: number): string =>
   `omp:${sessionId}:${role}:${timestamp}`
 
+/**
+ * The inverse of `ompMessageId`, for a caller that has to translate a projected
+ * id back to the message it names. Only the shape `ompMessageId` produces is
+ * accepted; a client-minted id, or an OMP session-file entry id, yields null.
+ */
+export const parseOmpMessageId = (id: string): { sessionId: string; role: string; timestamp: number } | null => {
+  const parts = id.split(":")
+  if (parts.length !== 4 || parts[0] !== "omp") return null
+  const [, sessionId, role, rawTimestamp] = parts
+  if (!sessionId || !role || rawTimestamp === "") return null
+  const timestamp = Number(rawTimestamp)
+  if (!Number.isInteger(timestamp) || timestamp < 0) return null
+  return { sessionId, role, timestamp }
+}
+
 /** The part id convention, mirrored from the UI model so both sides agree. */
 export const ompPartIds = {
   text: (messageID: string, ordinal: number) => `${messageID}:text:${ordinal}`,

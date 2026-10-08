@@ -37,6 +37,12 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
   const projectors = new Map();
   const directories = new Map();
   const announced = new Set();
+  // A fork cut is a canonical `Message.id`. A projected message carries a
+  // timestamp-derived id the adapter can resolve, but an optimistic message
+  // keeps the client's own id — so the id a prompt declared and the OMP
+  // timestamp it landed with are remembered to translate one into the other.
+  const pendingCutIds = new Map();
+  const cutTimestamps = new Map();
   // A login runs on its own short-lived process and outlives the request that
   // started it, so its reply sink is kept under a synthetic id the permission
   // route can address.
@@ -90,6 +96,8 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     projectors.delete(id);
     directories.delete(id);
     announced.delete(id);
+    pendingCutIds.delete(id);
+    cutTimestamps.delete(id);
     approvals.forget(id);
   };
 
@@ -115,6 +123,21 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
       }
       return;
     }
+    if (event.type === 'message_start' && event.message?.role === 'user') {
+      // The user message the last prompt declared has landed; remember the
+      // timestamp its projected id is built from so a fork cut naming the
+      // client's own id can still be resolved.
+      const clientId = pendingCutIds.get(sessionId);
+      if (clientId !== undefined) {
+        pendingCutIds.delete(sessionId);
+        let timestamps = cutTimestamps.get(sessionId);
+        if (!timestamps) {
+          timestamps = new Map();
+          cutTimestamps.set(sessionId, timestamps);
+        }
+        timestamps.set(clientId, event.message.timestamp);
+      }
+    }
     let events;
     try {
       events = projectorFor(sessionId).project(sessionId, event);
@@ -139,13 +162,20 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     },
 
     /**
-     * Forks the session at `entryId`. OMP branches inside the live process and
-     * re-keys the session, so the returned descriptor is the only description
-     * of the fork the runtime gives back; an unknown entry id rejects with
-     * OMP's own message and leaves the original session untouched.
+     * Forks the session at the caller's cut. The cut is a canonical
+     * `Message.id`; a projected id is resolved by the adapter, and one that is
+     * still the client's own (an optimistic user message) is first rewritten to
+     * the projected id its OMP timestamp produces. OMP branches inside the live
+     * process and re-keys the session, so the returned descriptor is the only
+     * description of the fork the runtime gives back; a cut that names no
+     * branchable user entry rejects with a message naming it and leaves the
+     * original session untouched.
      */
     async branchSession(id, entryId) {
-      const forked = await runtime.forkSession({ id, entryId, directory: directories.get(id) });
+      const timestamps = cutTimestamps.get(id);
+      const timestamp = timestamps?.get(entryId);
+      const cut = timestamp === undefined ? entryId : adapter.ompMessageId(id, 'user', timestamp);
+      const forked = await runtime.forkSession({ id, entryId: cut, directory: directories.get(id) });
       const info = {
         id: forked.id,
         sessionPath: forked.sessionPath ?? '',
@@ -165,6 +195,7 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     prompt(id, text, messageID, images) {
       if (messageID) {
         projectorFor(id).expectUserMessage(id, messageID);
+        pendingCutIds.set(id, messageID);
       }
       return runtime.prompt(id, text, images ? { images } : undefined);
     },

@@ -287,7 +287,12 @@ const unsupported = (operation: string): Promise<never> =>
 
 const readJson = async <T>(response: Response, schema: z.ZodType<T>): Promise<T> => {
   if (!response.ok) {
-    throw new Error(`OMP request failed: ${response.status}`)
+    // The route answers a refusal with `{ error }` naming the reason — a fork
+    // cut with no branchable entry, say — and that reason is what the caller
+    // reports; the status alone says nothing a user can act on.
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null
+    const reason = typeof body?.error === "string" ? body.error.trim() : ""
+    throw new Error(reason.length > 0 ? reason : `OMP request failed: ${response.status}`)
   }
   return schema.parse(await response.json())
 }
@@ -586,15 +591,18 @@ export class OmpRuntimeClient implements AgentRuntime {
     return unsupported("getSessionTurnDiff")
   }
 
-  // --- Fork: `branch { entryId }` copies the transcript through an entry.
+  // --- Fork: `branch { entryId }` copies the transcript up to an entry.
 
   async forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<AgentSession> {
     const response = await this.fetchImpl(`${this.basePath}/sessions/${encodeURIComponent(sessionId)}/branch`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       // `before` is the transcript cut the fork copies through; OMP names it
-      // `entryId`. A cut the session does not have is OMP's own 400, which the
-      // caller surfaces without touching the original session.
+      // `entryId`. OMP branches *before* a user message, so there is no
+      // whole-transcript fork: omitting the cut is not "copy everything", it is
+      // a request the route refuses with a reason the caller reports. A cut the
+      // session cannot branch at is refused the same way, leaving the original
+      // session untouched.
       body: JSON.stringify(options?.before ? { entryId: options.before } : {}),
     })
     const parsed = await readJson(response, sessionHandleSchema)

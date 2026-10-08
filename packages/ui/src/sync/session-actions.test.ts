@@ -1970,25 +1970,15 @@ describe("forkFromMessage composer restore", () => {
     expect(selectedSessions).toEqual([{ sessionId: forkedSession.id, directoryHint: "/canonical/worktree" }])
   })
 
-  test("an in-place branch reloads the session and does not navigate", async () => {
-    // OMP past the first user message rewrites the open session under the same id.
-    sessionForkResult = sourceSession
-    const source = createStore({}, { session: [sourceSession], part: { "message-fork": [textPart] } })
-    const { forkFromMessage, setActionRefs, InPlaceBranchError } = await import("./session-actions")
-    setActionRefs(createChildStores([[sourceSession.directory, source]]), () => sourceSession.directory)
-
-    await expect(forkFromMessage(sourceSession.id, "message-fork")).rejects.toThrow(InPlaceBranchError)
-    expect(selectedSessions).toEqual([])
-    expect(inputState.pendingComposerRestore).toBeNull()
-  })
-
-  test("a failed branch leaves the original session selected", async () => {
-    sessionForkError = new Error("OMP request failed: 400")
+  test("a failed branch leaves the original session selected and reports the reason", async () => {
+    const reason = "Cannot fork here: OMP branches before a user message and cannot copy a whole transcript. Choose the user message to branch at."
+    sessionForkError = new Error(reason)
     const source = createStore({}, { session: [sourceSession], part: { "message-fork": [textPart] } })
     const { forkFromMessage, setActionRefs } = await import("./session-actions")
     setActionRefs(createChildStores([[sourceSession.directory, source]]), () => sourceSession.directory)
 
-    await expect(forkFromMessage(sourceSession.id, "message-fork")).rejects.toThrow("OMP request failed: 400")
+    // The server's reason reaches the caller unwrapped; the store toasts it.
+    await expect(forkFromMessage(sourceSession.id, "message-fork")).rejects.toThrow(reason)
     expect(selectedSessions).toEqual([])
     expect(inputState.pendingComposerRestore).toBeNull()
   })
@@ -2118,7 +2108,10 @@ describe("forkAfterMessage", () => {
     }])
   })
 
-  test("copies the whole transcript when the answer is the last message", async () => {
+  test("sends no cut when the answer is the transcript's last message", async () => {
+    // Nothing follows the answer, so there is no user message to branch at and
+    // no cut to send; OMP cannot copy the whole transcript, so the route refuses
+    // this body with that reason and the caller reports it.
     const source = createStore({}, { session: [sourceSession], message: { [sourceSession.id]: transcript } })
     const { forkAfterMessage, setActionRefs } = await import("./session-actions")
     setActionRefs(createChildStores([[sourceSession.directory, source]]), () => sourceSession.directory)

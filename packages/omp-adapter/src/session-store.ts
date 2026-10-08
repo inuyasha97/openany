@@ -61,6 +61,38 @@ export type OmpSessionStore = {
   move: (sessionPath: string, toDirectory: string) => Promise<OmpSessionInfo>
 }
 
+/**
+ * A session file's message entries, in file order. `id` is the entry id OMP's
+ * `branch` resolves and `timestamp` is the message's own epoch-ms stamp — the
+ * two halves a projected `ompMessageId` splits apart.
+ */
+export type OmpSessionMessageEntry = { id: string; role: string; timestamp: number }
+
+/**
+ * Every message entry of a session file, in file order. Non-message entries
+ * (the header, model changes, markers) carry no message and are skipped, but
+ * their position is not needed: the walk only ever moves forward to a user
+ * entry, and message entries are already ordered.
+ */
+export const parseSessionMessageEntries = (text: string): OmpSessionMessageEntry[] => {
+  const entries: OmpSessionMessageEntry[] = []
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    let record: { type?: unknown; id?: unknown; message?: { role?: unknown; timestamp?: unknown } }
+    try {
+      record = JSON.parse(trimmed) as typeof record
+    } catch {
+      continue
+    }
+    if (record.type !== "message") continue
+    const { id, message } = record
+    if (typeof id !== "string" || typeof message?.role !== "string" || typeof message.timestamp !== "number") continue
+    entries.push({ id, role: message.role, timestamp: message.timestamp })
+  }
+  return entries
+}
+
 const defaultFs: OmpSessionFs = {
   readdir: (dir, options) => fs.readdirSync(dir, { ...options, encoding: "utf8" }),
   readFile: (file, encoding) => fs.readFileSync(file, encoding),

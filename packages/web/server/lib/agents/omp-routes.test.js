@@ -302,7 +302,7 @@ describe('OMP routes', () => {
     expect(response.body).toEqual({ error: 'Invalid entry ID for branching' });
   });
 
-  it('requires an entry id and 404s a branch on an unknown session', async () => {
+  it('refuses a branch without a cut, saying why, and 404s a branch on an unknown session', async () => {
     const host = createHost({
       branchSession: vi.fn(async () => {
         throw new Error('unknown omp session: missing');
@@ -310,10 +310,33 @@ describe('OMP routes', () => {
     });
     const app = createApp(host);
 
-    expect((await request(app).post('/api/agents/omp/sessions/ses_1/branch').send({})).status).toBe(400);
+    const noCut = await request(app).post('/api/agents/omp/sessions/ses_1/branch').send({});
+    expect(noCut.status).toBe(400);
+    expect(noCut.body).toEqual({
+      error: 'Cannot fork here: OMP branches before a user message and cannot copy a whole transcript. Choose the user message to branch at.',
+    });
+    // The route never reaches the host: OMP has no whole-transcript fork.
+    expect(host.branchSession).not.toHaveBeenCalled();
+
     const missing = await request(app).post('/api/agents/omp/sessions/missing/branch').send({ entryId: 'e7' });
     expect(missing.status).toBe(404);
     expect(missing.body).toEqual({ error: 'Unknown OMP session' });
+  });
+
+  it('reports the adapter\'s named-cut refusal when the cut resolves to no entry', async () => {
+    const error = Object.assign(
+      new Error('No message in this session matches the branch cut "omp:ses_1:user:1000"; OMP branches before a user message, so the cut must name a message the session still has.'),
+      { command: 'branch' },
+    );
+    const host = createHost({
+      branchSession: vi.fn(async () => {
+        throw error;
+      }),
+    });
+    const response = await request(createApp(host)).post('/api/agents/omp/sessions/ses_1/branch').send({ entryId: 'omp:ses_1:user:1000' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: error.message });
   });
 
   it('lists and answers forms', async () => {

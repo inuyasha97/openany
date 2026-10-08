@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { createSessionStore, parseSessionFile } from "./session-store"
+import { createSessionStore, parseSessionFile, parseSessionMessageEntries } from "./session-store"
 
 let root: string
 
@@ -113,6 +113,30 @@ describe("createSessionStore.list", () => {
     const sessions = await createSessionStore({ root }).list()
     expect(sessions.find((session) => session.id === "ses_1")).not.toHaveProperty("parentSessionPath")
     expect(sessions.find((session) => session.id === "ses_fork")?.parentSessionPath).toBe(path.join(root, "repo-api", "ses_1.jsonl"))
+  })
+})
+
+describe("parseSessionMessageEntries", () => {
+  test("reads message entries in file order with their ids, roles and stamps", () => {
+    const text = [
+      JSON.stringify({ type: "title", v: 1, title: "t", updatedAt: "x", pad: "" }),
+      JSON.stringify({ type: "session", version: 3, id: "ses_1", timestamp: "t", cwd: "/repo" }),
+      JSON.stringify({ type: "model_change", id: "m0", parentId: null, timestamp: "t", model: "p/m" }),
+      JSON.stringify({ type: "message", id: "aaaa0001", parentId: "m0", timestamp: "t", message: { role: "user", content: "hi", timestamp: 1000 } }),
+      JSON.stringify({ type: "message", id: "aaaa0002", parentId: "aaaa0001", timestamp: "t", message: { role: "assistant", content: "yo", timestamp: 2000 } }),
+      "not json",
+      JSON.stringify({ type: "custom", customType: "marker", id: "c1", parentId: "aaaa0002", timestamp: "t" }),
+    ].join("\n")
+
+    expect(parseSessionMessageEntries(text)).toEqual([
+      { id: "aaaa0001", role: "user", timestamp: 1000 },
+      { id: "aaaa0002", role: "assistant", timestamp: 2000 },
+    ])
+  })
+
+  test("skips a message entry without a numeric stamp", () => {
+    const text = JSON.stringify({ type: "message", id: "aaaa0001", timestamp: "t", message: { role: "user", content: "hi" } })
+    expect(parseSessionMessageEntries(text)).toEqual([])
   })
 })
 

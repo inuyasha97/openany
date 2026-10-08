@@ -17,9 +17,10 @@
 import { spawn as nodeSpawn } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
+import { OmpBranchCutError, resolveBranchEntry, type OmpBranchEntry } from "./branch-entry"
 import { toOmpModelInfo } from "./mapping"
 import { OmpRpcClient, OmpRpcError, type OmpRpcChild, type OmpRpcFrame, type OmpRpcSpawn } from "./rpc-client"
-import { createSessionStore, type OmpSessionStore } from "./session-store"
+import { createSessionStore, parseSessionMessageEntries, type OmpSessionMessageEntry, type OmpSessionStore } from "./session-store"
 import type { OmpMessage, OmpModelInfo, OmpThinkingLevel } from "./model"
 import type {
   OmpContextUsage,
@@ -36,6 +37,8 @@ export type OmpHostOptions = {
   env?: Record<string, string | undefined>
   spawn?: OmpRpcSpawn
   store?: OmpSessionStore
+  /** Reads a session file for branch-cut resolution; injectable so tests need no real file. */
+  readFile?: (file: string) => string
 }
 
 /** The `get_state` payload fields the host reads. */
@@ -140,6 +143,7 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
   const args = options.args ?? ["--mode", "rpc"]
   const spawn = options.spawn ?? defaultSpawn
   const store = options.store ?? createSessionStore()
+  const readFile = options.readFile ?? ((file: string) => fs.readFileSync(file, "utf8"))
   const clients = new Map<string, OmpRpcClient>()
   // OMP creates a session's file lazily, so a just-created session is not in the
   // store yet. The live process reports its `sessionFile`; keep it so delete can
@@ -169,6 +173,34 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
     const client = clients.get(id)
     if (!client) throw new Error(`omp session is not open: ${id}`)
     return client
+  }
+
+  /**
+   * The OMP entry id the caller's cut names. The cut is a canonical
+   * `Message.id`, not a session-file entry id, so it is translated against the
+   * live session: `get_branch_messages` names the user entries OMP accepts and
+   * the session file maps a projected timestamp onto its entry id. A cut that
+   * resolves to nothing rejects with a message naming it rather than OMP's own
+   * refusal, which cannot say what the cut was.
+   */
+  const resolveBranchCut = async (client: OmpRpcClient, holder: SessionHolder, cut: string): Promise<string> => {
+    const branchable = await client.command<{ messages: OmpBranchEntry[] }>("get_branch_messages")
+    let entries: OmpSessionMessageEntry[] = []
+    if (holder.file) {
+      try {
+        entries = parseSessionMessageEntries(readFile(holder.file))
+      } catch {
+        // A session whose file is not readable yet still resolves a cut that is
+        // already a real entry id; a projected one reports as unresolvable.
+        entries = []
+      }
+    }
+    try {
+      return resolveBranchEntry(cut, entries, branchable.messages ?? [])
+    } catch (error) {
+      if (error instanceof OmpBranchCutError) throw new OmpRpcError("branch", error.message)
+      throw error
+    }
   }
 
   return {
@@ -258,16 +290,19 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
     },
 
     /**
-     * Branches at `entryId`. OMP swaps the live session inside this process when
-     * the branch starts a new file, so the host follows the new id from
-     * `get_state`; an unknown entry rejects with OMP's own message and leaves
-     * the session untouched.
+     * Branches at `entryId`. `entryId` is the caller's transcript cut (a
+     * canonical `Message.id`), resolved to the OMP entry the session has; a cut
+     * that names no branchable user entry rejects with a message naming it. OMP
+     * swaps the live session inside this process when the branch starts a new
+     * file, so the host follows the new id from `get_state`; an unknown entry
+     * rejects with OMP's own message and leaves the session untouched.
      */
     branch: async (id, entryId) => {
       const client = requireClient(id)
       const holder = holders.get(id)
       if (!holder) throw new OmpRpcError("branch", `omp session is not open: ${id}`)
-      const result = await client.command<{ cancelled?: boolean } | undefined>("branch", { entryId })
+      const target = await resolveBranchCut(client, holder, entryId)
+      const result = await client.command<{ cancelled?: boolean } | undefined>("branch", { entryId: target })
       if (result?.cancelled === true) throw new OmpRpcError("branch", "omp branch was cancelled")
       const state = await client.command<RpcSessionState>("get_state")
       if (typeof state.sessionId !== "string") throw new OmpRpcError("branch", "omp branch reported no session")

@@ -103,6 +103,7 @@ const createFakeAdapter = ({ projectImpl } = {}) => {
       }
     },
     createOmpHost: () => ({}),
+    ompMessageId: (sessionId, role, timestamp) => `omp:${sessionId}:${role}:${timestamp}`,
     projectOmpSession: (record, now) => ({
       id: record.id,
       runtimeId: 'omp',
@@ -454,5 +455,25 @@ describe('createOmpRuntimeHost', () => {
     expect(frames[0].properties.sessionID).toBe('ses_fork');
     expect(frames[0].properties.events[0].type).toBe('session.created');
     expect(frames[0].properties.events[0].properties.info.directory).toBe('/repo');
+  });
+
+  it('translates a client-minted cut into the projected id its message landed with', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+    await host.createSession({ cwd: '/repo' });
+
+    // The prompt declares the client's id; the user message then lands with the
+    // OMP timestamp the projected id is built from.
+    await host.prompt('ses_new', 'hello', 'msg_client_1');
+    runtime.emit('ses_new', { type: 'message_start', message: { role: 'user', timestamp: 1234 } });
+
+    await host.branchSession('ses_new', 'msg_client_1');
+    expect(runtime.branchCalls.at(-1)).toEqual({ id: 'ses_new', entryId: 'omp:ses_new:user:1234', directory: '/repo' });
+
+    // A projected id and a real entry id are handed to the adapter unchanged.
+    await host.branchSession('ses_new', 'omp:ses_new:user:999');
+    expect(runtime.branchCalls.at(-1)).toEqual({ id: 'ses_new', entryId: 'omp:ses_new:user:999', directory: '/repo' });
+    await host.branchSession('ses_new', 'e7');
+    expect(runtime.branchCalls.at(-1)).toEqual({ id: 'ses_new', entryId: 'e7', directory: '/repo' });
   });
 });

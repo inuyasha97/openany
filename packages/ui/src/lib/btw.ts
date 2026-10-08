@@ -199,23 +199,16 @@ export async function startBtwSession(input: StartBtwInput): Promise<Session> {
     await sessionActions.waitForConnectionOrThrow();
     if (getRuntimeKey() !== expectedRuntimeKey) throw new Error('runtime changed');
     // Fork at the parent's last completed assistant turn rather than at HEAD,
-    // so a `/btw` typed mid-turn does not inherit a half-finished one.
+    // so a `/btw` typed mid-turn does not inherit a half-finished one. OMP only
+    // branches *before* a user message, so a parent whose last finished turn is
+    // its last record has no branch point: the fork is refused with that reason
+    // and the panel reports it.
     const parentMessages = getSyncMessages(input.parentSessionId, input.directory);
     const forkPointMessageID = findLastCompletedAssistantMessageID(parentMessages);
-    // No completed turn to fork at means take the whole parent transcript,
-    // which is what an omitted `before` asks for.
     const forked = await getAgentRuntime().forkSession(input.parentSessionId, {
       before: forkPointMessageID ?? undefined,
       directory: input.directory,
     });
-
-    // OMP branches the open session in place past its first user message: the
-    // id does not change. Writing the btw marker onto that id would tag the
-    // parent as its own child, so a btw fork that did not produce a new
-    // session is refused rather than corrupting the parent.
-    if (forked.id === input.parentSessionId) {
-      throw new Error("OMP does not create a new session for this branch point, so a /btw session cannot be started here");
-    }
 
     // The server may canonicalize the worktree path; the prompt must use the
     // same directory identity as the forked session.

@@ -44,6 +44,16 @@ const thinkingBodySchema = z.object({ level: z.enum(THINKING_LEVELS) });
 const fastModeBodySchema = z.object({ enabled: z.boolean() });
 const branchBodySchema = z.object({ entryId: z.string().min(1) });
 /**
+ * Why a branch needs a cut, in the words the route and the adapter both use.
+ * OMP's `branch` copies everything *before* a named user-message entry, so it
+ * cannot express "copy the whole transcript" — a body without `entryId` is not
+ * a whole-transcript fork, it is an unanswerable request. Kept in step with
+ * `BRANCH_CUT_REQUIRED` in `@openchamber/omp-adapter` (`branch-entry.ts`),
+ * which the adapter throws when a named cut resolves to no branchable entry.
+ */
+const BRANCH_CUT_REQUIRED =
+  'Cannot fork here: OMP branches before a user message and cannot copy a whole transcript. Choose the user message to branch at.';
+/**
  * A form reply is either an answer keyed by field key (`{ value: "a" }`, the
  * shape the UI already builds) or the plain value, and a cancellation is
  * `{ cancelled: true }`.
@@ -62,7 +72,7 @@ const isUnknownSession = (error) => {
   return message.startsWith('unknown omp session');
 };
 
-/** OMP's own refusal when `branch` names no forkable entry (`OmpRpcError`). */
+/** A branch the request cannot be served for: the adapter's cut refusal or OMP's own. */
 const isBranchFailure = (error) => error instanceof Error && error.command === 'branch';
 
 const respondWithError = (res, error, fallbackMessage) => {
@@ -132,15 +142,17 @@ export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
   });
 
   /**
-   * Forks a session at a message entry. OMP branches inside the live process,
-   * so the answer is the new session descriptor; an unknown `entryId` is OMP's
-   * own refusal and leaves the original session untouched.
+   * Forks a session at a message entry. `entryId` is the UI's transcript cut (a
+   * canonical `Message.id`), which the host resolves to an OMP user-message
+   * entry; the body must name one, because OMP cannot copy a whole transcript.
+   * OMP branches inside the live process, so the answer is the new session
+   * descriptor, and a cut it will not branch at leaves the original untouched.
    */
   app.post('/api/agents/omp/sessions/:id/branch', parseJsonBody, async (req, res) => {
     if (await rejectIfDisabled(res)) return;
     const parsed = branchBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: 'entryId must be a non-empty string' });
+      return res.status(400).json({ error: BRANCH_CUT_REQUIRED });
     }
     try {
       const session = await (await getHost()).branchSession(req.params.id, parsed.data.entryId);
@@ -150,7 +162,8 @@ export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
         return res.status(404).json({ error: 'Unknown OMP session' });
       }
       if (isBranchFailure(error)) {
-        // OMP rejects a branch that names no user-message entry, in its own words.
+        // The adapter's refusal when the cut names no branchable entry, and
+        // OMP's own refusal when a real entry id is not a user message.
         return res.status(400).json({ error: error.message });
       }
       return respondWithError(res, error, 'Failed to branch OMP session');

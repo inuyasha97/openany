@@ -3,22 +3,43 @@ import type { OmpRpcChild } from "./rpc-client"
 import type { OmpSessionStore } from "./session-store"
 import { createOmpHost, resolveOmpCommand } from "./rpc-host"
 
-type FakeChild = { child: OmpRpcChild; written: string[]; emit: (line: string) => void }
+type FakeChild = {
+  child: OmpRpcChild
+  written: string[]
+  emit: (line: string) => void
+  /** Resolves with the next frame of `type` the host writes. */
+  waitFor: (type: string) => Promise<{ id: string; type: string }>
+}
 
 const fakeChild = (): FakeChild => {
   const stdoutListeners: Array<(chunk: string | Uint8Array) => void> = []
   const written: string[] = []
+  const waiters: Array<{ type: string; resolve: (frame: { id: string; type: string }) => void }> = []
   const child: OmpRpcChild = {
     stdout: { on: (_e, l) => stdoutListeners.push(l) },
     stderr: { on: () => {} },
-    stdin: { write: (chunk) => written.push(chunk), end: () => {} },
+    stdin: {
+      write: (chunk) => {
+        written.push(chunk)
+        const frame = JSON.parse(chunk) as { id: string; type: string }
+        for (let index = waiters.length - 1; index >= 0; index -= 1) {
+          if (waiters[index].type === frame.type) waiters.splice(index, 1)[0].resolve(frame)
+        }
+      },
+      end: () => {},
+    },
     on: () => {},
     kill: () => {},
   }
   const emit = (line: string) => {
     for (const l of stdoutListeners) l(`${line}\n`)
   }
-  return { child, written, emit }
+  const waitFor = (type: string) => {
+    const { promise, resolve } = Promise.withResolvers<{ id: string; type: string }>()
+    waiters.push({ type, resolve })
+    return promise
+  }
+  return { child, written, emit, waitFor }
 }
 
 const emptyStore = () => ({ list: async () => [], delete: async () => {}, move: async () => { throw new Error("unused") } })
@@ -26,8 +47,13 @@ const emptyStore = () => ({ list: async () => [], delete: async () => {}, move: 
 const lastFrame = (fake: { written: string[] }) => JSON.parse(fake.written.at(-1) ?? "{}") as { id: string; type: string }
 
 /** Opens a session on a fake child and completes the get_state handshake. */
-const openFakeSession = async (fake: FakeChild, store: OmpSessionStore = emptyStore(), input: { cwd?: string } = { cwd: "/repo" }) => {
-  const host = createOmpHost({ spawn: () => fake.child, store })
+const openFakeSession = async (
+  fake: FakeChild,
+  store: OmpSessionStore = emptyStore(),
+  input: { cwd?: string } = { cwd: "/repo" },
+  readFile: (file: string) => string = () => "",
+) => {
+  const host = createOmpHost({ spawn: () => fake.child, store, readFile })
   const pending = host.openSession(input)
   fake.emit(JSON.stringify({ type: "ready" }))
   await Promise.resolve()
@@ -159,18 +185,29 @@ describe("createOmpHost", () => {
     expect(await host.getSessionStatus("ses_1")).toEqual({ busy: false, compacting: false, queuedCount: 0, tokensPerSecond: null, contextUsage: null })
   })
 
-  test("branches, follows the new session id and rejects an unknown entry", async () => {
+  test("resolves a projected cut to a session entry, follows the new session id and rejects an unknown cut", async () => {
     const fake = fakeChild()
-    const { host, handle } = await openFakeSession(fake)
+    const sessionText = JSON.stringify({
+      type: "message",
+      id: "e7",
+      parentId: "root",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message: { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1000 },
+    })
+    const { host, handle } = await openFakeSession(fake, emptyStore(), { cwd: "/repo" }, () => sessionText)
 
-    const branched = host.branch("ses_1", "e7")
-    const branchReq = lastFrame(fake)
-    expect(branchReq.type).toBe("branch")
+    // The cut is the UI's projected id; the host asks OMP which entries it will
+    // branch at, then maps the cut's timestamp onto the session file's entry id.
+    const branched = host.branch("ses_1", "omp:ses_1:user:1000")
+    const listReq = lastFrame(fake)
+    expect(listReq.type).toBe("get_branch_messages")
+    const branchFrame = fake.waitFor("branch")
+    fake.emit(JSON.stringify({ id: listReq.id, type: "response", command: "get_branch_messages", success: true, data: { messages: [{ entryId: "e7", text: "hello" }] } }))
+    const branchReq = await branchFrame
     expect(JSON.parse(fake.written.at(-1) ?? "{}")).toMatchObject({ entryId: "e7" })
+    const stateFrame = fake.waitFor("get_state")
     fake.emit(JSON.stringify({ id: branchReq.id, type: "response", command: "branch", success: true, data: { text: "hello", cancelled: false } }))
-    await Promise.resolve()
-    const stateReq = lastFrame(fake)
-    expect(stateReq.type).toBe("get_state")
+    const stateReq = await stateFrame
     fake.emit(JSON.stringify({ id: stateReq.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_2", sessionFile: "/s/ses_2.jsonl" } }))
     expect(await branched).toEqual({ id: "ses_2", sessionPath: "/s/ses_2.jsonl", cwd: "", title: "" })
     // The handle follows the branched session and the original id is released.
@@ -180,10 +217,22 @@ describe("createOmpHost", () => {
     fake.emit(JSON.stringify({ id: lastFrame(fake).id, type: "response", command: "prompt", success: true, data: { agentInvoked: true } }))
     expect(await prompted).toBe(true)
 
-    const invalid = host.branch("ses_2", "nope")
-    const invalidReq = lastFrame(fake)
-    fake.emit(JSON.stringify({ id: invalidReq.id, type: "response", command: "branch", success: false, error: "Invalid entry ID for branching" }))
-    await expect(invalid).rejects.toThrow("Invalid entry ID for branching")
+    await handle.dispose()
+  })
+
+  test("rejects a cut that names no session entry without branching", async () => {
+    const fake = fakeChild()
+    const { host, handle } = await openFakeSession(fake)
+
+    const refused = host.branch("ses_1", "omp:ses_1:user:1000")
+    const listReq = lastFrame(fake)
+    fake.emit(JSON.stringify({ id: listReq.id, type: "response", command: "get_branch_messages", success: true, data: { messages: [] } }))
+    const refusal = await refused.then(() => null, (error: unknown) => error as Error & { command?: string })
+    expect(refusal?.message).toBe('No message in this session matches the branch cut "omp:ses_1:user:1000"; OMP branches before a user message, so the cut must name a message the session still has.')
+    // The route keys its 400 on `command === 'branch'`, so the refusal carries it.
+    expect(refusal?.command).toBe("branch")
+    // The RPC `branch` frame is never sent, so OMP's session is left untouched.
+    expect(fake.written.map((line) => JSON.parse(line).type).includes("branch")).toBe(false)
 
     await handle.dispose()
   })

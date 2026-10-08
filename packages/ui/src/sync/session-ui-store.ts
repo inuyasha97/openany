@@ -71,7 +71,6 @@ import {
   revertToMessage as revertToMessageAction,
   forkFromMessage as forkFromMessageAction,
   forkAfterMessage as forkAfterMessageAction,
-  InPlaceBranchError,
   fetchMessagesForSession,
   type ArchiveSessionsOptions,
   type DeleteSessionOptions,
@@ -2075,14 +2074,10 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       toast.success(`Forked from ${existingSession.title}`)
     } catch (error) {
       const { toast } = await import("sonner")
-      if (error instanceof InPlaceBranchError) {
-        // OMP rewrote this session instead of making a new one: the transcript
-        // was reloaded, so there is nothing to navigate to.
-        toast.info("Branched this conversation in place — no new session was created")
-        return
-      }
       console.error("Failed to fork session:", error)
-      toast.error("Failed to fork session")
+      // The server's refusal names what is wrong (a cut OMP cannot branch at,
+      // say); that reason is the only thing a user can act on.
+      toast.error(error instanceof Error && error.message ? error.message : "Failed to fork session")
     }
   },
 
@@ -2097,12 +2092,10 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       toast.success(`Forked from ${existingSession.title}`)
     } catch (error) {
       const { toast } = await import("sonner")
-      if (error instanceof InPlaceBranchError) {
-        toast.info("Branched this conversation in place — no new session was created")
-        return
-      }
       console.error("Failed to fork session:", error)
-      toast.error("Failed to fork session")
+      // OMP branches before a user message, so an answer with nothing after it
+      // has no fork; the route says so and that reason is what the user gets.
+      toast.error(error instanceof Error && error.message ? error.message : "Failed to fork session")
     }
   },
 

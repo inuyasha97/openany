@@ -113,7 +113,13 @@ export type OmpSendCommandParams = {
 /** What `forkSession` takes: the session to branch and the entry to branch at. */
 export type OmpForkParams = {
   id: string
-  /** The entry (a user message) OMP branches the transcript at. */
+  /**
+   * The transcript cut: a canonical `Message.id` (a projected
+   * `omp:<sessionId>:<role>:<timestamp>` or a client-minted id), not an OMP
+   * entry id. The host resolves it to the user-message entry OMP branches at.
+   * OMP branches *before* a user message, so there is no whole-transcript fork;
+   * a cut that names no branchable user entry is refused.
+   */
   entryId: string
   directory?: string
 }

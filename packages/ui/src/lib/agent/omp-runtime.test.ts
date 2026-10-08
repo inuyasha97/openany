@@ -172,16 +172,28 @@ describe("OmpRuntimeClient", () => {
     expect(forked.directory).toBe("/repo")
   })
 
-  test("forks the whole transcript when no entry is given", async () => {
+  test("omits the cut when none is given, which the route refuses", async () => {
+    const reason = "Cannot fork here: OMP branches before a user message and cannot copy a whole transcript. Choose the user message to branch at."
     const { client, calls } = makeClient({
-      "POST /api/agents/omp/sessions/ses_a/branch": { body: { session: { id: "ses_fork", sessionFile: "/s/fork.json" } } },
+      "POST /api/agents/omp/sessions/ses_a/branch": { status: 400, body: { error: reason } },
     })
-    await client.forkSession("ses_a", { directory: "/repo" })
+    // OMP has no whole-transcript fork, so an omitted cut is a request the route
+    // refuses rather than one that copies everything.
+    await expect(client.forkSession("ses_a", { directory: "/repo" })).rejects.toThrow(reason)
     expect(calls[0].body).toEqual({})
+  })
+
+  test("surfaces the route's reason for a cut it cannot branch at", async () => {
+    const reason = 'No message in this session matches the branch cut "omp:ses_a:user:1000"; OMP branches before a user message, so the cut must name a message the session still has.'
+    const { client } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/branch": { status: 400, body: { error: reason } },
+    })
+    await expect(client.forkSession("ses_a", { before: "omp:ses_a:user:1000", directory: "/repo" })).rejects.toThrow(reason)
   })
 
   test("a failed branch keeps the original session", async () => {
     const { client } = makeClient({})
+    // A body with no reason falls back to the status, so the message is never blank.
     await expect(client.forkSession("ses_a", { before: "missing", directory: "/repo" })).rejects.toThrow("OMP request failed: 404")
   })
 
@@ -433,8 +445,8 @@ describe("OmpRuntimeClient", () => {
     expect(await client.login("anthropic")).toEqual({ providerId: "anthropic" })
   })
 
-  test("surfaces a refused login instead of an empty result", async () => {
+  test("surfaces a refused login's reason instead of an empty result", async () => {
     const { client } = makeClient({ "POST /api/agents/omp/login": { status: 500, body: { error: "Unknown OAuth provider: nope" } } })
-    await expect(client.login("nope")).rejects.toThrow("OMP request failed: 500")
+    await expect(client.login("nope")).rejects.toThrow("Unknown OAuth provider: nope")
   })
 })
