@@ -50,13 +50,20 @@
         "preload.mjs",
         "tray.mjs",
         "ssh-manager.mjs",
-        "opencode-cwd.mjs",
         "*.{test,spec}.{js,cjs,mjs}",
         "scripts/**/*.{js,cjs,mjs}"
       ],
       "project": [
         "*.{js,cjs,mjs}",
         "scripts/**/*.{js,cjs,mjs}"
+      ]
+    },
+    "packages/omp-adapter": {
+      "entry": [
+        "src/**/*.{test,spec}.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
       ]
     },
     "packages/vscode": {

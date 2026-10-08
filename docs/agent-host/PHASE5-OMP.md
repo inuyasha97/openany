@@ -283,6 +283,44 @@ already ran the OpenChamber server, which hosts OMP in process, so the port
 replaced the stale OpenCode artifacts (provider config, plugin link, inert
 env vars, readiness key, restart error code) rather than the runtime.
 
+## The adapter ships compiled (2026-10-08)
+
+The server hosts OMP through `@openchamber/omp-adapter`, and that package now
+ships **compiled JavaScript** at `dist/index.js` instead of the TypeScript
+sources the server used to import by relative path.
+
+Why it had to change: `packages/web/server/lib/agents/index.js` is loaded by
+Bun in development **and by Node inside Electron** (the desktop server runs in
+the same process as `main.mjs`). Node's ESM loader resolves neither extensionless
+relative specifiers (`./runtime`) nor `.ts` outside its experimental type
+stripping, so on the desktop every `/api/agents/omp/*` request answered
+`500 ERR_MODULE_NOT_FOUND` — sessions, prompts, models, commands, all of it.
+The bundled entry point has no relative specifier left to resolve.
+
+- `scripts/build-omp-adapter.mjs` bundles `src/index.ts` to `dist/index.js`
+  (`bun run --cwd packages/omp-adapter build`). Type-only imports of the
+  canonical UI types are erased, so the bundle carries no cross-package import.
+- `packages/omp-adapter/package.json` points `main`/`exports.default` at
+  `dist/index.js` and keeps `src/` for its own tests and editor types.
+- Every consumer build runs the adapter build first: `packages/web`'s
+  `dev:server`, `dev:server:watch`, `build` and `build:watch`;
+  `packages/electron`'s `package`; and the Dockerfile's builder stage.
+- `@openchamber/omp-adapter` is a production dependency of `@openchamber/web`
+  (not just a workspace sibling), so `electron-builder` collects it into
+  `app.asar` and the Docker runtime stage copies it. Verified: the packaged
+  macOS app resolves `node_modules/@openchamber/omp-adapter/dist/index.js` and
+  answers `/api/agents/omp/sessions` and `/api/agents/omp/models` (through the
+  staged `omp` 18.1.11 binary) with 200.
+- The Docker runtime stage installs `@oh-my-pi/pi-coding-agent@18.1.11`
+  (`omp`, kept in step with `DEFAULT_OMP_CLI_VERSION`) instead of the OpenCode
+  CLI the image used to carry, and copies `packages/omp-adapter`.
+
+Known gap, out of this fork's reach: managed SSH instances install
+`@openchamber/web@<version>` from the public registry
+(`packages/electron/ssh-manager.mjs`), which is upstream's OpenCode-based
+package, not this fork. Remote instances therefore still run upstream
+OpenChamber until this fork publishes its own web package.
+
 ## The agent surface closed on OMP (2026-10-08)
 
 Phase 6 (`docs/superpowers/plans/2026-10-08-p6-close-omp-gaps-web-electron.md`)

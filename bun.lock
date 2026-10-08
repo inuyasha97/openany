@@ -348,6 +348,7 @@
       "dependencies": {
         "@clack/prompts": "^1.1.0",
         "@octokit/rest": "^22.0.1",
+        "@openchamber/omp-adapter": "workspace:*",
         "@openchamber/sdk": "workspace:*",
         "@simplewebauthn/server": "13.3.3",
         "bun-pty": "^0.4.5",

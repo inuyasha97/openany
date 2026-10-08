@@ -153,12 +153,17 @@ That runs, in order:
 
 1. `build:web-assets` to build the web UI and copy it into `packages/electron/resources/web-dist`.
 2. `verify:web-assets` to fail when the staged UI is missing or older than `packages/web/dist`.
-3. `prepare:omp-cli` to download/cache the pinned OMP binary and copy it into `packages/electron/resources/omp-cli`.
-4. `bundle:main` to create `packages/electron/dist-bundle/{entry,main,early-startup}.mjs`.
-5. `rebuild:native` to rebuild native modules for Electron.
-6. `package.mjs` to run `electron-builder`; its `afterPack` hook stages the compiled macOS icon asset catalog.
+3. `bun ../../scripts/build-omp-adapter.mjs` to compile `@openchamber/omp-adapter` to `dist/index.js` (see "The OMP adapter is compiled" below).
+4. `prepare:omp-cli` to download/cache the pinned OMP binary and copy it into `packages/electron/resources/omp-cli`.
+5. `bundle:main` to create `packages/electron/dist-bundle/{entry,main,early-startup}.mjs`.
+6. `rebuild:native` to rebuild native modules for Electron.
+7. `package.mjs` to run `electron-builder`; its `afterPack` hook stages the compiled macOS icon asset catalog.
 
 The packaged app loads its UI from `resources/web-dist` over `openchamber-ui://app`, so that directory must match the current `packages/web/dist` build. Rebuild both with `bun run --cwd packages/web build` and `bun run --cwd packages/electron build:web-assets`; the packaging step now verifies the stage before `electron-builder` runs.
+
+### The OMP adapter is compiled
+
+`main.mjs` imports the web server into its own Node process, and that server imports `@openchamber/omp-adapter` at runtime. The adapter's sources are TypeScript with extensionless imports, which Node's ESM loader rejects outright — so the package's entry point is the compiled `dist/index.js` (one ESM file, no relative specifiers left), built by `bun ../../scripts/build-omp-adapter.mjs` from `packages/omp-adapter/src`. `@openchamber/omp-adapter` is a production dependency of `@openchamber/web`, so `electron-builder` collects it into `app.asar`; a package without `node_modules/@openchamber/omp-adapter/dist/index.js` fails every `/api/agents/omp/*` request with `ERR_MODULE_NOT_FOUND`.
 
 Build output goes to `packages/electron/dist`.
 

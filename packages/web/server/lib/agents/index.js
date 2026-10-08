@@ -10,7 +10,10 @@
 import { createOmpRuntimeHost } from './omp-runtime-host.js';
 import { registerOmpRoutes } from './omp-routes.js';
 
-const loadOmpAdapter = () => import('../../../../omp-adapter/src/index.ts');
+// The built adapter (`@openchamber/omp-adapter` -> `dist/index.js`), not the
+// `.ts` sources: this module is loaded by Node on Electron as well as by Bun in
+// development, and only the compiled bundle is loadable by both.
+const loadOmpAdapter = () => import('@openchamber/omp-adapter');
 
 const createHostController = (loadHost) => {
   let hostPromise = null;
