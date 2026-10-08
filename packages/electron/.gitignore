@@ -7,7 +7,6 @@ dist-bundle/
 
 # Generated packaging resources
 resources/web-dist/
-resources/sidecar/
 resources/omp-cli/*
 !resources/omp-cli/.gitkeep
 .cache/

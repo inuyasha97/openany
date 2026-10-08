@@ -8,8 +8,8 @@
 
     These entitlements are commonly required for Electron/Chromium JIT behavior
     under hardened runtime, plus access the app already relies on (microphone for
-    voice notes / dictation, network client for sidecar + remote hosts, shell
-    probing for PATH inheritance).
+    voice notes / dictation, network client for the embedded server + remote
+    hosts, shell probing for PATH inheritance).
   -->
   <key>com.apple.security.cs.allow-jit</key>
   <true/>

@@ -220,7 +220,7 @@ const { autoUpdater } = updaterPkg;
 
 const state = {
   serverHandle: null,
-  sidecarUrl: null,
+  localServerUrl: null,
   localUiUrl: null,
   localOrigin: null,
   apiBaseUrl: null,
@@ -326,9 +326,9 @@ const quitConfirmationMessage = () => {
     reasons.push(`${quitRisk.enabledScheduledTasksCount} enabled scheduled task${quitRisk.enabledScheduledTasksCount === 1 ? '' : 's'}`);
   }
   if (reasons.length === 0) {
-    return 'Background processes (sidecar, SSH sessions) will be stopped.';
+    return 'The local server and SSH sessions will be stopped.';
   }
-  return `OpenAny detected ${reasons.join(', ')}. Quitting now will stop sidecar/background processes and may interrupt pending work.`;
+  return `OpenAny detected ${reasons.join(', ')}. Quitting now will stop the local server and SSH sessions and may interrupt pending work.`;
 };
 
 const shutdownBackgroundServices = () => {
@@ -337,7 +337,7 @@ const shutdownBackgroundServices = () => {
     shellEnvironmentAbort.abort();
     state.backgroundShutdownPromise = Promise.all([
       startShellEnvironmentProbe().catch(() => {}),
-      killSidecar(),
+      stopLocalServer(),
       shutdownSshSessions(),
     ]).finally(() => {
       state.backgroundShutdownComplete = true;
@@ -412,7 +412,7 @@ const performConfirmedQuit = async ({ relaunch = false } = {}) => {
 // Hard-stop signals (`Ctrl+C` on `electron:dev`, an external `kill`/SIGTERM,
 // terminal close) bypass the normal app-quit flow — which would orphan the
 // in-process web server's children. Run the same background
-// teardown the quit path uses (which kills the sidecar), then exit. The startup
+// teardown the quit path uses (which stops the local server), then exit. The startup
 // reaper remains the backstop for an unhandled hard crash (SIGKILL).
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(signal, () => {
@@ -482,7 +482,7 @@ const refreshQuitRiskFlags = async () => {
     }
   }
 
-  const base = typeof state.sidecarUrl === 'string' ? state.sidecarUrl.trim().replace(/\/$/, '') : '';
+  const base = typeof state.localServerUrl === 'string' ? state.localServerUrl.trim().replace(/\/$/, '') : '';
   if (!base) return;
 
   const scheduledUrl = `${base}/api/openchamber/scheduled-tasks/status`;
@@ -662,7 +662,7 @@ const isMachineLocalHostname = (hostname) => {
 };
 
 const isLocalRuntimeUrl = (targetUrl) => {
-  const localUrl = state.sidecarUrl || state.localOrigin || '';
+  const localUrl = state.localServerUrl || state.localOrigin || '';
   if (!localUrl) return false;
   if (sameOrigin(targetUrl, localUrl)) return true;
   // The embedded server bound to 0.0.0.0 for LAN access is still THIS
@@ -946,8 +946,8 @@ const packagedUiOrigin = () => `${UI_PROTOCOL}://app`;
 const buildPackagedUiUrl = (pathname = '/index.html') => new URL(pathname, `${packagedUiOrigin()}/`).toString();
 
 const injectRuntimeConfigIntoHtml = (html) => {
-  const apiBaseUrl = state.apiBaseUrl || state.sidecarUrl || '';
-  const localOrigin = state.localOrigin || state.sidecarUrl || '';
+  const apiBaseUrl = state.apiBaseUrl || state.localServerUrl || '';
+  const localOrigin = state.localOrigin || state.localServerUrl || '';
   const initScript = `<script>if(window.__OPENCHAMBER_LOCAL_ORIGIN__===undefined){window.__OPENCHAMBER_LOCAL_ORIGIN__=${JSON.stringify(localOrigin)};}if(window.__OPENCHAMBER_API_BASE_URL__===undefined){window.__OPENCHAMBER_API_BASE_URL__=${JSON.stringify(apiBaseUrl)};}if(window.__OPENCHAMBER_CLIENT_TOKEN__===undefined&&${JSON.stringify(state.clientToken || '')}){window.__OPENCHAMBER_CLIENT_TOKEN__=${JSON.stringify(state.clientToken || '')};}</script>`;
   if (html.includes('<head>')) return html.replace('<head>', `<head>${initScript}`);
   if (html.includes('</head>')) return html.replace('</head>', `${initScript}</head>`);
@@ -1078,7 +1078,7 @@ const registerPackagedUiProtocol = () => {
 
 const normalizeNotificationInput = (raw) => {
   if (!raw || typeof raw !== 'object') return {};
-  // UI IPC path wraps in { payload: {...} }; sidecar stdout path is flat.
+  // The UI's IPC path wraps the payload in `{ payload: {...} }`.
   if (raw.payload && typeof raw.payload === 'object') {
     return { ...raw, ...raw.payload };
   }
@@ -1336,7 +1336,7 @@ const spawnLocalServer = async () => {
   const url = buildLocalUrl(port);
 
   state.serverHandle = handle;
-  state.sidecarUrl = url;
+  state.localServerUrl = url;
   recordElectronStartupPerformance('electron.server.ready', {
     durationMs: performance.now() - serverStartedAt,
   });
@@ -1348,10 +1348,10 @@ const spawnLocalServer = async () => {
   return url;
 };
 
-const killSidecar = async () => {
+const stopLocalServer = async () => {
   const handle = state.serverHandle;
   state.serverHandle = null;
-  state.sidecarUrl = null;
+  state.localServerUrl = null;
   if (!handle) return;
 
   await stopEmbeddedServer(handle, {
@@ -1739,8 +1739,8 @@ const switchToHostById = async (rawId) => {
   let clientToken = '';
   let requestHeaders = {};
   if (id === LOCAL_HOST_ID) {
-    targetUrl = shouldUsePackagedUi() ? buildPackagedUiUrl('/index.html') : (state.sidecarUrl || state.localOrigin);
-    apiBaseUrl = state.sidecarUrl;
+    targetUrl = shouldUsePackagedUi() ? buildPackagedUiUrl('/index.html') : (state.localServerUrl || state.localOrigin);
+    apiBaseUrl = state.localServerUrl;
     clientToken = readDesktopLocalClientToken();
     requestHeaders = {};
   } else {
@@ -1976,7 +1976,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {}, 
   const { bounds, maximized } = adopt
     ? { bounds: null, maximized: adopt.maximized }
     : restoreGeometry ? resolveMainWindowBounds() : { bounds: null, maximized: false };
-  const desktopLocalOrigin = state.localOrigin || state.sidecarUrl || '';
+  const desktopLocalOrigin = state.localOrigin || state.localServerUrl || '';
   const rendererRuntimeConfig = buildRendererRuntimeConfig(url, runtimeConfig);
   const desktopApiBaseUrl = rendererRuntimeConfig.apiBaseUrl;
   const desktopClientToken = rendererRuntimeConfig.clientToken;
@@ -2121,9 +2121,9 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {}, 
         } catch {
         }
       }
-      if (state.sidecarUrl) {
+      if (state.localServerUrl) {
         try {
-          if (new URL(state.sidecarUrl).origin === url.origin) return true;
+          if (new URL(state.localServerUrl).origin === url.origin) return true;
         } catch {
         }
       }
@@ -2309,7 +2309,7 @@ const openMainWindow = async () => {
   }
 
   const config = readDesktopHostsConfig();
-  const localUiUrl = shouldUsePackagedUi() ? buildPackagedUiUrl('/index.html') : (state.sidecarUrl || state.localOrigin);
+  const localUiUrl = shouldUsePackagedUi() ? buildPackagedUiUrl('/index.html') : (state.localServerUrl || state.localOrigin);
   const host = config.defaultHostId && config.defaultHostId !== LOCAL_HOST_ID
     ? config.hosts.find((entry) => entry.id === config.defaultHostId)
     : null;
@@ -2319,7 +2319,7 @@ const openMainWindow = async () => {
     // runtime; the renderer re-opens the E2EE tunnel on startup by reading the
     // relay descriptor + token from desktopHosts and calling
     // switchRuntimeEndpoint({ relay }).
-    const localApiBaseUrl = state.sidecarUrl || state.apiBaseUrl || state.localOrigin || '';
+    const localApiBaseUrl = state.localServerUrl || state.apiBaseUrl || state.localOrigin || '';
     const localToken = resolveStoredClientTokenForUrl(localApiBaseUrl, config) || state.clientToken || '';
     return activateMainWindow(localUiUrl, state.localOrigin, state.bootOutcome, {
       apiBaseUrl: localApiBaseUrl,
@@ -2327,7 +2327,7 @@ const openMainWindow = async () => {
       requestHeaders: {},
     });
   }
-  const apiBaseUrl = host?.apiUrl || host?.url || state.sidecarUrl || state.apiBaseUrl || '';
+  const apiBaseUrl = host?.apiUrl || host?.url || state.localServerUrl || state.apiBaseUrl || '';
   const clientToken = host?.clientToken || resolveStoredClientTokenForUrl(apiBaseUrl, config) || state.clientToken || '';
   const requestHeaders = sanitizeRuntimeRequestHeaders(host?.requestHeaders || {});
   const targetUrl = host?.url && apiBaseUrl && !state.unreachableHosts.has(apiBaseUrl)
@@ -2352,7 +2352,7 @@ const createAdditionalWindow = async (url, runtimeConfig = {}) => {
 const buildMiniChatUrl = ({ mode, sessionId, directory, projectId }) => {
   const base = shouldUsePackagedUi()
     ? buildPackagedUiUrl('/mini-chat.html')
-    : state.localUiUrl || state.localOrigin || state.sidecarUrl;
+    : state.localUiUrl || state.localOrigin || state.localServerUrl;
   if (!base) {
     throw new Error('Local UI is not available');
   }
@@ -2366,13 +2366,13 @@ const buildMiniChatUrl = ({ mode, sessionId, directory, projectId }) => {
 };
 
 const miniChatSessionWindowKey = (runtimeConfig, sessionId) => {
-  const runtimeKey = normalizeHostUrl(runtimeConfig?.apiBaseUrl || state.apiBaseUrl || state.localOrigin || state.sidecarUrl || '') || 'local';
+  const runtimeKey = normalizeHostUrl(runtimeConfig?.apiBaseUrl || state.apiBaseUrl || state.localOrigin || state.localServerUrl || '') || 'local';
   return `${runtimeKey}\n${sessionId}`;
 };
 
 const getWindowRuntimeConfig = (browserWindow) => {
   const fallback = {
-    apiBaseUrl: state.apiBaseUrl || state.localOrigin || state.sidecarUrl || '',
+    apiBaseUrl: state.apiBaseUrl || state.localOrigin || state.localServerUrl || '',
     clientToken: state.clientToken || '',
     requestHeaders: state.requestHeaders || {},
   };
@@ -2387,7 +2387,7 @@ const getWindowRuntimeConfig = (browserWindow) => {
 
 const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', projectId = '', runtimeConfig = {} } = {}) => {
   const effectiveRuntimeConfig = {
-    apiBaseUrl: normalizeHostUrl(runtimeConfig.apiBaseUrl || state.apiBaseUrl || state.localOrigin || state.sidecarUrl || ''),
+    apiBaseUrl: normalizeHostUrl(runtimeConfig.apiBaseUrl || state.apiBaseUrl || state.localOrigin || state.localServerUrl || ''),
     clientToken: sanitizeClientTokenForStorage(runtimeConfig.clientToken || state.clientToken || ''),
     requestHeaders: sanitizeRuntimeRequestHeaders(runtimeConfig.requestHeaders || state.requestHeaders || {}),
   };
@@ -2482,7 +2482,7 @@ const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', proj
   browserWindow.webContents.on('will-navigate', (event, url) => {
     try {
       const target = new URL(url);
-      const local = new URL(shouldUsePackagedUi() ? packagedUiOrigin() : (state.localOrigin || state.sidecarUrl || ''));
+      const local = new URL(shouldUsePackagedUi() ? packagedUiOrigin() : (state.localOrigin || state.localServerUrl || ''));
       if (target.origin === local.origin) return;
     } catch {
     }
@@ -2523,7 +2523,7 @@ const setMiniChatPinned = (browserWindow, pinned) => {
 const resolveMiniChatRuntimeConfig = (browserWindow, args = {}) => {
   const windowConfig = getWindowRuntimeConfig(browserWindow);
   const argApiBaseUrl = typeof args.apiBaseUrl === 'string' ? args.apiBaseUrl : '';
-  const targetUrl = normalizeHostUrl(argApiBaseUrl || windowConfig.apiBaseUrl || state.apiBaseUrl || state.localOrigin || state.sidecarUrl || '');
+  const targetUrl = normalizeHostUrl(argApiBaseUrl || windowConfig.apiBaseUrl || state.apiBaseUrl || state.localOrigin || state.localServerUrl || '');
   const providedToken = sanitizeClientTokenForStorage(args.clientToken);
   const storedToken = targetUrl ? resolveStoredClientTokenForUrl(targetUrl) : '';
   const windowToken = targetUrl && sameOrigin(windowConfig.apiBaseUrl, targetUrl) ? windowConfig.clientToken : '';
@@ -2569,7 +2569,7 @@ const resolveInitialUrl = async () => {
     await session.defaultSession.clearCache();
   }
 
-  state.sidecarUrl = localUrl;
+  state.localServerUrl = localUrl;
   state.localUiUrl = localUiUrl;
   const localAvailable = Boolean(localUrl);
 
@@ -4003,7 +4003,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
     case 'desktop_hosts_get':
       return {
         ...readDesktopHostsConfig(),
-        localOrigin: state.localOrigin || state.sidecarUrl || null,
+        localOrigin: state.localOrigin || state.localServerUrl || null,
       };
 
     case 'desktop_hosts_set': {
@@ -4011,14 +4011,14 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       await writeDesktopHostsConfig(nextConfigInput);
       const updatedConfig = readDesktopHostsConfig();
       const envTarget = normalizeHostUrl(process.env.OPENCHAMBER_SERVER_URL || '');
-      if (Object.prototype.hasOwnProperty.call(nextConfigInput, 'localClientToken') && isLocalRuntimeUrl(state.apiBaseUrl || state.sidecarUrl || state.localOrigin || '')) {
+      if (Object.prototype.hasOwnProperty.call(nextConfigInput, 'localClientToken') && isLocalRuntimeUrl(state.apiBaseUrl || state.localServerUrl || state.localOrigin || '')) {
         state.clientToken = readDesktopLocalClientToken();
       }
       state.bootOutcome = computeBootOutcome({
         envTargetUrl: envTarget || null,
         probe: null,
         config: updatedConfig,
-        localAvailable: Boolean(state.sidecarUrl || state.localOrigin),
+        localAvailable: Boolean(state.localServerUrl || state.localOrigin),
       });
       state.initScript = buildInitScript(state.localOrigin, state.bootOutcome, state.apiBaseUrl, state.clientToken, state.requestHeaders || {});
       syncMainWindowInitScript(state.initScript);
@@ -4216,10 +4216,10 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
 
     case 'desktop_new_window': {
       const config = readDesktopHostsConfig();
-      const localUiUrl = shouldUsePackagedUi() ? buildPackagedUiUrl('/index.html') : (state.sidecarUrl || state.localOrigin);
+      const localUiUrl = shouldUsePackagedUi() ? buildPackagedUiUrl('/index.html') : (state.localServerUrl || state.localOrigin);
       let targetUrl = localUiUrl;
       let runtimeConfig = {
-        apiBaseUrl: state.sidecarUrl || state.localOrigin || '',
+        apiBaseUrl: state.localServerUrl || state.localOrigin || '',
         clientToken: readDesktopLocalClientToken(),
         requestHeaders: {},
       };
@@ -4249,7 +4249,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       const host = config.hosts.find((entry) => entry.id === hostId);
       if (!host) throw new Error('Host not found');
       if (host.relay) {
-        const windowUrl = shouldUsePackagedUi() ? buildPackagedUiUrl('/index.html') : (state.sidecarUrl || state.localOrigin);
+        const windowUrl = shouldUsePackagedUi() ? buildPackagedUiUrl('/index.html') : (state.localServerUrl || state.localOrigin);
         await createAdditionalWindow(windowUrl, {
           apiBaseUrl: '',
           clientToken: host.clientToken || '',
@@ -4703,9 +4703,9 @@ const isLocalSender = (webContents) => {
       } catch {
       }
     }
-    if (state.sidecarUrl) {
+    if (state.localServerUrl) {
       try {
-        const allowed = new URL(state.sidecarUrl);
+        const allowed = new URL(state.localServerUrl);
         if (allowed.origin === url.origin) return true;
       } catch {
       }
