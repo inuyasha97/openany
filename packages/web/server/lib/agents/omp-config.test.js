@@ -1,9 +1,18 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createOmpConfig } from './omp-config.js';
+
+const sqlite = (() => {
+  try {
+    return createRequire(import.meta.url)('node:sqlite');
+  } catch {
+    return null;
+  }
+})();
 
 let home;
 let project;
@@ -11,6 +20,21 @@ let project;
 const write = (file, value) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+};
+
+/** Seed OMP's `auth_credentials` table with one active oauth row per id. */
+const seedCredentials = (dir, ids) => {
+  const db = new sqlite.DatabaseSync(path.join(dir, 'agent.db'));
+  db.exec(
+    'CREATE TABLE auth_credentials (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, ' +
+      'credential_type TEXT NOT NULL, data TEXT NOT NULL, disabled_cause TEXT DEFAULT NULL, ' +
+      'updated_at INTEGER NOT NULL DEFAULT 0)',
+  );
+  const insert = db.prepare(
+    'INSERT INTO auth_credentials (provider, credential_type, data, disabled_cause) VALUES (?, ?, ?, ?)',
+  );
+  for (const id of ids) insert.run(id, 'oauth', JSON.stringify({ access: 'a', refresh: 'r', expires: 1 }), null);
+  db.close();
 };
 const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 
@@ -113,8 +137,67 @@ describe('createOmpConfig mutations', () => {
 
     expect(read(path.join(home, 'mcp.json')).mcpServers.new).toEqual({ command: 'bin', args: ['--x'] });
     expect(config.listMcp(project)).toEqual([
-      { name: 'new', scope: 'user', enabled: true, type: 'stdio', command: 'bin', url: undefined },
+      { name: 'new', scope: 'user', enabled: true, type: 'stdio', command: 'bin', url: undefined, credentialId: undefined, authenticated: false },
     ]);
+  });
+});
+
+describe.skipIf(!sqlite)('createOmpConfig.listMcp credential state', () => {
+  const credentialId = 'mcp_oauth:profile:default:https://mcp.example.com';
+
+  it('reports a credential id that resolves in OMP database as authenticated', () => {
+    seedCredentials(home, [credentialId]);
+    write(path.join(home, 'mcp.json'), {
+      mcpServers: { remote: { url: 'https://mcp.example.com', auth: { type: 'oauth', credentialId } } },
+    });
+
+    const [server] = createOmpConfig({ home }).listMcp(project);
+
+    expect(server).toMatchObject({ name: 'remote', credentialId, authenticated: true });
+  });
+
+  it('reports a credential id missing from the database as not authenticated', () => {
+    seedCredentials(home, ['some-other-provider']);
+    write(path.join(home, 'mcp.json'), {
+      mcpServers: { remote: { url: 'https://mcp.example.com', auth: { type: 'oauth', credentialId } } },
+    });
+
+    const [server] = createOmpConfig({ home }).listMcp(project);
+
+    expect(server.credentialId).toBe(credentialId);
+    expect(server.authenticated).toBe(false);
+  });
+
+  it('reports a server with no auth block as not authenticated', () => {
+    write(path.join(home, 'mcp.json'), { mcpServers: { plain: { url: 'https://plain.example.com' } } });
+
+    const [server] = createOmpConfig({ home }).listMcp(project);
+
+    expect(server.credentialId).toBeUndefined();
+    expect(server.authenticated).toBe(false);
+  });
+
+  it('never rewrites a hand-written mcp.json on a read', () => {
+    const file = path.join(home, 'mcp.json');
+    const original = [
+      '{',
+      '  "mcpServers": {',
+      '    "remote": {',
+      '      "url": "https://mcp.example.com",',
+      '      "auth": { "type": "oauth", "credentialId": "mcp_oauth:x" },',
+      '      "unknownKey": 42',
+      '    }',
+      '  },',
+      '  "someOtherTopLevel": true',
+      '}',
+      '',
+    ].join('\n');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, original);
+
+    createOmpConfig({ home }).listMcp(project);
+
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
   });
 });
 

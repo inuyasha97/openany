@@ -590,6 +590,9 @@ stores need no change. Only the storage behind the shape is OMP's.
 
 // McpEntity — projected from an OMP `mcpServers` entry; `type` is `local` or
 // `remote`. See the mapping table below for which fields OMP carries.
+// `credentialId` (OMP's `auth.credentialId`) and `authenticated` (whether that
+// id still resolves in OMP's agent database) are read-only state the server
+// computes, never written back to `mcp.json`.
 { "type": "local", "command": ["npx", "@playwright/mcp"], "cwd": "…",
   "environment": {}, "disabled": false, "timeout": { "execution": 30000 } }
 { "type": "remote", "url": "https://mcp.example.com", "headers": {},
@@ -669,8 +672,12 @@ with a `CommandEntity`.
 `subtask` is accepted as the v1 name for `subagent`.
 
 `GET /api/config/mcp` — array of `McpEntity` extended with
-`{ name, scope, sectionKey: "mcpServers", legacy: false }`, merged project-first
-with the user file winning a shared name.
+`{ name, scope, sectionKey: "mcpServers", legacy: false, credentialId?, authenticated }`,
+merged project-first with the user file winning a shared name. `credentialId`
+is the entry's `auth.credentialId` when it has one; `authenticated` says whether
+that id resolves to an active row in the agent dir's `agent.db`
+(`readCredentialIdsFromDb` in `credentials.js`), so a config-only read tells
+signed-in from signed-out.
 `GET /api/config/mcp/:name` — one such entry, or 404.
 `POST` / `PATCH` / `DELETE /api/config/mcp/:name` — body is an `McpEntity`
 (plus `scope` on create). Answers `{ success: true, message, path }`.
@@ -752,7 +759,9 @@ the user file winning a shared name, matching OMP's precedence.
 
 Note: `lib/agents/omp-config.js` (the `/api/agents/omp/mcp` surface) defaults
 its user file to `~/.omp/mcp.json`, while OMP's own resolver and the mcp schema
-place it at `~/.omp/agent/mcp.json` — the path these routes use.
+place it at `~/.omp/agent/mcp.json` — the path these routes use. Its `listMcp`
+reports the same `credentialId`/`authenticated` pair, resolved against the same
+`agent.db`.
 
 ### AGENTS.md
 

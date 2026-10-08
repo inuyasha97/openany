@@ -24,6 +24,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OPENCODE_CONFIG_DIR } from '../openchamber/agent-config-files.js';
+import { readCredentialIdsFromDb, resolveCredentialDbPath } from '../openchamber/credentials.js';
 
 /** The directory OMP reads user MCP files from: its agent dir. */
 export const defaultOmpAgentDir = () =>
@@ -73,9 +74,9 @@ export function createOmpConfig({ agentDir, home } = {}) {
   const projectPaths = (d) => [path.join(d, '.omp', 'mcp.json'), path.join(d, '.omp', '.mcp.json')];
   const projectPath = (directory) => projectPaths(directory || process.cwd())[0];
 
-  const listMcp = (directory) => {
+  const listMcp = (projectDirectory) => {
     const user = readJsonPair(userPaths) ?? {};
-    const project = directory ? readJsonPair(projectPaths(directory)) ?? {} : {};
+    const project = projectDirectory ? readJsonPair(projectPaths(projectDirectory)) ?? {} : {};
     // OMP reads the deny and force-enable lists from the user file only: the
     // project `mcp.json` provider reads `mcpServers` and ignores both lists, so
     // honouring a project list here would report a server disabled that OMP
@@ -83,15 +84,31 @@ export function createOmpConfig({ agentDir, home } = {}) {
     const disabled = new Set(user.disabledServers ?? []);
     const forced = new Set(user.enabledServers ?? []);
     const userServers = user.mcpServers ?? {};
+    const entries = Object.entries({ ...(project.mcpServers ?? {}), ...userServers });
+    const credentialIdOf = (config) => (typeof config.auth?.credentialId === 'string' && config.auth.credentialId.trim()
+      ? config.auth.credentialId.trim()
+      : undefined);
+    // Read as OMP does: `auth.credentialId` points at a row in the agent dir's
+    // database (its `mcp_oauth:…` provider key). The store is opened only when
+    // a server actually claims a credential — with none there is nothing to
+    // resolve, so a listing never touches the database.
+    const credentialIds = entries.some(([, config]) => credentialIdOf(config))
+      ? readCredentialIdsFromDb({ dbPath: resolveCredentialDbPath({ agentDir: directory }) })
+      : null;
 
-    return Object.entries({ ...(project.mcpServers ?? {}), ...userServers }).map(([name, config]) => ({
-      name,
-      scope: Object.prototype.hasOwnProperty.call(userServers, name) ? 'user' : 'project',
-      enabled: !disabled.has(name) && (forced.has(name) || config.enabled !== false),
-      type: config.type ?? (config.url ? 'http' : 'stdio'),
-      command: config.command,
-      url: config.url,
-    }));
+    return entries.map(([name, config]) => {
+      const credentialId = credentialIdOf(config);
+      return {
+        name,
+        scope: Object.prototype.hasOwnProperty.call(userServers, name) ? 'user' : 'project',
+        enabled: !disabled.has(name) && (forced.has(name) || config.enabled !== false),
+        type: config.type ?? (config.url ? 'http' : 'stdio'),
+        command: config.command,
+        url: config.url,
+        credentialId,
+        authenticated: Boolean(credentialId) && credentialIds !== null && credentialIds.has(credentialId),
+      };
+    });
   };
 
   const setMcpEnabled = (name, enabled) => {

@@ -27,7 +27,7 @@ import { useSettingsDirectory } from '@/hooks/useSettingsDirectory';
 import { useI18n } from '@/lib/i18n';
 import { rankByQuery } from '@/lib/search/fuzzySearch';
 import { cn } from '@/lib/utils';
-import { selectMcpServersForDirectory, useMcpConfigStore, type McpDraft } from '@/stores/useMcpConfigStore';
+import { selectMcpServersForDirectory, useMcpConfigStore, mcpServerShowsAuthState, type McpDraft, type McpServerWithScope } from '@/stores/useMcpConfigStore';
 import { useMcpStore } from '@/stores/useMcpStore';
 import type { McpServerStatus } from '@/lib/opencode/model';
 import { MCP_DRAFT_OAUTH_UNSET } from './mcpDraft';
@@ -56,6 +56,15 @@ const StatusPill: React.FC<{ status: McpServerStatus['status']['status'] | undef
           ? { tone: 'neutral', label: t('settings.mcp.grid.status.pending') }
           : null;
   return pill ? <SettingsCardPill tone={pill.tone}>{pill.label}</SettingsCardPill> : null;
+};
+
+/** OMP's own OAuth state for a server, when OMP is the one that signs it in. */
+const McpAuthPill: React.FC<{ server: McpServerWithScope }> = ({ server }) => {
+  const { t } = useI18n();
+  if (!mcpServerShowsAuthState(server)) return null;
+  return server.authenticated === true
+    ? <SettingsCardPill tone="success">{t('settings.mcp.grid.auth.authenticated')}</SettingsCardPill>
+    : <SettingsCardPill tone="warning">{t('settings.mcp.grid.auth.notAuthenticated')}</SettingsCardPill>;
 };
 
 /** Browse view of the MCP page: one card per configured server with its live status. */
@@ -186,13 +195,19 @@ export const McpGrid: React.FC = () => {
         {filtered.map((server) => {
           const enabled = server.disabled !== true;
           const target = server.type === 'local' ? server.command?.join(' ') : server.url;
+          const needsAuth = mcpServerShowsAuthState(server) && server.authenticated !== true;
           return (
             <SettingsCard
               key={server.name}
               icon={<SettingsCardIcon name={server.type === 'local' ? 'server' : 'global'} />}
               title={server.name}
               subtitle={target || undefined}
-              badges={<StatusPill status={mcpStatus[server.name]?.status.status} enabled={enabled} />}
+              badges={(
+                <>
+                  <StatusPill status={mcpStatus[server.name]?.status.status} enabled={enabled} />
+                  <McpAuthPill server={server} />
+                </>
+              )}
               muted={!enabled}
               footer={(
                 <>
@@ -202,6 +217,11 @@ export const McpGrid: React.FC = () => {
                       : t('settings.mcp.sidebar.serverType.remoteTitle')}
                   </span>
                   {server.scope === 'project' ? <SettingsCardChip>{t('settings.mcp.grid.scope.project')}</SettingsCardChip> : null}
+                  {needsAuth ? (
+                    <span className="min-w-0 truncate" title={t('settings.mcp.page.status.description.needsAuth')}>
+                      {t('settings.mcp.page.status.description.needsAuth')}
+                    </span>
+                  ) : null}
                 </>
               )}
               onOpen={() => {

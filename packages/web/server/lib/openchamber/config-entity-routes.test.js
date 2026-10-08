@@ -2,6 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { createRequire } from 'node:module';
+
+const sqlite = (() => {
+  try {
+    return createRequire(import.meta.url)('node:sqlite');
+  } catch {
+    return null;
+  }
+})();
 
 const ENV_KEYS = ['PI_CODING_AGENT_DIR', 'PI_CONFIG_DIR', 'OMP_PROFILE', 'PI_PROFILE', 'PI_CONFIG_FILES'];
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -81,6 +90,21 @@ const invoke = async (routes, key, request) => {
 };
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+
+/** Seed OMP's `auth_credentials` table with one active oauth row per id. */
+const seedCredentials = (dir, ids) => {
+  const db = new sqlite.DatabaseSync(path.join(dir, 'agent.db'));
+  db.exec(
+    'CREATE TABLE auth_credentials (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, ' +
+      'credential_type TEXT NOT NULL, data TEXT NOT NULL, disabled_cause TEXT DEFAULT NULL, ' +
+      'updated_at INTEGER NOT NULL DEFAULT 0)',
+  );
+  const insert = db.prepare(
+    'INSERT INTO auth_credentials (provider, credential_type, data, disabled_cause) VALUES (?, ?, ?, ?)',
+  );
+  for (const id of ids) insert.run(id, 'oauth', JSON.stringify({ access: 'a', refresh: 'r', expires: 1 }), null);
+  db.close();
+};
 
 describe('agent markdown CRUD', () => {
   it('creates, reads, updates and deletes a user-level agent', async () => {
@@ -290,6 +314,7 @@ describe('MCP mcp.json CRUD', () => {
         scope: 'user',
         sectionKey: 'mcpServers',
         legacy: false,
+        authenticated: false,
       },
     ]);
 
@@ -400,6 +425,45 @@ describe('MCP mcp.json CRUD', () => {
     });
     expect(response.statusCode).toBe(404);
     expect(response.body.error).toBe('MCP server "ghost" not found');
+  });
+});
+
+describe.skipIf(!sqlite)('MCP credential state', () => {
+  const signedId = 'mcp_oauth:profile:default:https://signed.example.com';
+  const unsignedId = 'mcp_oauth:profile:default:https://unsigned.example.com';
+
+  it('carries the credential id and whether it resolves into the entity', async () => {
+    const routes = await registerRoutes();
+    seedCredentials(agentDir, [signedId]);
+    fs.writeFileSync(path.join(agentDir, 'mcp.json'), JSON.stringify({
+      mcpServers: {
+        signed: { type: 'http', url: 'https://signed.example.com', auth: { type: 'oauth', credentialId: signedId } },
+        unsigned: { type: 'http', url: 'https://unsigned.example.com', auth: { type: 'oauth', credentialId: unsignedId } },
+        plain: { type: 'http', url: 'https://plain.example.com' },
+      },
+    }, null, 2));
+
+    const list = await invoke(routes, 'GET /api/config/mcp', {});
+    const byName = Object.fromEntries(list.body.map((entry) => [entry.name, entry]));
+
+    expect(byName.signed).toMatchObject({ credentialId: signedId, authenticated: true });
+    expect(byName.unsigned).toMatchObject({ credentialId: unsignedId, authenticated: false });
+    expect(byName.plain.credentialId).toBeUndefined();
+    expect(byName.plain.authenticated).toBe(false);
+  });
+
+  it('never rewrites a hand-written mcp.json on a read', async () => {
+    const routes = await registerRoutes();
+    const file = path.join(agentDir, 'mcp.json');
+    const original = `${JSON.stringify({
+      mcpServers: { keep: { type: 'http', url: 'https://keep.example.com', extra: { nested: true } } },
+      someOtherTopLevel: true,
+    }, null, 2)}\n`;
+    fs.writeFileSync(file, original);
+
+    await invoke(routes, 'GET /api/config/mcp', {});
+
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
   });
 });
 

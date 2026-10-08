@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
-import { readAuthFile, resolveCredentialDbPath } from './credentials.js';
+import { readAuthFile, readCredentialIdsFromDb, resolveCredentialDbPath } from './credentials.js';
 
 const sqlite = (() => {
   try {
@@ -140,5 +140,24 @@ describe('resolveCredentialDbPath', () => {
       exists,
       path,
     })).toBe(path.join('/pinned', 'agent.db'));
+  });
+});
+
+describe.skipIf(!sqlite)('readCredentialIdsFromDb', () => {
+  it('lists every active credential id and skips tombstones', () => {
+    seedDb([
+      { provider: 'anthropic', type: 'oauth', data: { access: 'a', refresh: 'r', expires: 1 } },
+      { provider: 'mcp_oauth:profile:default:https://mcp.example.com', type: 'oauth', data: { access: 'a', refresh: 'r', expires: 1 } },
+      { provider: 'deleted', type: 'api_key', data: { key: 'k' }, disabledCause: 'deleted by user' },
+    ]);
+
+    expect(readCredentialIdsFromDb({ dbPath })).toEqual(new Set([
+      'anthropic',
+      'mcp_oauth:profile:default:https://mcp.example.com',
+    ]));
+  });
+
+  it('answers null when the database does not exist, so a caller can tell "no such row" from "could not look"', () => {
+    expect(readCredentialIdsFromDb({ dbPath: path.join(dir, 'missing.db') })).toBeNull();
   });
 });

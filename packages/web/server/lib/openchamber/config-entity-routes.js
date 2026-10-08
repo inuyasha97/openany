@@ -43,6 +43,7 @@ import {
   writeMdFile,
 } from './agent-config-files.js';
 import { buildAppliedResponse } from './config-mutation-response.js';
+import { readCredentialIdsFromDb, resolveCredentialDbPath } from './credentials.js';
 
 // ============== UNSUPPORTED SECTIONS ==============
 
@@ -442,14 +443,19 @@ function entityOAuthToOmp(value) {
 /**
  * Canonical MCP entity from an OMP `mcpServers[name]` entry. `type` collapses
  * OMP's `stdio`/`http`/`sse` onto the UI's `local`/`remote`; the single OMP
- * `timeout` maps to the entity's `execution` phase.
+ * `timeout` maps to the entity's `execution` phase. `credentialId` and
+ * `authenticated` report OMP's own OAuth state: the `auth.credentialId` the
+ * entry points at, and whether that id still resolves in the agent database.
  */
-function toMcpEntity(raw, { disabled } = {}) {
+function toMcpEntity(raw, { disabled, credentialIds } = {}) {
   const source = isRecord(raw) ? raw : {};
+  const credentialId = trimmedString(source.auth?.credentialId);
   const remote = source.type === 'http' || source.type === 'sse' || (source.type === undefined && typeof source.url === 'string');
   const shared = pickDefined([
     ['disabled', typeof disabled === 'boolean' ? disabled : (source.enabled === false ? true : undefined)],
     ['timeout', positiveInt(source.timeout) === undefined ? undefined : { execution: positiveInt(source.timeout) }],
+    ['credentialId', credentialId],
+    ['authenticated', Boolean(credentialId) && credentialIds instanceof Set && credentialIds.has(credentialId)],
   ]);
   if (remote) {
     return pickDefined([
@@ -548,6 +554,19 @@ export const registerConfigEntityRoutes = (app, dependencies = {}) => {
   const mcpUserPath = path.join(ompAgentDir, 'mcp.json');
 
   const projectDirPath = (directory, ...parts) => path.join(directory, OMP_PROJECT_DIR, ...parts);
+
+  /**
+   * The credential ids OMP's MCP OAuth rows resolve against, read lazily: a
+   * listing whose servers claim no `auth.credentialId` has nothing to resolve,
+   * so it never opens the agent database.
+   */
+  const resolveCredentialIds = (entries) => {
+    const list = Array.isArray(entries) ? entries : [entries];
+    const claimed = list.some((entry) =>
+      isRecord(entry) && typeof entry.auth?.credentialId === 'string' && entry.auth.credentialId.trim().length > 0);
+    if (!claimed) return null;
+    return readCredentialIdsFromDb({ dbPath: resolveCredentialDbPath({ agentDir: ompAgentDir }) });
+  };
 
   const respondUnsupported = (res, error) =>
     res.status(UNSUPPORTED_CONFIG_SECTION_STATUS).json({ error: error.message, code: error.code });
@@ -895,12 +914,18 @@ export const registerConfigEntityRoutes = (app, dependencies = {}) => {
     const userServers = userFile.mcpServers ?? {};
     const projectServers = projectFile.mcpServers ?? {};
     const names = [...new Set([...Object.keys(projectServers), ...Object.keys(userServers)])];
-    return names.map((name) => {
+    const entries = names.map((name) => (Object.hasOwn(userServers, name) ? userServers[name] : projectServers[name]));
+    // OMP keys an MCP server's OAuth credential by the `auth.credentialId` in
+    // its `mcp.json`; the agent-dir database is where that id either resolves
+    // or does not. The store is opened only when a server claims a credential,
+    // so a listing without one never touches the database.
+    const credentialIds = resolveCredentialIds(entries);
+    return names.map((name, index) => {
       const inUser = Object.hasOwn(userServers, name);
-      const entry = inUser ? userServers[name] : projectServers[name];
+      const entry = entries[index];
       return {
         name,
-        ...toMcpEntity(entry, { disabled: mcpDisabledOf(name, entry, userFile) }),
+        ...toMcpEntity(entry, { disabled: mcpDisabledOf(name, entry, userFile), credentialIds }),
         scope: inUser ? 'user' : 'project',
         sectionKey: 'mcpServers',
         legacy: false,
@@ -944,7 +969,10 @@ export const registerConfigEntityRoutes = (app, dependencies = {}) => {
     if (!location) {
       throw new Error(`MCP server "${name}" not found`);
     }
-    const existing = toMcpEntity(location.entry, { disabled: mcpDisabledOf(name, location.entry, userFile) });
+    const existing = toMcpEntity(location.entry, {
+      disabled: mcpDisabledOf(name, location.entry, userFile),
+      credentialIds: resolveCredentialIds([location.entry]),
+    });
     const { name: _ignoredName, scope: _ignoredScope, ...updateData } = updates || {};
     const entity = { ...existing, ...updateData };
     const entry = fromMcpEntity(entity);

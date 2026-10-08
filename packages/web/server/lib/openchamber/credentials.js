@@ -149,6 +149,31 @@ export const projectCredential = (credentialType, raw) => {
 };
 
 /**
+ * Run `read` against OMP's credential store. Returns null when the database,
+ * the sqlite runtime or the table is unavailable, so the caller can tell "no
+ * credentials" from "could not look".
+ */
+const withCredentialsDb = ({ dbPath, fileSystem = fs }, read) => {
+  const open = loadSqlite();
+  if (!open || !dbPath || !fileSystem.existsSync(dbPath)) return null;
+
+  let db;
+  try {
+    db = open(dbPath);
+    return read(db);
+  } catch (error) {
+    console.warn('Could not read the OMP credentials database:', error instanceof Error ? error.message : error);
+    return null;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // The connection is read-only; a failed close changes nothing.
+    }
+  }
+};
+
+/**
  * Every active credential in OMP's database, one entry per provider, in the
  * legacy shape. A provider can hold several credentials (one per account) and
  * the map has one slot, so the most recently updated one wins.
@@ -157,13 +182,8 @@ export const projectCredential = (credentialType, raw) => {
  *   runtime or the `auth_credentials` table is unavailable, so the caller can
  *   tell "no credentials" from "could not look".
  */
-export const readCredentialsFromDb = ({ dbPath, fs: fileSystem = fs } = {}) => {
-  const open = loadSqlite();
-  if (!open || !dbPath || !fileSystem.existsSync(dbPath)) return null;
-
-  let db;
-  try {
-    db = open(dbPath);
+export const readCredentialsFromDb = ({ dbPath, fs: fileSystem = fs } = {}) =>
+  withCredentialsDb({ dbPath, fileSystem }, (db) => {
     const rows = db.all(
       'SELECT provider, credential_type, data FROM auth_credentials ' +
         'WHERE disabled_cause IS NULL AND provider IS NOT NULL ' +
@@ -177,17 +197,28 @@ export const readCredentialsFromDb = ({ dbPath, fs: fileSystem = fs } = {}) => {
       if (entry) result[provider] = entry;
     }
     return result;
-  } catch (error) {
-    console.warn('Could not read the OMP credentials database:', error instanceof Error ? error.message : error);
-    return null;
-  } finally {
-    try {
-      db?.close();
-    } catch {
-      // The connection is read-only; a failed close changes nothing.
+  });
+
+/**
+ * The `provider` keys of every active `auth_credentials` row — the credential
+ * ids OMP can resolve. OMP stores an MCP server's OAuth credential under the
+ * `auth.credentialId` its `mcp.json` points at (`mcp_oauth:…`), so membership
+ * here is exactly "that pointer still resolves".
+ *
+ * @returns {Set<string> | null} null when the database, the sqlite runtime or
+ *   the table is unavailable, so the caller can tell "no such credential" from
+ *   "could not look".
+ */
+export const readCredentialIdsFromDb = ({ dbPath, fs: fileSystem = fs } = {}) =>
+  withCredentialsDb({ dbPath, fileSystem }, (db) => {
+    const rows = db.all('SELECT provider FROM auth_credentials WHERE disabled_cause IS NULL AND provider IS NOT NULL');
+    const ids = new Set();
+    for (const row of rows) {
+      const id = typeof row.provider === 'string' ? row.provider.trim() : '';
+      if (id) ids.add(id);
     }
-  }
-};
+    return ids;
+  });
 
 /**
  * `providers.<id>.apiKey` from OMP's models.yml, through the same reader the

@@ -116,13 +116,27 @@ interface McpRemoteConfig extends McpConfigBase {
 
 export type McpServerConfig = (McpLocalConfig | McpRemoteConfig) & { name: string };
 
-type McpServerWithScope = McpServerConfig & {
+export type McpServerWithScope = McpServerConfig & {
   scope?: McpScope | null;
   /** The config file the entry lives in. */
   path?: string | null;
   /** The entry still uses v1 spellings; the next save rewrites it in v2. */
   legacy?: boolean;
+  /** OMP's `auth.credentialId` for this server, when its `mcp.json` carries one. */
+  credentialId?: string;
+  /** Whether that credential id still resolves in OMP's agent database. */
+  authenticated?: boolean;
 };
+
+/**
+ * Whether this server carries an auth state the UI should show. Authentication
+ * belongs to remote (OAuth) transports; a local stdio server never goes through
+ * OMP's `/mcp` reauth, so showing it "not authenticated" would name an action
+ * that cannot apply. OMP resolves a credential by the entry's `auth.credentialId`
+ * or, when the config names none, by the server URL, so every remote server has
+ * a state even with no credential pointer.
+ */
+export const mcpServerShowsAuthState = (server: McpServerWithScope): boolean => server.type === 'remote';
 
 export interface McpDraft {
   name: string;

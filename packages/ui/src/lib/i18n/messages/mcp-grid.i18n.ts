@@ -10,6 +10,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': 'Disabled',
     'settings.mcp.grid.status.pending': 'Connecting',
     'settings.mcp.grid.scope.project': 'Project',
+    'settings.mcp.grid.auth.authenticated': 'Authenticated',
+    'settings.mcp.grid.auth.notAuthenticated': 'Not authenticated',
     'settings.mcp.page.back': 'All servers',
   },
   nl: {
@@ -22,6 +24,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': 'Uitgeschakeld',
     'settings.mcp.grid.status.pending': 'Verbinden',
     'settings.mcp.grid.scope.project': 'Project',
+    'settings.mcp.grid.auth.authenticated': 'Geverifieerd',
+    'settings.mcp.grid.auth.notAuthenticated': 'Niet geverifieerd',
     'settings.mcp.page.back': 'Alle servers',
   },
   uk: {
@@ -34,6 +38,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': 'Вимкнено',
     'settings.mcp.grid.status.pending': 'Підключення',
     'settings.mcp.grid.scope.project': 'Проєкт',
+    'settings.mcp.grid.auth.authenticated': 'Автентифіковано',
+    'settings.mcp.grid.auth.notAuthenticated': 'Не автентифіковано',
     'settings.mcp.page.back': 'Усі сервери',
   },
   de: {
@@ -46,6 +52,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': 'Deaktiviert',
     'settings.mcp.grid.status.pending': 'Verbindet',
     'settings.mcp.grid.scope.project': 'Projekt',
+    'settings.mcp.grid.auth.authenticated': 'Authentifiziert',
+    'settings.mcp.grid.auth.notAuthenticated': 'Nicht authentifiziert',
     'settings.mcp.page.back': 'Alle Server',
   },
   es: {
@@ -58,6 +66,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': 'Desactivado',
     'settings.mcp.grid.status.pending': 'Conectando',
     'settings.mcp.grid.scope.project': 'Proyecto',
+    'settings.mcp.grid.auth.authenticated': 'Autenticado',
+    'settings.mcp.grid.auth.notAuthenticated': 'No autenticado',
     'settings.mcp.page.back': 'Todos los servidores',
   },
   fr: {
@@ -70,6 +80,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': 'Désactivé',
     'settings.mcp.grid.status.pending': 'Connexion',
     'settings.mcp.grid.scope.project': 'Projet',
+    'settings.mcp.grid.auth.authenticated': 'Authentifié',
+    'settings.mcp.grid.auth.notAuthenticated': 'Non authentifié',
     'settings.mcp.page.back': 'Tous les serveurs',
   },
   ja: {
@@ -82,6 +94,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': '無効',
     'settings.mcp.grid.status.pending': '接続中',
     'settings.mcp.grid.scope.project': 'プロジェクト',
+    'settings.mcp.grid.auth.authenticated': '認証済み',
+    'settings.mcp.grid.auth.notAuthenticated': '未認証',
     'settings.mcp.page.back': 'すべてのサーバー',
   },
   ko: {
@@ -94,6 +108,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': '비활성화됨',
     'settings.mcp.grid.status.pending': '연결 중',
     'settings.mcp.grid.scope.project': '프로젝트',
+    'settings.mcp.grid.auth.authenticated': '인증됨',
+    'settings.mcp.grid.auth.notAuthenticated': '인증되지 않음',
     'settings.mcp.page.back': '모든 서버',
   },
   pl: {
@@ -106,6 +122,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': 'Wyłączony',
     'settings.mcp.grid.status.pending': 'Łączenie',
     'settings.mcp.grid.scope.project': 'Projekt',
+    'settings.mcp.grid.auth.authenticated': 'Uwierzytelniono',
+    'settings.mcp.grid.auth.notAuthenticated': 'Nie uwierzytelniono',
     'settings.mcp.page.back': 'Wszystkie serwery',
   },
   'pt-BR': {
@@ -118,6 +136,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': 'Desativado',
     'settings.mcp.grid.status.pending': 'Conectando',
     'settings.mcp.grid.scope.project': 'Projeto',
+    'settings.mcp.grid.auth.authenticated': 'Autenticado',
+    'settings.mcp.grid.auth.notAuthenticated': 'Não autenticado',
     'settings.mcp.page.back': 'Todos os servidores',
   },
   tr: {
@@ -130,6 +150,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': 'Devre dışı',
     'settings.mcp.grid.status.pending': 'Bağlanıyor',
     'settings.mcp.grid.scope.project': 'Proje',
+    'settings.mcp.grid.auth.authenticated': 'Kimliği doğrulandı',
+    'settings.mcp.grid.auth.notAuthenticated': 'Kimliği doğrulanmadı',
     'settings.mcp.page.back': 'Tüm sunucular',
   },
   'zh-CN': {
@@ -142,6 +164,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': '已停用',
     'settings.mcp.grid.status.pending': '连接中',
     'settings.mcp.grid.scope.project': '项目',
+    'settings.mcp.grid.auth.authenticated': '已认证',
+    'settings.mcp.grid.auth.notAuthenticated': '未认证',
     'settings.mcp.page.back': '所有服务器',
   },
   'zh-TW': {
@@ -154,6 +178,8 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.disabled': '已停用',
     'settings.mcp.grid.status.pending': '連線中',
     'settings.mcp.grid.scope.project': '專案',
+    'settings.mcp.grid.auth.authenticated': '已驗證',
+    'settings.mcp.grid.auth.notAuthenticated': '未驗證',
     'settings.mcp.page.back': '所有伺服器',
   },
 } as const;

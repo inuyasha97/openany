@@ -7,6 +7,7 @@ import {
   selectMcpServersForDirectory,
   useMcpConfigStore,
   envRecordToArray,
+  mcpServerShowsAuthState,
   MCP_PROTOCOLS,
   MCP_CODEMODE_CHOICES,
   codemodeChoiceOf,
@@ -490,6 +491,23 @@ const StatusBadge: React.FC<{
   return (
     <span className={cn('typography-micro font-medium', colors.text)}>
       ● {getStatusLabel(status)}
+    </span>
+  );
+};
+
+/** OMP's own OAuth state for the selected server, shown beside the runtime badge. */
+const AuthBadge: React.FC<{ authenticated: boolean }> = ({ authenticated }) => {
+  const { t } = useI18n();
+  return (
+    <span
+      className={cn(
+        'typography-micro font-medium rounded-full px-2 py-0.5',
+        authenticated
+          ? 'text-[var(--status-success)] bg-[var(--status-success)]/10'
+          : 'text-[var(--status-warning)] bg-[var(--status-warning)]/10',
+      )}
+    >
+      ● {authenticated ? t('settings.mcp.grid.auth.authenticated') : t('settings.mcp.grid.auth.notAuthenticated')}
     </span>
   );
 };
@@ -1144,12 +1162,17 @@ export const McpPage: React.FC = () => {
           />
         )}
         titleAccessory={!isNewServer ? (
-          <StatusBadge
-            status={effectiveStatusName}
-            enabled={enabled}
-            getStatusLabel={getStatusLabel}
-            variant="pill"
-          />
+          <>
+            <StatusBadge
+              status={effectiveStatusName}
+              enabled={enabled}
+              getStatusLabel={getStatusLabel}
+              variant="pill"
+            />
+            {selectedServer && mcpServerShowsAuthState(selectedServer) ? (
+              <AuthBadge authenticated={selectedServer.authenticated === true} />
+            ) : null}
+          </>
         ) : undefined}
         description={isNewServer
           ? t('settings.mcp.page.header.configureNewServer')
@@ -1219,6 +1242,22 @@ export const McpPage: React.FC = () => {
                   )}
                 </div>
 
+              </div>
+            </div>
+          </SettingsSection>
+        )}
+
+        {!isNewServer && selectedServer && mcpServerShowsAuthState(selectedServer) && selectedServer.authenticated !== true && (
+          <SettingsSection divider={false}>
+            <div className="rounded-lg border p-3 border-[var(--status-warning-border)] bg-[var(--status-warning-background)]">
+              <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className={SETTINGS_FIELD_LABEL_CLASS}>{t('settings.mcp.grid.auth.notAuthenticated')}</span>
+                </div>
+                <p className="typography-meta text-muted-foreground">{t('settings.mcp.page.status.description.needsAuth')}</p>
+                {selectedServer.credentialId ? (
+                  <p className="break-all font-mono typography-micro text-muted-foreground/80">{selectedServer.credentialId}</p>
+                ) : null}
               </div>
             </div>
           </SettingsSection>
