@@ -256,12 +256,11 @@ Each resolves the handle for `id` and issues the matching RPC command; `cycleThi
 `omp-routes.js`, beside the existing model route:
 
 ```
-GET  /api/agents/omp/sessions/:id/model    (extend its response with `thinking`)
-POST /api/agents/omp/sessions/:id/thinking  body { level }   → 200 { level }
-POST /api/agents/omp/sessions/:id/fast-mode body { enabled } → 200 { enabled, active }
+POST /api/agents/omp/sessions/:id/thinking   body { level }   → 200 { level }
+POST /api/agents/omp/sessions/:id/fast-mode  body { enabled } → 200 { enabled, active }
 ```
 
-Validate `level` against OMP's enum with Zod: `inherit|off|minimal|low|medium|high|xhigh|max`. A bad level is a 400 naming the accepted values.
+Validate `level` against OMP's enum with Zod: `inherit|off|minimal|low|medium|high|xhigh|max`. A bad level is a 400 naming the accepted values. (The model catalog's `thinking` reaches the picker through `GET /api/agents/omp/models`; there is no per-session model GET, and none is needed.)
 
 - [ ] **Step 5: Run the route tests**
 
@@ -270,7 +269,7 @@ Expected: PASS, including new cases for the 400 and the happy path.
 
 - [ ] **Step 6: Surface the model's thinking capability**
 
-`get_available_models` returns `Model[]`; each model may carry `thinking?: ThinkingConfig` with `efforts[]`, `defaultLevel`, and `reasoning: boolean`. Extend the model projection in `omp-runtime-host.js` to pass through `reasoning`, `thinking.efforts` and `thinking.defaultLevel`, and extend the UI's model type accordingly. A model without `thinking` must project `efforts: []` — the picker then hides the effort control (Review Focus 3).
+`get_available_models` returns `Model[]`; each model may carry `thinking?: ThinkingConfig` with `efforts[]`, `defaultLevel`, and `reasoning: boolean`. The projection lives in the **adapter** (`OmpRuntime.listModels()` returns the raw `Model` spread plus normalized `reasoning`, `efforts` — `[]` when the model has no `thinking` — and `defaultLevel`); the host and route forward it unchanged. A model without `thinking` must project `efforts: []` — the picker then hides the effort control (Review Focus 3). Pin the wire shape with a test so a regression upstream is visible.
 
 - [ ] **Step 7: Write the failing UI test for the effort control**
 

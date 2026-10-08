@@ -60,6 +60,7 @@ import {
 import { createProjectDirectoryRuntime } from './lib/openchamber/project-directory-runtime.js';
 import { createSettingsNormalizationRuntime } from './lib/openchamber/settings-normalization-runtime.js';
 import { createSettingsHelpers } from './lib/openchamber/settings-helpers.js';
+import { readConfigFile, writeConfig } from './lib/openchamber/agent-config-files.js';
 import { createThemeRuntime } from './lib/openchamber/theme-runtime.js';
 import { createFeatureRoutesRuntime } from './lib/openchamber/feature-routes-runtime.js';
 // Fork-owned OMP agent runtime; the only runtime in this fork.
@@ -654,7 +655,6 @@ const syncToHmrState = () => {
     openCodeBaseUrl,
     isShuttingDown,
     signalsAttached,
-    openCodeWorkingDirectory,
     openCodeAuthPassword,
     openCodeAuthSource,
   });
@@ -671,7 +671,6 @@ const syncFromHmrState = () => {
   openCodeBaseUrl = restored.openCodeBaseUrl;
   isShuttingDown = restored.isShuttingDown;
   signalsAttached = restored.signalsAttached;
-  openCodeWorkingDirectory = restored.openCodeWorkingDirectory;
   openCodeAuthPassword = restored.openCodeAuthPassword;
   openCodeAuthSource = restored.openCodeAuthSource;
 };
@@ -683,10 +682,7 @@ let openCodePort = hmrState.openCodePort;
 let openCodeBaseUrl = hmrState.openCodeBaseUrl ?? null;
 let isShuttingDown = hmrState.isShuttingDown;
 let signalsAttached = hmrState.signalsAttached;
-let openCodeWorkingDirectory = hmrState.openCodeWorkingDirectory;
 
-const ENV_SKIP_OPENCODE_START = process.env.OPENCODE_SKIP_START === 'true' ||
-                                    process.env.OPENCHAMBER_SKIP_OPENCODE_START === 'true';
 const ENV_DESKTOP_NOTIFY = (() => {
   if (process.env.OPENCHAMBER_DESKTOP_NOTIFY === 'true') {
     return true;
@@ -1809,6 +1805,9 @@ async function main(options = {}) {
     sanitizeProjects,
     sanitizeSkillCatalogs,
     isUnsafeSkillRelativePath,
+    // The OMP settings the UI edits live in the agent dir's config.yml.
+    readConfigFile,
+    writeConfig,
     // Dev-server discovery must not offer OpenChamber's own listeners back to
     // the user as something to preview.
     getOwnPorts: () => [port, openCodePort].filter((value) => Number.isInteger(value) && value > 0),
@@ -1968,9 +1967,6 @@ async function main(options = {}) {
     // The server is ready once it listens: the agent runtime is hosted in
     // process and reached on demand, so there is no separate readiness gate.
     isReady: () => true,
-    getOpenCodePort: () => null,
-    getManagedOpenCodePreflight: () => null,
-    getOpenCodeProcessInfo: () => ({ managed: false, pid: null, port: null }),
     stop: (shutdownOptions = {}) => gracefulShutdown({ exitProcess: shutdownOptions.exitProcess ?? false }),
   };
 }

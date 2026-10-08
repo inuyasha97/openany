@@ -155,30 +155,38 @@ function getPreferredServerRuntime() {
   return isBunInstalled() ? 'bun' : 'node';
 }
 
-async function checkOpenCodeCLI(onNotice) {
-  if (process.env.OPENCODE_BINARY) {
-    const override = resolveExplicitBinary(process.env.OPENCODE_BINARY);
+/**
+ * Resolve the OMP CLI the server will spawn, and publish it for the adapter.
+ *
+ * The adapter's `resolveOmpCommand` reads `OPENCHAMBER_OMP_PATH` first, so a
+ * path found here is authoritative for the whole process tree — including the
+ * child a daemon launch spawns.
+ */
+async function checkOmpCLI(onNotice) {
+  const explicit = process.env.OPENCHAMBER_OMP_PATH || process.env.OPENCHAMBER_OMP_BIN || process.env.OMP_BINARY;
+  if (explicit) {
+    const override = resolveExplicitBinary(explicit);
     if (override) {
-      process.env.OPENCODE_BINARY = override;
+      process.env.OPENCHAMBER_OMP_PATH = override;
       return override;
     }
-    const message = `OPENCODE_BINARY="${process.env.OPENCODE_BINARY}" is not an executable file. Falling back to PATH lookup.`;
+    const message = `OPENCHAMBER_OMP_PATH="${explicit}" is not an executable file. Falling back to PATH lookup.`;
     if (typeof onNotice === 'function') {
-      onNotice({ level: 'warning', code: 'OPENCODE_BINARY_INVALID', message });
+      onNotice({ level: 'warning', code: 'OPENCHAMBER_OMP_PATH_INVALID', message });
     } else {
       console.warn(`Warning: ${message}`);
     }
   }
 
-  const resolvedFromPath = searchPathFor('opencode');
+  const resolvedFromPath = searchPathFor('omp');
   if (resolvedFromPath) {
-    process.env.OPENCODE_BINARY = resolvedFromPath;
+    process.env.OPENCHAMBER_OMP_PATH = resolvedFromPath;
     return resolvedFromPath;
   }
 
   throw new Error(
-    `Unable to locate the opencode CLI on PATH (${process.env.PATH || '<empty>'}). ` +
-    'Ensure the CLI is installed and reachable, or set OPENCODE_BINARY to its full path.'
+    `Unable to locate the OMP CLI (omp) on PATH (${process.env.PATH || '<empty>'}). ` +
+    'Install it with `bun add -g @oh-my-pi/pi-coding-agent`, or set OPENCHAMBER_OMP_PATH to its full path.'
   );
 }
 
@@ -211,7 +219,7 @@ const commands = {
 commands.serve = createServeCommand({
   serverPath: path.join(__dirname, '..', 'server', 'index.js'),
   bunBin: BUN_BIN,
-  checkOpenCodeCLI,
+  checkOmpCLI,
   getPreferredServerRuntime,
   setForegroundServerActive(value) { foregroundServerActive = value; },
   setForegroundShutdown(handler) { foregroundShutdown = handler; },

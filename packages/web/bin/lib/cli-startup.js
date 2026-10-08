@@ -86,9 +86,9 @@ function collectStartupEnv(options = {}) {
   );
 
   if (options.envSnapshot !== false) {
-    const opencodeBinary = process.env.OPENCODE_BINARY || searchPathFor('opencode');
-    if (typeof opencodeBinary === 'string' && opencodeBinary.trim().length > 0) {
-      env.OPENCODE_BINARY = opencodeBinary.trim();
+    const ompBinary = process.env.OPENCHAMBER_OMP_PATH || searchPathFor('omp');
+    if (typeof ompBinary === 'string' && ompBinary.trim().length > 0) {
+      env.OPENCHAMBER_OMP_PATH = ompBinary.trim();
     }
   }
   const uiPassword = hasUiPasswordConfigured(options.uiPassword) ? options.uiPassword : undefined;
