@@ -49,10 +49,12 @@ const CAPABILITIES: AgentCapabilities = {
   fork: true,
   commands: true,
   mcp: true,
-  // OMP picks a subagent inside the model's own `task` call. There is no
-  // session agent to list or select, and `get_state` exposes no role the
-  // composer could switch, so both agent capabilities stay false.
-  agents: false,
+  // OMP discovers agent markdown files (`<agent dir>/agents`, project
+  // `.omp/agents`) and the server lists them, so the Agents page and the
+  // composer's defaults have a catalog. It still picks a subagent inside the
+  // model's own `task` call, so `agentSelection` stays false: there is no
+  // session agent to switch.
+  agents: true,
   permissions: true,
   modelSelection: true,
   agentSelection: false,
@@ -202,6 +204,17 @@ const sessionHandleSchema = z.object({
   }),
 })
 const okSchema = z.object({ ok: z.boolean() })
+/** `GET /api/config/agents`: the agent files OMP discovers for a directory. */
+const agentsListSchema = z.object({
+  agents: z.array(z.object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    mode: z.string().optional(),
+    hidden: z.boolean().optional(),
+    scope: z.string().optional(),
+    path: z.string().optional(),
+  })),
+})
 /** `set_thinking_level` answers with the level OMP applied. */
 const thinkingLevelSchema = z.object({ level: z.string().min(1) })
 const commandSchema = z.object({ name: z.string(), source: z.string(), description: z.string().optional() })
@@ -589,8 +602,28 @@ export class OmpRuntimeClient implements AgentRuntime {
   // The parameters are omitted (a narrower signature still satisfies the
   // contract), so an implemented method is the only place that reads them.
 
-  listAgents(): Promise<Agent[]> {
-    return unsupported("listAgents")
+  /**
+   * The agent markdown files OMP discovers (`<agent dir>/agents`, project
+   * `.omp/agents`), which the server lists from the same files the config
+   * routes edit. This is the catalog the Agents page and the composer's
+   * defaults read; OMP chooses a subagent inside the model's own `task` call,
+   * so `agentSelection` stays false and no session agent is picked from it.
+   */
+  async listAgents(directory?: string | null): Promise<Agent[]> {
+    const query = directory ? `?directory=${encodeURIComponent(directory)}` : ""
+    const response = await this.fetchImpl(`/api/config/agents${query}`)
+    const listed = await readJson(response, agentsListSchema)
+    return listed.agents.map((agent) => ({
+      id: agent.name,
+      name: agent.name,
+      displayName: agent.name,
+      description: agent.description,
+      // OMP's files may name no mode: "all" is the vocabulary's neutral value.
+      mode: agent.mode ?? "all",
+      hidden: agent.hidden === true,
+      request: { settings: {}, headers: {}, body: {} },
+      permissions: [],
+    }))
   }
 
   stageRevert(): Promise<SessionRevert> {

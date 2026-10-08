@@ -504,3 +504,49 @@ describe('global AGENTS.md', () => {
     expect(response.statusCode).toBe(413);
   });
 });
+
+describe('agent list', () => {
+  it('lists the agent files OMP discovers, user scope first', async () => {
+    const routes = await registerRoutes();
+    fs.mkdirSync(path.join(agentDir, 'agents'), { recursive: true });
+    fs.mkdirSync(path.join(projectDir, '.omp', 'agents'), { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'agents', 'reviewer.md'),
+      '---\ndescription: Reviews diffs\nmode: subagent\n---\nYou review.\n',
+    );
+    fs.writeFileSync(
+      path.join(projectDir, '.omp', 'agents', 'planner.md'),
+      '---\ndescription: Plans work\n---\nYou plan.\n',
+    );
+    // Not an agent file, and not something OMP would load.
+    fs.writeFileSync(path.join(agentDir, 'agents', 'notes.txt'), 'not an agent');
+
+    const response = await invoke(routes, 'GET /api/config/agents', {});
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.agents.map((agent) => `${agent.scope}:${agent.name}`))
+      .toEqual(['user:reviewer', 'project:planner']);
+    expect(response.body.agents[0]).toMatchObject({ description: 'Reviews diffs', mode: 'subagent' });
+    expect(response.body.agents[1]).toMatchObject({ description: 'Plans work' });
+  });
+
+  it('lists an agent whose frontmatter cannot be read, by its file name', async () => {
+    const routes = await registerRoutes();
+    fs.mkdirSync(path.join(agentDir, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(agentDir, 'agents', 'broken.md'), '---\n: : :\n---\nbody\n');
+
+    const response = await invoke(routes, 'GET /api/config/agents', {});
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.agents.map((agent) => agent.name)).toEqual(['broken']);
+  });
+
+  it('answers an empty list when no agent directory exists', async () => {
+    const routes = await registerRoutes();
+
+    const response = await invoke(routes, 'GET /api/config/agents', {});
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ agents: [] });
+  });
+});

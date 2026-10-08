@@ -25,7 +25,7 @@ describe("OmpRuntimeClient", () => {
     expect(client.capabilities).toMatchObject({
       rename: true, delete: true, move: true, commands: true, skills: true, permissions: true, mcp: true, modelSelection: true,
       attachments: true, attachmentKinds: "images", fork: true, forms: true,
-      revert: false, turnDiff: false, agents: false, agentSelection: false,
+      revert: false, turnDiff: false, agents: true, agentSelection: false,
     })
     expect(client.translateEvent()).toEqual([])
   })
@@ -37,6 +37,7 @@ describe("OmpRuntimeClient", () => {
     const backing: Record<string, string> = {
       fork: "forkSession",
       commands: "sendCommand",
+      agents: "listAgents",
       mcp: "listMcpServers",
       permissions: "replyPermission",
       modelSelection: "selectModel",
@@ -149,9 +150,46 @@ describe("OmpRuntimeClient", () => {
     expect(calls[0].body).toEqual({ text: "/review the diff\n\nquoted code" })
   })
 
+  test("lists the agent files OMP discovers", async () => {
+    const { client, calls } = makeClient({
+      "GET /api/config/agents?directory=%2Frepo": {
+        body: {
+          agents: [
+            { name: "reviewer", description: "Reviews diffs", mode: "subagent", scope: "user", path: "/home/u/.omp/agent/agents/reviewer.md" },
+            { name: "planner", description: "", scope: "project", path: "/repo/.omp/agents/planner.md" },
+          ],
+        },
+      },
+    })
+    const agents = await client.listAgents("/repo")
+    expect(calls[0].url).toBe("/api/config/agents?directory=%2Frepo")
+    expect(agents).toEqual([
+      {
+        id: "reviewer",
+        name: "reviewer",
+        displayName: "reviewer",
+        description: "Reviews diffs",
+        mode: "subagent",
+        hidden: false,
+        request: { settings: {}, headers: {}, body: {} },
+        permissions: [],
+      },
+      {
+        id: "planner",
+        name: "planner",
+        displayName: "planner",
+        description: "",
+        mode: "all",
+        hidden: false,
+        request: { settings: {}, headers: {}, body: {} },
+        permissions: [],
+      },
+    ])
+  })
+
   test("rejects an unsupported operation with a clear error", async () => {
     const { client } = makeClient({})
-    await expect(client.listAgents()).rejects.toThrow("OMP runtime does not support listAgents")
+    await expect(client.getSessionTurnDiff("ses_a")).rejects.toThrow("OMP runtime does not support getSessionTurnDiff")
   })
 
   test("sendCommand posts the command as prompt text", async () => {

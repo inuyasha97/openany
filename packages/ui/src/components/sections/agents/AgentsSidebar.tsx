@@ -39,10 +39,10 @@ interface AgentsSidebarProps {
 
 export const AgentsSidebar: React.FC<AgentsSidebarProps> = ({ onItemSelect }) => {
   const { t } = useI18n();
-  // The list is `listAgents`, which OMP does not implement: it picks a subagent
-  // inside the model's own `task` call. With no list to show, the panel explains
-  // where the choice happens instead of offering a create button that would
-  // write an entry nothing would ever list.
+  // The list is `listAgents`, over the agent markdown files OMP discovers
+  // (`<agent dir>/agents`, project `.omp/agents`), so the panel shows and edits
+  // them. OMP still picks a subagent inside the model's own `task` call, which
+  // is why no session agent is selected from this list.
   const agentsSupported = resolveSessionCapabilities(undefined).agents;
   const [query, setQuery] = React.useState('');
   const [renameDialogAgent, setRenameDialogAgent] = React.useState<Agent | null>(null);

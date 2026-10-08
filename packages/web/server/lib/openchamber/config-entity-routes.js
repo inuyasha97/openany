@@ -754,6 +754,50 @@ export const registerConfigEntityRoutes = (app, dependencies = {}) => {
     label: { noun: 'Agent', section: 'agents' },
   });
 
+  /**
+   * Every agent markdown file OMP discovers for a directory: the user's agent
+   * directory first, then the project's `.omp/agents`. OMP reads both, so this
+   * is the set it will run, not a separate catalog. The per-name routes answer
+   * each entry's sources and permissions.
+   */
+  const listAgentFiles = (directory) => {
+    const scopes = [
+      { scope: AGENT_SCOPE.USER, dir: agentsDir },
+      { scope: AGENT_SCOPE.PROJECT, dir: path.join(directory, OMP_PROJECT_DIR, 'agents') },
+    ];
+    const agents = [];
+    for (const { scope, dir } of scopes) {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        const filePath = path.join(dir, entry.name);
+        let entity = {};
+        try {
+          const { frontmatter, body } = parseMdFile(filePath);
+          entity = toAgentEntity(frontmatter, body);
+        } catch {
+          // An unreadable file is still an agent OMP would try to load: list it
+          // by name rather than hiding it from the page that edits it.
+          entity = {};
+        }
+        agents.push({
+          name: entry.name.replace(/\.md$/, ''),
+          description: typeof entity.description === 'string' ? entity.description : '',
+          mode: typeof entity.mode === 'string' ? entity.mode : undefined,
+          hidden: entity.hidden === true,
+          scope,
+          path: filePath,
+        });
+      }
+    }
+    return agents;
+  };
+
   const commandSurface = createEntitySurface({
     userDir: commandsDir,
     projectPathFor: getProjectCommandPath,
@@ -859,6 +903,22 @@ export const registerConfigEntityRoutes = (app, dependencies = {}) => {
   };
 
   registerEntityRoutes({ surface: agentSurface, routeLabel: 'agents', noun: 'Agent', registerPermissions: true });
+
+  /**
+   * Every agent markdown file OMP discovers for a directory: the user's agent
+   * directory first, then the project's `.omp/agents`. OMP reads both, so this
+   * is the set it will run, not a separate catalog. The per-name routes above
+   * answer each entry's sources and permissions.
+   */
+  app.get('/api/config/agents', async (req, res) => {
+    try {
+      const { directory, error } = await resolveProjectDirectory(req);
+      if (!directory) return res.status(400).json({ error });
+      res.json({ agents: listAgentFiles(directory) });
+    } catch (error) {
+      respondError(res, error, 'Failed to list agents');
+    }
+  });
   registerEntityRoutes({ surface: commandSurface, routeLabel: 'commands', noun: 'Command', registerPermissions: false });
 
   // ---- MCP ----
