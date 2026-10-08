@@ -54,6 +54,19 @@ export interface CommandEntityEnvelope {
   config: Omit<CommandConfig, 'name' | 'scope' | 'source'>;
 }
 
+/**
+ * How much of a command's editable half is known. The list carries only a
+ * name and description, so the rest is fetched when the command is opened.
+ * `none` is the server's typed 501 (`OMP_UNSUPPORTED_CONFIG_SECTION`) for a
+ * command OMP has no editable config for, e.g. every built-in.
+ */
+export type CommandConfigStatus = 'unknown' | 'loading' | 'loaded' | 'none' | 'error';
+
+interface CommandConfigEntry {
+  status: Exclude<CommandConfigStatus, 'unknown'>;
+  config?: Partial<Command>;
+}
+
 export const isCommandBuiltIn = (command: Command): boolean => {
   return BUILTIN_COMMAND_NAMES.has(command.name);
 };
@@ -106,6 +119,62 @@ const buildCommandsSignature = (commands: Command[]): string => {
     .join('||');
 };
 
+/** Fold every already-loaded config into the fresh list entries. */
+const mergeKnownConfig = (
+  commands: Command[],
+  entries: Record<string, CommandConfigEntry> | undefined,
+): Command[] => {
+  if (!entries) return commands;
+  return commands.map((command) => {
+    const entry = entries[command.name];
+    if (!entry || entry.status !== 'loaded' || !entry.config) return command;
+    return {
+      ...command,
+      ...entry.config,
+      name: command.name,
+      description: entry.config.description ?? command.description,
+    };
+  });
+};
+
+type CommandsStoreSet = (updater: (state: CommandsStore) => Partial<CommandsStore>) => void;
+
+/** Record a command's config state, publishing its editable fields when loaded. */
+const writeCommandConfig = (
+  set: CommandsStoreSet,
+  get: () => CommandsStore,
+  cacheKey: string,
+  name: string,
+  entry: CommandConfigEntry,
+) => {
+  set((state) => {
+    const previous = state.commandConfigsByDirectory[cacheKey]?.[name];
+    const resolved: CommandConfigEntry = entry.status === 'loaded'
+      ? { status: 'loaded', config: { ...(previous?.config ?? {}), ...(entry.config ?? {}) } }
+      : entry;
+    const entries = { ...(state.commandConfigsByDirectory[cacheKey] ?? {}), [name]: resolved };
+    const next: Partial<CommandsStore> = {
+      commandConfigsByDirectory: { ...state.commandConfigsByDirectory, [cacheKey]: entries },
+    };
+    const list = state.commandsByDirectory[cacheKey];
+    if (resolved.status === 'loaded' && list) {
+      const nextList = mergeKnownConfig(list, entries);
+      next.commandsByDirectory = { ...state.commandsByDirectory, [cacheKey]: nextList };
+      if (cacheKey === getCommandsCacheKey(getRequestDirectory())) next.commands = nextList;
+    }
+    return next;
+  });
+};
+
+/** Drop every trace of a command's config, so a same-named command starts fresh. */
+const clearCommandConfig = (set: CommandsStoreSet, cacheKey: string, name: string) => {
+  set((state) => {
+    const entries = { ...(state.commandConfigsByDirectory[cacheKey] ?? {}) };
+    delete entries[name];
+    return { commandConfigsByDirectory: { ...state.commandConfigsByDirectory, [cacheKey]: entries } };
+  });
+};
+
 const upsertCommandLocal = (
   set: (updater: (state: CommandsStore) => Partial<CommandsStore>) => void,
   get: () => CommandsStore,
@@ -131,6 +200,10 @@ const upsertCommandLocal = (
   set((state) => {
     const next: Partial<CommandsStore> = {
       commandsByDirectory: { ...state.commandsByDirectory, [cacheKey]: nextCommands },
+      commandConfigsByDirectory: {
+        ...state.commandConfigsByDirectory,
+        [cacheKey]: { ...(state.commandConfigsByDirectory[cacheKey] ?? {}), [name]: { status: 'loaded', config } },
+      },
     };
     if (isAmbient) next.commands = nextCommands;
     return next;
@@ -148,8 +221,11 @@ const removeCommandLocal = (
   const nextCommands = (get().commandsByDirectory[cacheKey] ?? []).filter((command) => command.name !== name);
   const clearSelection = get().selectedCommandName === name;
   set((state) => {
+    const entries = { ...(state.commandConfigsByDirectory[cacheKey] ?? {}) };
+    delete entries[name];
     const next: Partial<CommandsStore> = {
       commandsByDirectory: { ...state.commandsByDirectory, [cacheKey]: nextCommands },
+      commandConfigsByDirectory: { ...state.commandConfigsByDirectory, [cacheKey]: entries },
     };
     if (isAmbient) next.commands = nextCommands;
     if (clearSelection) next.selectedCommandName = null;
@@ -216,12 +292,15 @@ interface CommandsStore {
   commands: Command[];
   /** Every directory loaded so far, including the ambient one. */
   commandsByDirectory: Record<string, Command[]>;
+  /** Per-directory, per-command editable-config state, filled when a command is opened. */
+  commandConfigsByDirectory: Record<string, Record<string, CommandConfigEntry>>;
   isLoading: boolean;
   commandDraft: CommandDraft | null;
 
   setSelectedCommand: (name: string | null) => void;
   setCommandDraft: (draft: CommandDraft | null) => void;
   loadCommands: (directory?: string | null) => Promise<boolean>;
+  loadCommandConfig: (name: string, directory?: string | null) => Promise<CommandConfigStatus>;
   resetForRuntimeSwitch: () => void;
   createCommand: (config: CommandConfig, directory?: string | null) => Promise<boolean>;
   updateCommand: (name: string, config: Partial<CommandConfig>, directory?: string | null) => Promise<boolean>;
@@ -249,6 +328,21 @@ export const selectCommandsForDirectory = (
   return state.commandsByDirectory[cacheKey] ?? EMPTY_COMMANDS;
 };
 
+/**
+ * How much of a command's editable half is known for the given directory.
+ * Panels use this to decide whether to ask the server for it and whether the
+ * command has an editable config at all.
+ */
+export const selectCommandConfigStatus = (
+  state: Pick<CommandsStore, 'commandConfigsByDirectory'>,
+  directory: string | null | undefined,
+  name: string | null | undefined,
+): CommandConfigStatus => {
+  if (!name) return 'unknown';
+  const cacheKey = getCommandsCacheKey(resolveDirectory(directory));
+  return state.commandConfigsByDirectory[cacheKey]?.[name]?.status ?? 'unknown';
+};
+
 export const useCommandsStore = create<CommandsStore>()(
   devtools(
     persist(
@@ -257,6 +351,7 @@ export const useCommandsStore = create<CommandsStore>()(
         selectedCommandName: null,
         commands: [],
         commandsByDirectory: {},
+        commandConfigsByDirectory: {},
         isLoading: false,
         commandDraft: null,
 
@@ -274,7 +369,64 @@ export const useCommandsStore = create<CommandsStore>()(
           commandReadControllers.clear();
           commandsLastLoadedAt.clear();
           commandsLoadInFlight.clear();
-          set({ commands: [], commandsByDirectory: {}, isLoading: false });
+          set({ commands: [], commandsByDirectory: {}, commandConfigsByDirectory: {}, isLoading: false });
+        },
+
+        loadCommandConfig: async (name, requestedDirectory) => {
+          const directory = resolveDirectory(requestedDirectory);
+          const cacheKey = getCommandsCacheKey(directory);
+          const existing = get().commandConfigsByDirectory[cacheKey]?.[name];
+          // Any known answer is final for this session: retrying a 501 or a
+          // failure on every render is exactly the flood this replaced.
+          if (existing) return existing.status;
+
+          const generation = commandsGeneration;
+          writeCommandConfig(set, get, cacheKey, name, { status: 'loading' });
+          try {
+            const queryParams = directory ? `?directory=${encodeURIComponent(directory)}` : '';
+            const response = await runtimeFetch(`/api/config/commands/${encodeURIComponent(name)}/config${queryParams}`, {
+              headers: {
+                'Cache-Control': 'no-cache',
+                ...(directory ? { 'x-opencode-directory': directory } : {}),
+              },
+            });
+            if (generation !== commandsGeneration) return 'unknown';
+
+            if (response.ok) {
+              // SAFETY: `/api/config/commands/:name/config` is OpenChamber's
+              // own route; it normalizes the entry through `config-v2.js`
+              // before answering.
+              const data = await response.json() as CommandEntityEnvelope;
+              if (generation !== commandsGeneration) return 'unknown';
+              const scope = data.scope === 'project' || data.scope === 'user' ? data.scope : undefined;
+              writeCommandConfig(set, get, cacheKey, name, {
+                status: 'loaded',
+                config: {
+                  ...data.config,
+                  scope,
+                  path: data.path,
+                  legacy: data.legacy === true,
+                },
+              });
+              return 'loaded';
+            }
+
+            // OMP keeps commands as markdown files, so a command it lists but
+            // has no file for (every built-in) answers the typed 501. That is
+            // "nothing to edit here", not a failure.
+            if (response.status === 501) {
+              writeCommandConfig(set, get, cacheKey, name, { status: 'none' });
+              return 'none';
+            }
+
+            writeCommandConfig(set, get, cacheKey, name, { status: 'error' });
+            return 'error';
+          } catch (error) {
+            if (generation !== commandsGeneration) return 'unknown';
+            console.warn(`[CommandsStore] Failed to load config for command ${name}:`, error);
+            writeCommandConfig(set, get, cacheKey, name, { status: 'error' });
+            return 'error';
+          }
         },
 
         loadCommands: async (requestedDirectory?: string | null) => {
@@ -308,57 +460,21 @@ export const useCommandsStore = create<CommandsStore>()(
 
             for (let attempt = 0; attempt < 3; attempt++) {
               try {
-                const queryParams = directory ? `?directory=${encodeURIComponent(directory)}` : '';
-
-                // Ensure the list is scoped to the same directory we use for config source detection.
-                // v2 keeps skills in their own catalog, so every command here is a real command file.
+                // The list is scoped to the directory we write config for. It
+                // carries the name and description the sidebar shows; a
+                // command's editable fields are fetched only when it is
+                // opened, because OMP lists built-in commands and skills whose
+                // `/:name/config` is a 501.
                 const commands = await readCommandMetadata(generation, (signal) => getAgentRuntime().listCommands(directory, signal));
                 if (generation !== commandsGeneration) return false;
 
-                const commandsWithScope = await Promise.all(
-                  commands.map((cmd) => readCommandMetadata(generation, async (signal) => {
-                    if (generation !== commandsGeneration) return cmd;
-                    try {
-                      // The v2 `CommandInfo` OpenCode lists carries only a name
-                      // and description, so the editable fields come from the
-                      // command's own stored entry.
-                      const response = await runtimeFetch(`/api/config/commands/${encodeURIComponent(cmd.name)}/config${queryParams}`, {
-                        signal,
-                        headers: {
-                          'Cache-Control': 'no-cache',
-                          ...(directory ? { 'x-opencode-directory': directory } : {}),
-                        }
-                      });
-
-                      if (response.ok) {
-                        // SAFETY: `/api/config/commands/:name/config` is
-                        // OpenChamber's own route; it normalizes the entry
-                        // through `config-v2.js` before answering.
-                        const data = await response.json() as CommandEntityEnvelope;
-                        const scope = data.scope === 'project' || data.scope === 'user' ? data.scope : undefined;
-                        return {
-                          ...cmd,
-                          ...data.config,
-                          name: cmd.name,
-                          description: data.config?.description ?? cmd.description,
-                          scope,
-                          path: data.path,
-                          legacy: data.legacy === true,
-                        };
-                      }
-                    } catch (err) {
-                      if (generation !== commandsGeneration) return cmd;
-                      console.warn(`[CommandsStore] Failed to fetch config for command ${cmd.name}:`, err);
-                    }
-                    return cmd;
-                  }))
-                );
+                const commandsWithConfig = mergeKnownConfig(commands, get().commandConfigsByDirectory[cacheKey]);
                 if (generation !== commandsGeneration) return false;
 
-                const nextSignature = buildCommandsSignature(commandsWithScope);
+                const nextSignature = buildCommandsSignature(commandsWithConfig);
                 const nextCommands = previousCommands !== undefined && previousSignature === nextSignature
                   ? previousCommands
-                  : commandsWithScope;
+                  : commandsWithConfig;
                 set((state) => {
                   const next: Partial<CommandsStore> = { isLoading: false };
                   if (state.commandsByDirectory[cacheKey] !== nextCommands) {
@@ -431,6 +547,9 @@ export const useCommandsStore = create<CommandsStore>()(
             console.log('[CommandsStore] Command created successfully');
 
             invalidateCommandsLoadCache(directory);
+            // A newly created command's file exists, so its editable fields are
+            // known without asking the server again.
+            writeCommandConfig(set, get, getCommandsCacheKey(directory), config.name, { status: 'loaded', config });
 
             if (payload?.requiresManualRestart) {
               upsertCommandLocal(set, get, config.name, config, directory);
@@ -493,6 +612,9 @@ export const useCommandsStore = create<CommandsStore>()(
             console.log('[CommandsStore] Command updated successfully');
 
             invalidateCommandsLoadCache(directory);
+            // The reloaded list carries only names and descriptions; keep the
+            // fields we just wrote so the open editor is not reset to empty.
+            writeCommandConfig(set, get, getCommandsCacheKey(directory), name, { status: 'loaded', config });
 
             if (payload?.requiresManualRestart) {
               upsertCommandLocal(set, get, name, config, directory);
@@ -542,6 +664,7 @@ export const useCommandsStore = create<CommandsStore>()(
             console.log('[CommandsStore] Command deleted successfully');
 
             invalidateCommandsLoadCache(directory);
+            clearCommandConfig(set, getCommandsCacheKey(directory), name);
 
             if (payload?.requiresManualRestart) {
               removeCommandLocal(set, get, name, directory);

@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Command } from './useCommandsStore';
-import { runSessionListNetworkTask } from '../lib/background-network';
 
 import { registerAgentRuntime } from '@/lib/agent/registry';
 import type { AgentRuntime } from '@/lib/agent/contract';
@@ -29,7 +28,11 @@ const listCommandsMock = async (directory?: string | null) => {
 };
 
 const getDirectoryMock = () => getDirectoryImpl();
-const runtimeFetchMock = async () => runtimeFetchImpl();
+let runtimeFetchCalls: string[] = [];
+const runtimeFetchMock = async (url: string) => {
+  runtimeFetchCalls.push(String(url));
+  return runtimeFetchImpl();
+};
 
 // The store reads commands from the agent runtime; register a double whose
 // `listCommands` is this test's deferred mock. The registry's default runtime
@@ -72,7 +75,7 @@ mock.module('@/lib/configSync', () => ({
   subscribeToConfigChanges: mock(() => () => undefined),
 }));
 
-const { useCommandsStore, invalidateCommandsLoadCache, selectCommandsForDirectory } = await import('./useCommandsStore');
+const { useCommandsStore, invalidateCommandsLoadCache, selectCommandsForDirectory, selectCommandConfigStatus } = await import('./useCommandsStore');
 
 describe('useCommandsStore', () => {
   beforeEach(() => {
@@ -80,6 +83,7 @@ describe('useCommandsStore', () => {
     invalidateCommandsLoadCache(activeProjectPath);
     invalidateCommandsLoadCache('/workspace/other');
     listCommandsCalls = 0;
+    runtimeFetchCalls = [];
     listCommandsImpl = async () => [];
     getDirectoryImpl = () => '/fallback/project';
     runtimeFetchImpl = async () => new Response(
@@ -91,35 +95,10 @@ describe('useCommandsStore', () => {
       selectedCommandName: null,
       commands: [],
       commandsByDirectory: {},
+      commandConfigsByDirectory: {},
       isLoading: false,
       commandDraft: null,
     });
-  });
-
-  test('command scope enrichment stays bounded and leaves room for session lists', async () => {
-    const release = deferred<void>();
-    const started = deferred<void>();
-    let active = 0;
-    let peak = 0;
-    listCommandsImpl = async () => Array.from({ length: 24 }, (_, index) => ({ name: `command-${index}` }));
-    runtimeFetchImpl = async () => {
-      active += 1;
-      peak = Math.max(peak, active);
-      if (active === 2) started.resolve();
-      await release.promise;
-      active -= 1;
-      return Response.json({ scope: 'project' });
-    };
-    const load = useCommandsStore.getState().loadCommands();
-    try {
-      await started.promise;
-      expect(peak).toBe(2);
-      expect(await runSessionListNetworkTask(async () => 'sessions ready')).toBe('sessions ready');
-    } finally {
-      release.resolve();
-      expect(await load).toBe(true);
-    }
-    expect(peak).toBe(2);
   });
 
   test('runtime reset rejects old discovery without deleting a new in-flight request or user draft', async () => {
@@ -294,6 +273,83 @@ describe('useCommandsStore', () => {
     listCommandsImpl = async () => [{ name: 'recovered' }];
     expect(await useCommandsStore.getState().loadCommands()).toBe(true);
     expect(selectCommandsForDirectory(useCommandsStore.getState(), activeProjectPath).map(c => c.name)).toEqual(['recovered']);
+  });
+
+  test('listing commands issues no per-command config request', async () => {
+    // OMP lists ~100 built-in commands and skills whose `/:name/config`
+    // answers 501; asking per row flooded the network with answers the page
+    // never used. The list is the only request a listing needs.
+    listCommandsImpl = async () => Array.from({ length: 120 }, (_, index) => ({
+      name: `command-${index}`,
+      description: `Command ${index}`,
+    }));
+
+    expect(await useCommandsStore.getState().loadCommands()).toBe(true);
+
+    expect(useCommandsStore.getState().commands).toHaveLength(120);
+    expect(runtimeFetchCalls.filter((url) => url.includes('/config'))).toEqual([]);
+  });
+
+  test('opening a command whose config section is unsupported reports no editable config', async () => {
+    listCommandsImpl = async () => [{ name: 'goal', description: 'Set a goal' }];
+    await useCommandsStore.getState().loadCommands();
+    runtimeFetchImpl = async () => new Response(
+      JSON.stringify({ error: 'OMP has no commands section', code: 'OMP_UNSUPPORTED_CONFIG_SECTION' }),
+      { status: 501, headers: { 'Content-Type': 'application/json' } },
+    );
+
+    expect(await useCommandsStore.getState().loadCommandConfig('goal')).toBe('none');
+    expect(selectCommandConfigStatus(useCommandsStore.getState(), activeProjectPath, 'goal')).toBe('none');
+    expect(runtimeFetchCalls.filter((url) => url.includes('commands/goal/config'))).toHaveLength(1);
+
+    // The answer is cached: reopening the command must not ask again.
+    expect(await useCommandsStore.getState().loadCommandConfig('goal')).toBe('none');
+    expect(runtimeFetchCalls.filter((url) => url.includes('commands/goal/config'))).toHaveLength(1);
+  });
+
+  test('opening an editable command loads its config once and merges it into the list', async () => {
+    listCommandsImpl = async () => [{ name: 'ship', description: 'Ship it' }];
+    await useCommandsStore.getState().loadCommands();
+    runtimeFetchImpl = async () => Response.json({
+      source: 'md',
+      scope: 'project',
+      path: '/repo/.omp/commands/ship.md',
+      legacy: true,
+      config: { template: 'Ship the release.', description: 'Ship it', agent: 'builder' },
+    });
+
+    expect(await useCommandsStore.getState().loadCommandConfig('ship')).toBe('loaded');
+    const stored = useCommandsStore.getState().commands.find((command) => command.name === 'ship');
+    expect(stored?.template).toBe('Ship the release.');
+    expect(stored?.scope).toBe('project');
+    expect(stored?.path).toBe('/repo/.omp/commands/ship.md');
+    expect(stored?.legacy).toBe(true);
+    expect(runtimeFetchCalls.filter((url) => url.includes('commands/ship/config'))).toHaveLength(1);
+
+    // Reopening is served from the loaded entry.
+    expect(await useCommandsStore.getState().loadCommandConfig('ship')).toBe('loaded');
+    expect(runtimeFetchCalls.filter((url) => url.includes('commands/ship/config'))).toHaveLength(1);
+  });
+
+  test('refreshing the list keeps an already-loaded editable config', async () => {
+    listCommandsImpl = async () => [{ name: 'ship', description: 'Ship it' }];
+    await useCommandsStore.getState().loadCommands();
+    runtimeFetchImpl = async () => Response.json({
+      source: 'md',
+      scope: 'user',
+      path: null,
+      legacy: false,
+      config: { template: 'Ship the release.' },
+    });
+    await useCommandsStore.getState().loadCommandConfig('ship');
+
+    invalidateCommandsLoadCache(activeProjectPath);
+    listCommandsImpl = async () => [{ name: 'ship', description: 'Ship it' }];
+    expect(await useCommandsStore.getState().loadCommands()).toBe(true);
+
+    const stored = useCommandsStore.getState().commands.find((command) => command.name === 'ship');
+    expect(stored?.template).toBe('Ship the release.');
+    expect(stored?.scope).toBe('user');
   });
 
   test('an in-flight settings load becomes the active mirror if its project is selected', async () => {

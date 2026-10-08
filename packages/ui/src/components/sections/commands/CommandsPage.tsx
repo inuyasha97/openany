@@ -5,7 +5,7 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui';
 import { useSettingsDirectory } from '@/hooks/useSettingsDirectory';
-import { selectCommandsForDirectory, useCommandsStore, type CommandConfig, type CommandScope } from '@/stores/useCommandsStore';
+import { selectCommandConfigStatus, selectCommandsForDirectory, useCommandsStore, type CommandConfig, type CommandScope } from '@/stores/useCommandsStore';
 import { useShallow } from 'zustand/react/shallow';
 import { ModelSelector } from '../agents/ModelSelector';
 import { AgentSelector } from './AgentSelector';
@@ -73,6 +73,19 @@ export const CommandsPage: React.FC = () => {
   const commands = useCommandsStore((state) => selectCommandsForDirectory(state, settingsDirectory));
   const selectedCommand = selectedCommandName ? getCommandByName(selectedCommandName, settingsDirectory) : null;
   const isNewCommand = Boolean(commandDraft && commandDraft.name === selectedCommandName && !selectedCommand);
+  const configStatus = useCommandsStore((state) => selectCommandConfigStatus(state, settingsDirectory, selectedCommandName));
+  const loadCommandConfig = useCommandsStore((s) => s.loadCommandConfig);
+
+  // The list carries only a name and description, so a command's editable
+  // fields are fetched when it is opened — never for every row. A command the
+  // server reports as having no editable config is left at `none` instead of
+  // being retried on every render.
+  React.useEffect(() => {
+    if (!selectedCommandName || isNewCommand || !selectedCommand || configStatus !== 'unknown') {
+      return;
+    }
+    void loadCommandConfig(selectedCommandName, settingsDirectory);
+  }, [configStatus, isNewCommand, loadCommandConfig, selectedCommand, selectedCommandName, settingsDirectory]);
 
   const [draftName, setDraftName] = React.useState('');
   const [draftScope, setDraftScope] = React.useState<CommandScope>('user');
@@ -286,6 +299,27 @@ export const CommandsPage: React.FC = () => {
           <p className="typography-meta mt-1 opacity-75">{t('settings.commands.page.empty.description')}</p>
         </div>
       </div>
+    );
+  }
+
+  // OMP lists commands it has no editable config for (every built-in one), and
+  // its `/:name/config` route answers a typed 501 for them. That is "nothing to
+  // edit here", not a failure — a form over an empty file would silently
+  // overwrite it.
+  if (!isNewCommand && selectedCommand && configStatus === 'none') {
+    return (
+      <SettingsPageLayout
+        title={`/${selectedCommandName}`}
+        description={t('settings.commands.page.subtitle.edit')}
+      >
+        <SettingsSection title={t('settings.commands.page.section.identity')} divider={false} contentClassName="space-y-0">
+          <div className="py-8 text-center text-muted-foreground">
+            <Icon name="information" className="mx-auto mb-2 h-8 w-8 opacity-40" />
+            <p className="typography-ui-label">{t('settings.commands.page.noConfig.title')}</p>
+            <p className="typography-meta mt-1 opacity-75">{t('settings.commands.page.noConfig.description')}</p>
+          </div>
+        </SettingsSection>
+      </SettingsPageLayout>
     );
   }
 
