@@ -1,4 +1,4 @@
-/** Stats page strings (OpenCode session statistics) — merged into each locale's main dictionary. */
+/** Stats page strings (OMP session statistics) — merged into each locale's main dictionary. */
 export const usageStatsI18n = {
   en: {
     'usageStats.openAction': 'Stats',
