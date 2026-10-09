@@ -167,22 +167,24 @@ the repackaged app, so these exercise the real main-process handlers.
 | Filter installed apps | `FIXED` | Drops names that are not bundles (iTerm, made-up names); §I.7. |
 | Fetch app icons | `PASS` | Returns a PNG data URL per resolvable app. |
 | Capture page rect | `PASS` | Returns a JPEG data URL. |
-| Update **check** | `PASS` | `{available:false, currentVersion:"0.1.2"}`. |
+| Update **check** | `PASS` | `{available:false, currentVersion:"0.1.2"}`; re-driven in the packaged app, it answers `{available:false, currentVersion:"0.1.2", version:null, body:null, date:"2026-10-09T05:48:12.021Z"}` — a real feed round-trip. |
 | Native notification | `PARTIAL` | `desktop_notify` returned null with no throw; the banner itself is not observable from the harness. |
-| Tray update | `UNTESTED` | Takes a live snapshot (`useTraySync`), not the payload the probe sent; the handler tolerated it. |
-| Window title | `UNTESTED` | `desktop_set_window_title` returned null and the title stayed `phonnt | OpenAny`; the UI may re-set it. |
-| Local client token | `UNTESTED` | Empty string — UI auth is off on loopback, so nothing mints one. |
-| Update **install** (download + restart) | `UNTESTED` | Never completed one. |
-| Mini-chat window, new window, window drag/minimise/close | `UNTESTED` | |
-| Deep link `openany://` | `UNTESTED` | Scheme is registered in the bundle. |
-| Desktop password, remote password login | `UNTESTED` | |
-| App menu, reveal path, open path, open external URL | `UNTESTED` | Would open Finder/browser windows on this machine. |
-| Save markdown, pick theme file | `UNTESTED` | Needs a native dialog. |
-| Browser clear data | `UNTESTED` | |
+| Tray update | `PASS` (accepted) | `desktop_tray_update` returned null; the handler calls `state.trayController.update(args \|\| {})` inside a try/catch that logs a warning, and nothing was logged. It takes a live snapshot, not the payload the probe sends. |
+| Window title | `PARTIAL` | The handler is `browserWindow.setTitle(args.title)` and returned null, but `document.title` stayed `phonnt \| OpenAny` — that is the page title, not the window title, so the OS titlebar could not be read: `osascript` on this machine answers "System Events got an error: osascript is not allowed assistive access". |
+| Local client token | `PASS` (empty by design) | `desktop_local_client_token_get` answers `""`: UI auth is off on loopback, so nothing mints one. |
+| Update **install** (download + restart) | `UNTESTED` | The repo's own e2e fixture is Linux-only (`ARCHITECTURES` maps to `latest-linux.yml` and an AppImage), so a macOS install needs a real older build plus a feed. Not run. |
+| Mini-chat window, new window, window drag/minimise/close | `PASS` (windows) | `desktop_open_draft_mini_chat_window` produced a real second page target at `openchamber-ui://app/mini-chat.html?mode=draft`, and `desktop_new_window` a third at `index.html` (CDP listed 3 pages). `desktop_start_window_drag` returned null. Minimise and close were not driven. |
+| Deep link `openany://` | `PASS` | `open "openany://session/01a11f8e-45ba-7000-aab9-5be72e69adb1"` routed the running app: its page URL became `openchamber-ui://app/index.html?session=01a11f8e-45ba-7000-aab9-5be72e69adb1`. The scheme is registered in the bundle and `app.on('open-url')` → `handleOpenUrl` reached `handleDeepLinks`. |
+| Desktop password, remote password login | `UNTESTED` | `desktop_remote_password_login` validates before anything else — `{}` answers "Invalid URL" — and no remote is configured. The desktop password would change this machine's app auth, so it was not set. |
+| App menu, reveal path, open path, open external URL | `PASS` (three of four) | `desktop_show_app_menu`, `desktop_reveal_path` (`/tmp`) and `desktop_open_external_url` (`https://example.com`) each returned null, opening the app menu, a Finder window and a browser tab on this machine. `desktop_open_path` and `desktop_open_in_app` were not driven. |
+| Save markdown, pick theme file | `PARTIAL` (validation) | `desktop_save_markdown_file` refuses a call with no name — "Default file name is required" — before touching `dialog.showSaveDialog`; `desktop_pick_theme_file` goes straight to `dialog.showOpenDialog`. Both dialogs are native and app-modal, so they cannot be dismissed from CDP and the write itself was not driven. |
+| Browser clear data | `UNTESTED` | It would wipe this machine's app browser data; not run. |
+| Read a file outside the workspace | `PASS` (refuses) | `desktop_read_file({path:"/tmp/definitely-not-here-xyz"})` is refused with "File is outside the allowed workspace" — the boundary holds before any filesystem read. |
+| Hosts read | `PASS` | `{hosts:[], defaultHostId:"local", initialHostChoiceCompleted:true, localOrigin:"http://127.0.0.1:57123"}`. |
+| Scheduled tasks | `PASS` | the toolbar's Scheduled tasks opens "Scheduled tasks — Local — ~ new task — No scheduled tasks yet." |
 | Dev tunnel, relay | `BLOCKED` | Needs a tunnel provider/account. |
-| SSH connect / logs / import hosts | `BLOCKED` | Needs a remote host. |
+| SSH connect / logs / import hosts | `BLOCKED` | Needs a remote host; `desktop_hosts_get` reports `{hosts:[]}` and `desktop_ssh_status` an empty list, so the handlers answer. |
 | Voice / TTS / dictation | `BLOCKED` | Would speak aloud on this machine; startup log shows 176 macOS voices. |
-| Scheduled tasks | `UNTESTED` | |
 
 
 ## G. Packaging and release
@@ -192,7 +194,7 @@ the repackaged app, so these exercise the real main-process handlers.
 | macOS arm64 + Intel dmg/zip + merged manifest | `PASS` | CI produced both arches and a 690-byte merged `latest-mac.yml`. |
 | Windows NSIS installer + `latest.yml` | `PASS` (build only) | `windows-2022` job green; manifest size matches the asset. Never run on Windows. |
 | Linux AppImage | `BLOCKED` (rule fixed) | The payload check rejected `onnxruntime-node`'s `bin/napi-v3/linux/arm64/…` binding as an x64 mismatch: the rule only knew darwin/win32/windows and the dashed `linux-arm64` form. It now judges a `.node` by any platform or architecture segment that is not the target's (local test 3 pass/2 fail before, 5/5 after). The `openany-v0.1.2` run is re-running with it. |
-| Unsigned installer opens on a fresh machine | `UNTESTED` | SmartScreen/Gatekeeper behaviour unverified. |
+| Unsigned installer opens on a fresh machine | `FAIL` (by design, distribution caveat) | The packaged bundle is ad-hoc signed — `codesign -dv` reports `flags=0x10002(adhoc,runtime)`, `Signature=adhoc`, `TeamIdentifier=not set`, and `codesign --verify --deep --strict` passes — but **Gatekeeper rejects it**: `spctl -a -t exec -vv OpenAny.app` answers `rejected`. A downloaded copy carries the quarantine flag, so macOS refuses to open it until the user allows it (System Settings → Privacy & Security → "Open Anyway") or clears the attribute. Not a code defect: signing and notarization need an Apple Developer identity. |
 
 ## H. Providers, models, MCP
 
