@@ -89,7 +89,7 @@ describe('OMP routes', () => {
     const app = createApp(host);
 
     expect((await request(app).post('/api/agents/omp/sessions/ses_a/prompt').send({ text: 'hi' })).body).toEqual({ ok: true });
-    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'hi', undefined, undefined);
+    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'hi', undefined, undefined, undefined);
 
     expect((await request(app).post('/api/agents/omp/sessions/ses_a/prompt').send({ text: '' })).status).toBe(400);
   });
@@ -99,7 +99,27 @@ describe('OMP routes', () => {
     const response = await request(createApp(host)).post('/api/agents/omp/sessions/ses_a/prompt').send({ text: 'hi', messageId: 'client-1' });
 
     expect(response.status).toBe(200);
-    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'hi', 'client-1', undefined);
+    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'hi', 'client-1', undefined, undefined);
+  });
+
+  it('passes the picked model through to the prompt', async () => {
+    const host = createHost();
+    const response = await request(createApp(host))
+      .post('/api/agents/omp/sessions/ses_a/prompt')
+      .send({ text: 'hi', provider: 'anthropic', modelId: 'claude' });
+
+    expect(response.status).toBe(200);
+    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'hi', undefined, undefined, { provider: 'anthropic', modelId: 'claude' });
+  });
+
+  it('rejects half a model, which names nothing OMP can run', async () => {
+    const host = createHost();
+    const response = await request(createApp(host))
+      .post('/api/agents/omp/sessions/ses_a/prompt')
+      .send({ text: 'hi', provider: 'anthropic' });
+
+    expect(response.status).toBe(400);
+    expect(host.prompt).not.toHaveBeenCalled();
   });
 
   it('passes a prompt\'s images through to the host', async () => {
@@ -108,7 +128,7 @@ describe('OMP routes', () => {
     const response = await request(createApp(host)).post('/api/agents/omp/sessions/ses_a/prompt').send({ text: 'look', images });
 
     expect(response.status).toBe(200);
-    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'look', undefined, images);
+    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'look', undefined, images, undefined);
   });
 
   it('accepts an image-only prompt but not an empty one', async () => {
@@ -139,7 +159,7 @@ describe('OMP routes', () => {
       .send({ text: 'look', images: [{ type: 'image', data, mimeType: 'image/png' }] });
 
     expect(response.status).toBe(200);
-    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'look', undefined, [{ type: 'image', data, mimeType: 'image/png' }]);
+    expect(host.prompt).toHaveBeenCalledWith('ses_a', 'look', undefined, [{ type: 'image', data, mimeType: 'image/png' }], undefined);
   });
 
   it('reads session messages', async () => {

@@ -29,7 +29,14 @@ const createFakeAdapter = ({ projectImpl } = {}) => {
     async prompt(id, text, options) {
       runtime.prompted.push([id, text]);
       runtime.promptOptions.push(options);
+      runtime.order.push('prompt');
       return true;
+    },
+    models: [],
+    order: [],
+    async setModel(id, provider, modelId) {
+      runtime.models.push([id, provider, modelId]);
+      runtime.order.push('set_model');
     },
     async getSession(id) {
       return { id };
@@ -115,7 +122,13 @@ const createFakeAdapter = ({ projectImpl } = {}) => {
       tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       time: { created: now, updated: now },
     }),
-    projectOmpHistory: (id, messages) => ({ items: messages.map((info) => ({ info, parts: [] })), cursor: {} }),
+    projectOmpHistory: (id, messages, options = {}) => ({
+      items: messages.map((info) => {
+        const messageID = info.role === 'user' ? options.userMessageId?.(info) ?? info.id : info.id;
+        return { info: { ...info, id: messageID }, parts: [] };
+      }),
+      cursor: {},
+    }),
     createOmpEventProjector: vi.fn(() => ({
       project: projectImpl ?? ((sessionId, event) => (
         event.type === 'agent_end' ? [{ type: 'session.idle', properties: { sessionID: sessionId } }] : []
@@ -215,6 +228,57 @@ describe('createOmpRuntimeHost', () => {
     const projector = adapter.createOmpEventProjector.mock.results[0].value;
     expect(projector.expectUserMessage).toHaveBeenCalledWith('ses_a', 'client-msg-1');
     expect(runtime.prompted).toEqual([['ses_a', 'hi']]);
+  });
+
+  // A picker choice only reaches the turn if the session is switched first:
+  // OMP reads the model off the session, never out of a prompt.
+  it('switches the session onto the model a prompt declares, once per change', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+
+    await host.prompt('ses_a', 'one', undefined, undefined, { provider: 'anthropic', modelId: 'claude' });
+    expect(runtime.models).toEqual([['ses_a', 'anthropic', 'claude']]);
+    expect(runtime.order).toEqual(['set_model', 'prompt']);
+
+    // The pair already applied is left alone; a different one is switched.
+    await host.prompt('ses_a', 'two', undefined, undefined, { provider: 'anthropic', modelId: 'claude' });
+    await host.prompt('ses_a', 'three', undefined, undefined, { provider: 'openai', modelId: 'gpt' });
+    expect(runtime.models).toEqual([['ses_a', 'anthropic', 'claude'], ['ses_a', 'openai', 'gpt']]);
+  });
+
+  it('leaves the session model alone when a prompt declares none', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+
+    await host.prompt('ses_a', 'hi');
+
+    expect(runtime.models).toEqual([]);
+    expect(runtime.order).toEqual(['prompt']);
+  });
+
+  // The live stream names the user message by the client id; a page that named
+  // the timestamp-derived id instead put the same prompt in the store twice.
+  it('names a page user message by the client id its prompt declared', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+
+    await host.prompt('ses_a', 'hi', 'client-msg-1');
+    runtime.emit('ses_a', { type: 'message_start', message: { role: 'user', content: 'hi', timestamp: 7 } });
+    runtime.messages = [{ role: 'user', content: 'hi', timestamp: 7 }];
+
+    const page = await host.getMessages('ses_a');
+
+    expect(page.items[0].info.id).toBe('client-msg-1');
+  });
+
+  it('keeps the timestamp-derived id for a page message no prompt declared', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+    runtime.messages = [{ role: 'user', content: 'older', timestamp: 3, id: 'omp:ses_a:user:3' }];
+
+    const page = await host.getMessages('ses_a');
+
+    expect(page.items[0].info.id).toBe('omp:ses_a:user:3');
   });
 
   it('passes a prompt\'s images through to the adapter', async () => {

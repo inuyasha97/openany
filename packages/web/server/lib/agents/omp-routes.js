@@ -33,7 +33,17 @@ const promptBodySchema = z.object({
   text: z.string(),
   messageId: z.string().min(1).optional(),
   images: z.array(promptImageSchema).optional(),
-}).refine((body) => body.text.trim().length > 0 || (body.images?.length ?? 0) > 0);
+  /**
+   * The model the caller picked. OMP keeps the model on the session, so the
+   * host switches it there before prompting; both halves are required together
+   * because half a model names nothing OMP can run.
+   */
+  provider: z.string().min(1).optional(),
+  modelId: z.string().min(1).optional(),
+}).refine((body) => body.text.trim().length > 0 || (body.images?.length ?? 0) > 0)
+  .refine((body) => Boolean(body.provider) === Boolean(body.modelId), {
+    message: 'provider and modelId are required together',
+  });
 const renameBodySchema = z.object({ title: z.string().min(1) });
 const moveBodySchema = z.object({ directory: z.string().min(1) });
 const modelBodySchema = z.object({ provider: z.string().min(1), modelId: z.string().min(1) });
@@ -193,8 +203,9 @@ export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
       return res.status(400).json({ error: 'text must be a non-empty string unless the prompt carries images' });
     }
     try {
-      const { text, messageId, images } = parsed.data;
-      const accepted = await (await getHost()).prompt(req.params.id, text, messageId, images);
+      const { text, messageId, images, provider, modelId } = parsed.data;
+      const model = provider && modelId ? { provider, modelId } : undefined;
+      const accepted = await (await getHost()).prompt(req.params.id, text, messageId, images, model);
       return res.json({ ok: accepted === true });
     } catch (error) {
       return respondWithError(res, error, 'Failed to prompt OMP session');

@@ -37,6 +37,7 @@ const TIMELINE_SETTLE_CAP_MS = 300;
 // Mirrors the oc-chat-hydration-reveal duration in index.css.
 const TIMELINE_REVEAL_FADE_MS = 100;
 import { hasActiveFormToolInCurrentTurn, recoverPendingFormWithRetry } from '@/sync/form-recovery';
+import { AgentRequestError } from '@/lib/agent/contract';
 import { StatusRowContainer } from './StatusRowContainer';
 import { SessionRecapNote } from '@/components/chat/SessionRecapSpacer';
 import { SessionErrorNotice } from '@/components/chat/SessionErrorNotice';
@@ -1500,7 +1501,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
                             <p className="typography-meta mt-1 text-muted-foreground">
                                 {authSessionExpired
                                     ? t('chat.container.sessionLoadError.authDescription')
-                                    : t('chat.container.sessionLoadError.description')}
+                                    : sessionMessageLoadState.error instanceof AgentRequestError
+                                        // The runtime refused the read and said why (a session whose
+                                        // folder was deleted, say). That sentence is the truth; the
+                                        // connection is fine.
+                                        ? sessionMessageLoadState.error.message
+                                        : t('chat.container.sessionLoadError.description')}
                             </p>
                             {authSessionExpired ? (
                                 <Button variant="outline" size="sm" className="mt-4" onClick={() => useAuthSessionStore.getState().markReauthenticating()}>

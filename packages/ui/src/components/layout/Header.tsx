@@ -23,6 +23,7 @@ import { useGlobalSessionStatus, useSessionMessagesResolved } from '@/sync/sync-
 import { useDirectoryStore as useAppDirectoryStore } from '@/stores/useDirectoryStore';
 import { isChatDirectoryForHome } from '@/lib/chatDirectories';
 import { useSessionMessageRecordsForExport } from '@/sync/use-sync';
+import { AgentRequestError } from '@/lib/agent/contract';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useQuotaAutoRefresh, useQuotaStore } from '@/stores/useQuotaStore';
 import { useGitBranchLabel } from '@/stores/useGitStore';
@@ -826,9 +827,15 @@ export const Header: React.FC = () => {
       toast.error(t('sessions.sidebar.session.export.nothingToExport'));
       return;
     }
-    const records = await loadSessionRecords({ sessionID: currentSessionId, directory: openDirectory }).catch(() => null);
+    let failure: unknown = null;
+    const records = await loadSessionRecords({ sessionID: currentSessionId, directory: openDirectory }).catch((error) => {
+      failure = error;
+      return null;
+    });
     if (!records) {
-      toast.error(t('sessions.sidebar.session.export.failedLoadHistory'));
+      // A runtime that refused the read said why (a session whose folder is
+      // gone, say); that sentence is more useful than a fixed string.
+      toast.error(failure instanceof AgentRequestError ? failure.message : t('sessions.sidebar.session.export.failedLoadHistory'));
       return;
     }
     if (records.length === 0) {

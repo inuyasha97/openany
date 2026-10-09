@@ -41,6 +41,7 @@ import type {
   SessionListOptions,
   SessionPage,
 } from "./contract"
+import { AgentRequestError } from "./contract"
 import type { RoutedAgentEvent } from "./events"
 
 const CAPABILITIES: AgentCapabilities = {
@@ -81,7 +82,18 @@ const CAPABILITIES: AgentCapabilities = {
 export type OmpPromptImage = { type: "image"; data: string; mimeType: string }
 
 /** What OMP's `prompt` command takes (`modes/rpc/rpc-types.ts`). */
-export type OmpPromptBody = { text: string; messageId?: string; images?: OmpPromptImage[] }
+export type OmpPromptBody = {
+  text: string
+  messageId?: string
+  images?: OmpPromptImage[]
+  /**
+   * The model to switch the session onto before this prompt runs. OMP holds the
+   * model on the session, not in the prompt, so a picker choice only reaches the
+   * turn when the server applies it first.
+   */
+  provider?: string
+  modelId?: string
+}
 
 const BASE64_DATA_URL = /^data:([^;,]+);base64,([\s\S]*)$/
 const FILE_URL_PREFIX = "file://"
@@ -304,14 +316,27 @@ const toAgentSession = (record: OmpSessionRecord): AgentSession => ({
 const unsupported = (operation: string): Promise<never> =>
   Promise.reject(new Error(`OMP runtime does not support ${operation}`))
 
+/**
+ * The body a refused OMP route answers with. Only `error` (the sentence the
+ * route wrote for a person) and `code` (the machine-readable reason) are read.
+ */
+const refusalSchema = z.object({ error: z.string().optional(), code: z.string().optional() })
+
+/**
+ * The error to raise for a route that answered with a failure. The route's own
+ * sentence becomes the message when it sent one — "this session's folder no
+ * longer exists" is a fact a caller can show, while a status code is not.
+ */
+const refusalError = async (response: Response, fallback: string): Promise<AgentRequestError> => {
+  const parsed = refusalSchema.safeParse(await response.json().catch(() => null))
+  const detail = parsed.success ? parsed.data : {}
+  const reason = detail.error?.trim()
+  return new AgentRequestError(reason && reason.length > 0 ? reason : fallback, response.status, detail.code)
+}
+
 const readJson = async <T>(response: Response, schema: z.ZodType<T>): Promise<T> => {
   if (!response.ok) {
-    // The route answers a refusal with `{ error }` naming the reason — a fork
-    // cut with no branchable entry, say — and that reason is what the caller
-    // reports; the status alone says nothing a user can act on.
-    const body = (await response.json().catch(() => null)) as { error?: unknown } | null
-    const reason = typeof body?.error === "string" ? body.error.trim() : ""
-    throw new Error(reason.length > 0 ? reason : `OMP request failed: ${response.status}`)
+    throw await refusalError(response, `OMP request failed: ${response.status}`)
   }
   return schema.parse(await response.json())
 }
@@ -363,7 +388,9 @@ export class OmpRuntimeClient implements AgentRuntime {
     void directory
     const response = await this.fetchImpl(`${this.basePath}/sessions/${encodeURIComponent(id)}/messages`)
     if (!response.ok) {
-      throw new Error(`OMP request failed: ${response.status}`)
+      // A session whose folder was deleted is refused here with that sentence;
+      // carrying it lets the chat say so instead of blaming the connection.
+      throw await refusalError(response, `OMP request failed: ${response.status}`)
     }
     // SAFETY: the server projects these items from the canonical Message/Part
     // model; the body is trusted JSON from OpenChamber's own server.
@@ -387,6 +414,12 @@ export class OmpRuntimeClient implements AgentRuntime {
     const body: OmpPromptBody = { text: mapped.text }
     if (params.messageId) body.messageId = params.messageId
     if (mapped.images.length > 0) body.images = mapped.images
+    // A new-session draft has no session to switch yet, so the choice rides the
+    // first prompt and the server applies it to the session it creates.
+    if (params.model?.providerID && params.model.id) {
+      body.provider = params.model.providerID
+      body.modelId = params.model.id
+    }
     const response = await this.fetchImpl(`${this.basePath}/sessions/${encodeURIComponent(params.id)}/prompt`, {
       method: "POST",
       headers: { "content-type": "application/json" },

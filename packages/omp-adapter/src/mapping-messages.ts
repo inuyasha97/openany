@@ -281,6 +281,16 @@ const projectOmpAssistantHistoryMessage = (sessionId: string, message: OmpAssist
 export const projectOmpHistory = (
   sessionId: string,
   messages: readonly (OmpUserMessage | OmpAssistantMessage | OmpToolResultMessage)[],
+  options: {
+    /**
+     * The id to project a user message under, when the caller knows which
+     * client id the prompt that created it declared. The live projection names
+     * the client's own id (`expectUserMessage`), so a page that named the
+     * timestamp-derived id instead would present one message under two
+     * identities — the store then holds the user's prompt twice.
+     */
+    userMessageId?: (message: OmpUserMessage) => string | undefined
+  } = {},
 ) => {
   const results = new Map<string, OmpToolResultMessage>()
   for (const message of messages) {
@@ -289,7 +299,8 @@ export const projectOmpHistory = (
   const items: Array<{ info: Message; parts: Part[] }> = []
   for (const message of messages) {
     if (message.role === "user") {
-      items.push({ info: projectOmpUserMessage(sessionId, message), parts: projectOmpUserParts(sessionId, message) })
+      const messageID = options.userMessageId?.(message) ?? ompMessageId(sessionId, "user", message.timestamp)
+      items.push({ info: projectOmpUserMessage(sessionId, message, messageID), parts: projectOmpUserParts(sessionId, message, messageID) })
     } else if (message.role === "assistant") {
       const end = message.completedAt ?? message.timestamp
       items.push({ info: projectOmpAssistantHistoryMessage(sessionId, message), parts: projectOmpAssistantParts(sessionId, message, end, results) })

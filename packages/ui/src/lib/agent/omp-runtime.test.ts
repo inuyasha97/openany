@@ -106,6 +106,25 @@ describe("OmpRuntimeClient", () => {
     ])
   })
 
+  // A session whose folder was deleted is refused with a sentence the chat can
+  // show; a status code alone reads as "the server may be offline".
+  test("raises a refused read with the route's own sentence", async () => {
+    const { client } = makeClient({
+      "GET /api/agents/omp/sessions/ses_a/messages": {
+        status: 409,
+        body: { error: "This session's folder no longer exists: /gone", code: "session_directory_missing" },
+      },
+    })
+
+    await expect(client.getMessages("ses_a")).rejects.toThrow("This session's folder no longer exists: /gone")
+  })
+
+  test("falls back to the status when a refusal carries no sentence", async () => {
+    const { client } = makeClient({ "GET /api/agents/omp/sessions/ses_a/messages": { status: 500, body: {} } })
+
+    await expect(client.getMessages("ses_a")).rejects.toThrow("OMP request failed: 500")
+  })
+
   test("reads messages and forwards a client message id", async () => {
     const { client, calls } = makeClient({
       "GET /api/agents/omp/sessions/ses_a/messages": { body: { items: [{ info: { id: "m1", role: "user" }, parts: [] }], cursor: {} } },
@@ -116,6 +135,29 @@ describe("OmpRuntimeClient", () => {
     expect(page.items[0].info.id).toBe("m1")
     expect(await client.sendPrompt({ id: "ses_a", providerID: "anthropic", text: "hi", messageId: "client-1" })).toBe("client-1")
     expect(calls[1]).toEqual({ url: "/api/agents/omp/sessions/ses_a/prompt", method: "POST", body: { text: "hi", messageId: "client-1" } })
+  })
+
+  test("carries the picked model so the session runs on it", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendPrompt({
+      id: "ses_a",
+      providerID: "anthropic",
+      model: { providerID: "openai", id: "gpt" },
+      text: "hi",
+    })
+
+    expect(calls[0].body).toEqual({ text: "hi", provider: "openai", modelId: "gpt" })
+  })
+
+  test("sends no model when the caller picked none", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/prompt": { body: { ok: true } },
+    })
+    await client.sendPrompt({ id: "ses_a", providerID: "anthropic", text: "hi" })
+
+    expect(calls[0].body).toEqual({ text: "hi" })
   })
 
   test("delivers the caller's skill instruction with the prompt", async () => {

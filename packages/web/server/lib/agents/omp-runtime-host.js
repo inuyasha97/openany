@@ -43,6 +43,10 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
   // timestamp it landed with are remembered to translate one into the other.
   const pendingCutIds = new Map();
   const cutTimestamps = new Map();
+  // The model pair last switched onto a session. OMP holds the model on the
+  // session, so a prompt carrying a picker choice has to switch it there; this
+  // keeps an unchanged choice from rewriting the session file on every prompt.
+  const appliedModels = new Map();
   // A login runs on its own short-lived process and outlives the request that
   // started it, so its reply sink is kept under a synthetic id the permission
   // route can address.
@@ -72,6 +76,21 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     broadcast({ type: OMP_FRAME_TYPE, properties });
   };
 
+  /**
+   * Switches a session onto the model its caller picked, once. OMP keeps the
+   * model on the session rather than reading one out of a prompt, so a choice
+   * made in the composer reaches the turn only through `set_model` — and it has
+   * to happen before the prompt, or the turn runs on the model the session
+   * already had. A pair already applied is left alone.
+   */
+  const applyModel = async (id, model) => {
+    if (!model?.provider || !model.modelId) return;
+    const pair = `${model.provider}/${model.modelId}`;
+    if (appliedModels.get(id) === pair) return;
+    await runtime.setModel(id, model.provider, model.modelId);
+    appliedModels.set(id, pair);
+  };
+
   // Approvals ride the same control stream as projected events, and the UI
   // routes a frame by its directory, so a permission frame carries the same
   // directory the session's events do.
@@ -98,6 +117,7 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     announced.delete(id);
     pendingCutIds.delete(id);
     cutTimestamps.delete(id);
+    appliedModels.delete(id);
     approvals.forget(id);
   };
 
@@ -189,15 +209,24 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     getSession: (id) => runtime.getSession(id),
 
     async getMessages(id) {
-      return adapter.projectOmpHistory(id, await runtime.getMessages(id));
+      const timestamps = cutTimestamps.get(id);
+      // The live projection names a user message by the client id its prompt
+      // declared; the page has to agree, or the same prompt lands in the store
+      // twice — once under each id.
+      const byTimestamp = timestamps
+        ? new Map([...timestamps].map(([clientId, timestamp]) => [timestamp, clientId]))
+        : null;
+      return adapter.projectOmpHistory(id, await runtime.getMessages(id), {
+        userMessageId: byTimestamp ? (message) => byTimestamp.get(message.timestamp) : undefined,
+      });
     },
 
-    prompt(id, text, messageID, images) {
+    prompt(id, text, messageID, images, model) {
       if (messageID) {
         projectorFor(id).expectUserMessage(id, messageID);
         pendingCutIds.set(id, messageID);
       }
-      return runtime.prompt(id, text, images ? { images } : undefined);
+      return applyModel(id, model).then(() => runtime.prompt(id, text, images ? { images } : undefined));
     },
 
     abort: (id) => runtime.abort(id),
@@ -247,7 +276,10 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
       rememberDirectory(id, toDirectory);
     },
 
-    setModel: (id, provider, modelId) => runtime.setModel(id, provider, modelId),
+    async setModel(id, provider, modelId) {
+      await runtime.setModel(id, provider, modelId);
+      appliedModels.set(id, `${provider}/${modelId}`);
+    },
 
     /**
      * Sets the session's thinking level. OMP validates the enum and answers

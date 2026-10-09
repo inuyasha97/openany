@@ -17,6 +17,7 @@ import {
 import { dropdownMenuItemClass, dropdownMenuPopupClass, dropdownMenuSeparatorClass, dropdownMenuSubTriggerClass } from '@/components/ui/dropdown-menu.styles';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn, formatDirectoryName } from '@/lib/utils';
+import { AgentRequestError } from '@/lib/agent/contract';
 import { canUseElectronDesktopIPC, invokeDesktop, isVSCodeRuntime } from '@/lib/desktop';
 import { toast } from '@/components/ui';
 import { Button } from '@/components/ui/button';
@@ -624,9 +625,15 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       return;
     }
 
-    const records = await loadExportRecords({ directory: sessionDirectory, sessionID: session.id }).catch(() => null);
+    let failure: unknown = null;
+    const records = await loadExportRecords({ directory: sessionDirectory, sessionID: session.id }).catch((error) => {
+      failure = error;
+      return null;
+    });
     if (!records) {
-      toast.error(t('sessions.sidebar.session.export.failedLoadHistory'));
+      // The runtime's own refusal (a session whose folder is gone) beats a
+      // fixed string that blames the history.
+      toast.error(failure instanceof AgentRequestError ? failure.message : t('sessions.sidebar.session.export.failedLoadHistory'));
       return;
     }
     if (records.length === 0) {

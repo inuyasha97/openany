@@ -359,6 +359,22 @@ describe("OMP history", () => {
       state: { status: "pending", input: {}, raw: "{}" },
     })
   })
+
+  // A page that named the timestamp-derived id while the live stream named the
+  // client's own id put one prompt in the store twice.
+  test("projects a user message under the client id its prompt declared", () => {
+    const page = projectOmpHistory("ses_a", [user({ content: "hi" })], {
+      userMessageId: (message) => (message.timestamp === STAMP ? "client-1" : undefined),
+    })
+
+    expect(page.items[0].info.id).toBe("client-1")
+    expect(page.items[0].parts[0].id).toBe(ompPartIds.userText("client-1"))
+  })
+
+  test("falls back to the timestamp-derived id when the caller knows none", () => {
+    const page = projectOmpHistory("ses_a", [user({ content: "hi" })], { userMessageId: () => undefined })
+    expect(page.items[0].info.id).toBe(ompMessageId("ses_a", "user", STAMP))
+  })
 })
 
 describe("OMP message identity", () => {

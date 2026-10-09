@@ -17,6 +17,18 @@ import type {
 import type { SpaceMark } from "@/lib/spaces/spaces-store"
 import type { RoutedAgentEvent } from "./events"
 
+/**
+ * A request the runtime's server refused, carrying what it said about the
+ * refusal. A caller can show `message` instead of guessing at a cause: a
+ * session whose folder was deleted is not "the server may be offline".
+ */
+export class AgentRequestError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message)
+    this.name = "AgentRequestError"
+  }
+}
+
 export type AgentCapabilities = {
   fork: boolean
   commands: boolean
