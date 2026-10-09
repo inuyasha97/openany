@@ -1,5 +1,5 @@
 /**
- * Minimal JSONL client for `omp --mode rpc`.
+ * Minimal JSONL client for `omp --mode rpc-ui`.
  *
  * `OmpRpcChild` is the child-process seam, so the client is testable with a
  * fake and the real Node spawn lives in `rpc-host.ts`. Commands correlate by
@@ -85,7 +85,13 @@ export class OmpRpcClient {
       this.rejectReady = reject
     })
     if (!this.child) {
-      const args = this.options.args ?? ["--mode", "rpc"]
+      // `rpc-ui`, not `rpc`: OMP creates its `ask` tool only for a session that
+      // declares a UI (`AskTool.createIf` reads `session.canPromptUser ??
+      // session.hasUI`, and `main.ts` sets `hasUI = isInteractive || mode ===
+      // "rpc-ui"`). Under plain `rpc` the model has no way to ask a question, so
+      // the extension-UI `select`/`editor` frames never arrive and the host's
+      // form projection has nothing to render.
+      const args = this.options.args ?? ["--mode", "rpc-ui"]
       // `windowsHide` is what keeps a console window from flashing on Windows
       // for a process the user never asked to see — one per open session.
       const child = this.options.spawn(this.options.command, args, {

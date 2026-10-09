@@ -1,5 +1,5 @@
 /**
- * The real OMP host: `omp --mode rpc` behind `OmpRuntime`.
+ * The real OMP host: `omp --mode rpc-ui` behind `OmpRuntime`.
  *
  * One RPC process per open session. `openSession` spawns, waits for `ready`,
  * optionally switches onto an on-disk session, then reads `get_state` for the
@@ -172,7 +172,9 @@ const isExistingDirectory = (directory: string): boolean => {
 
 export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
   const command = options.command ?? resolveOmpCommand({ env: options.env })
-  const args = options.args ?? ["--mode", "rpc"]
+  // `rpc-ui` for the reason in `rpc-client.ts`: the mode is what tells OMP the
+  // session can prompt a human, which is what creates the `ask` tool.
+  const args = options.args ?? ["--mode", "rpc-ui"]
   const spawn = options.spawn ?? defaultSpawn
   const store = options.store ?? createSessionStore()
   const readFile = options.readFile ?? ((file: string) => fs.readFileSync(file, "utf8"))

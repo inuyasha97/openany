@@ -45,7 +45,7 @@ were not run.
 | BTW side composer (`/btw`) | `PARTIAL` | `/btw what is 2+2?` opens a side panel with its own composer ("Ask your question") carrying the question and its own model/effort row. The side answer was not confirmed, and the main transcript stayed clean. |
 | Permission approval prompt (approve / reject) | `PASS` | With `tools.approvalMode: always-ask` in OMP's `config.yml` (OMP's own knob; its default is `yolo`, which is why earlier attempts ran unprompted), a bash prompt raised the dock: "Allow tool: bash Command: echo approval-check 1 of 1". Expanding it revealed **Approve** / **Deny** with a `submit` button. Approving ran the command — output `approval-check`, `Exit 0, 0.04s`, and the model reported "Tool execution approved and working". A second request denied left it unexecuted — "bash call denied by user — echo denied-check never executed. Result: no output, no exit code" — so the gate is per call. `config.yml` was restored byte-for-byte afterwards (855 bytes, no `tools` key). |
 | Permission rules from the UI | `PASS` (write) | Settings → Agents → a custom agent → **Tool Permissions** offers one row per tool (Default for all tools, Shell, Edit, Read, Glob, Grep, Patch, Webfetch, Websearch, Skill, Subagent, Question, External Directory, Openchamber…) with inherit/allow/ask/deny chips and no Save button. Clicking `ask` on the Shell row wrote `permissions: [{ action: shell, resource: "*", effect: ask }]` into `~/.omp/agent/agents/perm-probe.md` — OMP's own agent file — and the Mode row wrote `mode: primary`. The probe agent was deleted afterwards (route answered 200, the directory is empty, `config.yml` untouched). **See §I.10: OMP does not read either key.** |
-| Model `ask` form answered | `FAIL` (unreachable) | Asked the model to use its ask tool to offer a red/blue choice. It answered: "No ask tool exists in this session's toolset (Read, Bash, Edit, Eval, Glob, Grep, Task, Hub, Todo, Web Search, Write, plus the xd:// devices: security_scan, ast_edit, debug, lsp). I can't invoke a tool I don't have, and I won't fake one." Measured independently: `get_state`'s `dumpTools` lists exactly those 11 tools — OMP's own `BUILTIN_TOOL_NAMES` contains `ask`, but the session never gets it, so no `select`/`editor` frame is ever emitted and the FormDock cannot appear; §I.13. |
+| Model `ask` form answered | `PASS` (was `FAIL`) | The model had no `ask` tool because the adapter spawned `omp --mode rpc`, where OMP's `hasUI` is false and `AskTool.createIf` therefore returns null. Spawning `--mode rpc-ui` creates it: `get_state`'s `dumpTools` went from 11 tools to 12 with `ask` added. Verified in the app — the prompt raised the form dock with "Red — The color red." / "Blue — The color blue." and `dismiss` / `submit`; choosing Red and submitting closed the dock and the turn recorded the `ask` call with that answer; §I.13. |
 | Goals / small-model affordance | `UNTESTED` | The composer says "Goals need a Small Model. Sign in to a model provider or pick one in Settings → Sessions" — the affordance names what it needs instead of promising a turn it cannot run. |
 | Ask other models / multi-run | `UNTESTED` | Offered by the answer menu and the picker. |
 
@@ -446,7 +446,7 @@ contract gives `stageRevert`, `commitRevert`, `clearRevert` and
 `getSessionTurnDiff` a session id. The stubs now carry the contract's parameter
 lists. `bun run type-check` is clean and `bun test src/lib/agent` passes (64).
 
-### I.13 The form path cannot fire for an OMP session — OPEN (gap)
+### I.13 The form path could not fire for an OMP session — FIXED
 The UI carries a whole form surface — `FormDock`, `FormCard`, the contract's
 `listPendingForms`/`replyForm`, and the `form.created`/`form.settled` events —
 which the server projects from OMP's `extension_ui_request` frames with method
@@ -456,19 +456,33 @@ which the server projects from OMP's `extension_ui_request` frames with method
 Asked to ask a question, the model answered: "No ask tool exists in this
 session's toolset (Read, Bash, Edit, Eval, Glob, Grep, Task, Hub, Todo, Web
 Search, Write, plus the xd:// devices: security_scan, ast_edit, debug, lsp)."
-That is accurate — measured against `omp --mode rpc`, `get_state`'s `dumpTools`
-lists exactly those 11 tools. OMP ships the tool (`src/tools/ask.ts`,
-registered in `src/tools/index.ts`, present in `BUILTIN_TOOL_NAMES`), but a
-session never receives it, so no `select`/`editor` frame is ever emitted.
+That was accurate. **OMP asks through the host**, and the `ask` tool is only
+created for a session that declares a UI:
 
-Consequences: the FormDock is unreachable, `listPendingForms` always answers an
-empty list, and the composer's form-dock slot is dead weight. The `confirm` and
-`input` frames do arrive — the approval dock and the OAuth code prompt both work
-— so only the question half of the projection is dead. This is the third
-affordance in the fork backed by nothing at runtime, after the agent permission
-editor (§I.10) and the `@` picker (§I.11); unlike those two, nothing here
-promises the user anything, so the fix is either enabling OMP's `ask` tool for
-the session or deleting the form path.
+- `src/tools/ask.ts`: `static createIf(session) { return (session.canPromptUser
+  ?? session.hasUI) ? new AskTool(session) : null }`
+- `src/main.ts:2066`: `sessionOptions.hasUI = isInteractive || mode === "rpc-ui"`
+
+The adapter was spawning `omp --mode rpc`, where `hasUI` is false, so the tool
+was never created and no `select`/`editor` frame was ever emitted. The other two
+host-facing prompts are unaffected — a tool approval is a `confirm` frame and
+the OAuth code prompt an `input` frame, both of which arrive under plain `rpc`
+(and both were verified working; §B approval dock).
+
+Measured directly:
+
+```
+omp --mode rpc     -> tools(11): read, bash, edit, eval, glob, grep, task, hub, todo, web_search, write   has ask? false
+omp --mode rpc-ui  -> tools(12): read, bash, edit, ask, eval, glob, grep, task, hub, todo, web_search, write   has ask? true
+```
+
+Fix: `rpc-client.ts` and `rpc-host.ts` spawn `--mode rpc-ui`. Verified end to
+end in the app: a prompt asking the model to ask a question raised the form dock
+with "Red — The color red." / "Blue — The color blue." and `dismiss` / `submit`;
+choosing Red and submitting closed the dock and the turn recorded the `ask` call
+with that answer. `bun test` in `packages/omp-adapter` (111) and
+`packages/web` `server/lib/agents` (91) pass.
+
 
 
 

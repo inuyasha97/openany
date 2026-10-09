@@ -134,14 +134,14 @@ Landed and verified:
   request/response correlation by `id`, protocol v2 negotiation with v1
   fallback and `rpc_chunk` reassembly, outbound `send`), `session-store.ts`
   (`~/.omp/agent/sessions` scan, `title`/`session` header parse, delete, move),
-  `rpc-host.ts` (`omp --mode rpc` per open session, `resolveOmpCommand`:
+  `rpc-host.ts` (`omp --mode rpc-ui` per open session, `resolveOmpCommand`:
   `OPENCHAMBER_OMP_PATH` → `OPENCHAMBER_OMP_BIN` → `OMP_BINARY` →
   `OPENCHAMBER_BUNDLED_OMP_CLI_DIR` → `resourcesPath/omp-cli` → `PATH`).
   `sdk-host.ts` and the `@oh-my-pi/pi-coding-agent` dependency are gone.
 - **Process pool**: a session process is spawned on demand and swept when idle
   (`OmpRuntime.disposeIdle`, 30 min idle, 60 s sweep in the server host), so the
   pool does not grow with every session the user opens. Verified against the
-  real binary: two opened sessions → two `omp --mode rpc` processes → zero after
+  real binary: two opened sessions → two `omp --mode rpc-ui` processes → zero after
   the sweep.
 - **Opening a session needs its cwd**: OMP returns `{ cancelled: true }` from
   `switch_session` when the working directory would change, so
