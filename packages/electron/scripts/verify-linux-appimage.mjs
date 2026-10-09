@@ -52,6 +52,20 @@ export const assertElfArchitecture = (filePath, expectedArchitecture, label) => 
   }
 };
 
+/**
+ * Whether a packaged `.node` file belongs to a platform other than the one being
+ * packaged. Some dependencies ship every platform's binaries (`onnxruntime-node`
+ * bundles `bin/napi-v3/{linux,darwin,win32}/…`), and the AppImage carries them
+ * all: Linux never loads the darwin or win32 ones, so their architecture is not
+ * this payload's business.
+ */
+const isForeignPlatformBinary = (normalizedPath, targetArchitecture) => {
+  const foreign = new Set(['darwin', 'win32', 'windows', 'linux-ia32', 'linux-arm']);
+  if (targetArchitecture !== 'x64') foreign.add('linux-x64');
+  if (targetArchitecture !== 'arm64') foreign.add('linux-arm64');
+  return normalizedPath.split('/').some((segment) => foreign.has(segment));
+};
+
 const collectFiles = (root, predicate) => {
   const matches = [];
   const visit = (directory) => {
@@ -102,6 +116,7 @@ export const verifyExtractedPayload = ({
   const nativeModules = collectFiles(unpackedModules, (name, fullPath) => {
     if (!name.endsWith('.node')) return false;
     const normalizedPath = fullPath.split(path.sep).join('/');
+    if (isForeignPlatformBinary(normalizedPath, targetArchitecture)) return false;
     if (!normalizedPath.includes('/prebuilds/')) return true;
     return normalizedPath.includes(`/prebuilds/linux-${targetArchitecture}/`);
   });

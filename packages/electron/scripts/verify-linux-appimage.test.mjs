@@ -24,6 +24,14 @@ const createPayload = () => {
   for (const name of ['pty.node', 'sherpa-onnx.node']) {
     writeElf(path.join(root, 'resources/app.asar.unpacked/node_modules', name), 'x64');
   }
+  // A dependency that ships every platform's binaries: Linux never loads the
+  // darwin one, so it must not be architecture-checked (it is not even ELF).
+  const foreign = path.join(
+    root,
+    'resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v3/darwin/arm64/onnxruntime_binding.node',
+  );
+  fs.mkdirSync(path.dirname(foreign), { recursive: true });
+  fs.writeFileSync(foreign, Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), { mode: 0o755 });
   return root;
 };
 
@@ -53,6 +61,7 @@ test('verifies identity, version, and native payload architecture', () => {
       expectedCliVersion: '18.1.11',
       runCliVersion: () => '18.1.11',
     });
+    // The darwin-only binding in the payload is not counted or checked.
     assert.equal(result.nativeModuleCount, 2);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
