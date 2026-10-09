@@ -43,7 +43,8 @@ were not run.
 | Visible progress before the first token | `FAIL` | 14 s with no DOM change on a large-context session while the model prefilled; §I.3. |
 | Parallel run ("Run on several models") | `PASS` (opens) | The picker's leading action exists and clicking it puts the UI in a parallel state; a multi-model send was not run. |
 | BTW side composer (`/btw`) | `PARTIAL` | `/btw what is 2+2?` opens a side panel with its own composer ("Ask your question") carrying the question and its own model/effort row. The side answer was not confirmed, and the main transcript stayed clean. |
-| Permission approval prompt (approve / reject) | `UNTESTED` | With the composer on "Permissions: ask every time", asking for `bash echo permission-check` ran the command with no prompt — OMP's own policy allowed it. Forcing an ask needs OMP's config, which was left alone. |
+| Permission approval prompt (approve / reject) | `UNTESTED` | With the composer on "Permissions: ask every time", asking for `bash echo permission-check` ran the command with no prompt — OMP's own policy allowed it. The UI *can* change permission rules, but not the ones that decide this: see §B.1. |
+| Permission rules from the UI | `PASS` (write) | Settings → Agents → a custom agent → **Tool Permissions** offers one row per tool (Default for all tools, Shell, Edit, Read, Glob, Grep, Patch, Webfetch, Websearch, Skill, Subagent, Question, External Directory, Openchamber…) with inherit/allow/ask/deny chips and no Save button. Clicking `ask` on the Shell row wrote `permissions: [{ action: shell, resource: "*", effect: ask }]` into `~/.omp/agent/agents/perm-probe.md` — OMP's own agent file — and the Mode row wrote `mode: primary`. The probe agent was deleted afterwards (route answered 200, the directory is empty, `config.yml` untouched). |
 | Model `ask` form answered | `UNTESTED` | |
 | Goals / small-model affordance | `UNTESTED` | The composer says "Goals need a Small Model. Sign in to a model provider or pick one in Settings → Sessions" — the affordance names what it needs instead of promising a turn it cannot run. |
 | Ask other models / multi-run | `UNTESTED` | Offered by the answer menu and the picker. |
@@ -343,3 +344,31 @@ visible (I.8), so the state is reachable — the picker control is simply absent
 `Toggle focus mode` was clicked and the composer's width was unchanged (718 px
 before and after). Not investigated further; it may change something other than
 width.
+
+### I.10 Permissions: what the UI can and cannot change — ONE GAP
+Three surfaces, and only the third changes what OMP does:
+
+1. **The composer's mode button** (`ask` → `safety` → `auto`, per session) and
+   **Settings → Sessions → default permission mode**
+   (`permissionDefaultMode`, server-written onto new sessions) are OpenChamber's
+   own policy: when OMP *asks*, `auto` answers `always` without showing a card
+   and `ask` shows the card. They do not decide whether OMP asks.
+2. **Settings → Agents → Tool Permissions** edits an agent's ordered rule list
+   (inherit/allow/ask/deny per tool) and writes it into OMP's own config —
+   `PATCH /api/config/agents/:name` is OMP-backed and lands in the agent's
+   markdown frontmatter or `config.yml`, the file OMP loads
+   (`agent-config-files.js: getUserConfigPath()`). Verified: clicking `ask` on
+   the Shell row wrote `permissions: [{action: shell, resource: "*", effect: ask}]`
+   into `~/.omp/agent/agents/perm-probe.md`. It only appears once an agent
+   exists, and the page starts at **Total 0** — the built-in agents OMP ships
+   have no editable row here.
+3. **The gap:** `OmpRuntimeClient.capabilities.agentSelection` is `false`
+   ("OMP has no session agent to switch") and the prompt body carries no `agent`
+   field (`omp-routes.js: promptBodySchema`), so a custom agent cannot be chosen
+   for a session from the composer. The rules written in (2) therefore govern
+   the agents OMP spawns inside the model's own `task` call, not the session's
+   own agent — and the session's own approval behaviour comes from OMP's global
+   config (`config.yml`), which **no UI surface writes**. A user who wants the
+   session itself to ask before running a shell command must edit `config.yml`
+   by hand.
+
