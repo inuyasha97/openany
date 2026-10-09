@@ -51,7 +51,7 @@ were not run.
 | Copy message text | `PASS` | Assistant message's copy put `ONE` on the clipboard. |
 | Pin into context (survives compaction) | `PASS` | Pin state set on the message (`aria-pressed`). |
 | Continue from this answer → menu | `PASS` | Opens: Fork from here / Start new session from this answer / Ask other models / Start new multi-run. |
-| Fork from here | `UNTESTED` | Menu item clicked; the fork dialog's outcome was not confirmed. |
+| Fork from here | `PASS` | "Continue from this answer" → "Fork from here" created session `01a11f67-…` with `parentSessionPath` set, whose transcript holds exactly the two messages up to the cut (the `@package.json` prompt and its `0.1.2` answer) while the original still holds its nine. No dialog appeared; the fork is immediate. |
 | Start new session from this answer | `UNTESTED` | |
 | Ask other models / multi-run from an answer | `UNTESTED` | |
 | Revert (undo) a message | `ABSENT` | `revert: false` — OMP keeps no file snapshots. |
