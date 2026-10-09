@@ -36,6 +36,11 @@ export type OmpEventProjector = {
    * before prompting.
    */
   expectUserMessage: (sessionId: string, messageID: string) => void
+  /**
+   * Declares the text the next command output belongs to, so its row names the
+   * command that ran. OMP's `command_output` frame carries the output alone.
+   */
+  expectCommand: (sessionId: string, command: string) => void
 }
 
 type SessionState = {
@@ -43,6 +48,10 @@ type SessionState = {
   assistantMessageID?: string
   /** The client-supplied id awaiting the next user message. */
   pendingUserMessageID?: string
+  /** The command text awaiting the next `command_output`. */
+  pendingCommand?: string
+  /** Creation time of the last command output, so two cannot share an id. */
+  lastCommandAt?: number
 }
 
 const partUpdated = (sessionId: string, part: Part): SyncEvent => ({
@@ -77,6 +86,9 @@ const projectMessageStart = (sessionId: string, state: SessionState, message: Om
   if (message.role === "user") {
     const messageID = state.pendingUserMessageID ?? ompMessageId(sessionId, "user", message.timestamp)
     state.pendingUserMessageID = undefined
+    // A prompt that produced a message is not a command awaiting output, so a
+    // command text left pending by a prompt that produced none is dropped.
+    state.pendingCommand = undefined
     return [
       { type: "message.updated", properties: { info: projectOmpUserMessage(sessionId, message, messageID) } },
       {
@@ -267,6 +279,69 @@ const compactionMessage = (
 }
 
 // ---------------------------------------------------------------------------
+// Command output and notices
+// ---------------------------------------------------------------------------
+
+/**
+ * A slash command's output. OMP runs `/name` inside the session process and
+ * emits the text on this frame rather than as a message, so without this every
+ * command the composer offers — `/usage`, `/fast`, `/compact`, the skill and MCP
+ * prompts — answered with nothing at all.
+ */
+const projectCommandOutput = (sessionId: string, state: SessionState, text: string, now: number): SyncEvent[] => {
+  const body = typeof text === "string" ? text : ""
+  if (body.trim().length === 0) return []
+  // Ids come from the creation time, so two outputs inside one millisecond would
+  // collide; the previous one's time is the floor.
+  const created = Math.max(now, (state.lastCommandAt ?? 0) + 1)
+  state.lastCommandAt = created
+  const command = state.pendingCommand ?? ""
+  state.pendingCommand = undefined
+  const id = ompMessageId(sessionId, "shell", created)
+  return [{
+    type: "message.updated",
+    properties: {
+      info: {
+        id,
+        sessionID: sessionId,
+        role: "shell",
+        time: { created, completed: created },
+        shellID: id,
+        command,
+        status: "exited",
+        exit: 0,
+        output: { output: body, cursor: body.length, size: body.length, truncated: false },
+      },
+    },
+  }]
+}
+
+/**
+ * Something OMP said beside the turn. An error-level notice is a failure the
+ * session must show; anything lower is information the transcript records.
+ */
+const projectNotice = (sessionId: string, event: Extract<OmpEvent, { type: "notice" }>, now: number): SyncEvent[] => {
+  const text = (event.message ?? "").trim()
+  if (text.length === 0) return []
+  if (event.level === "error") {
+    return [{ type: "session.error", properties: { sessionID: sessionId, error: { type: "notice", message: text } } }]
+  }
+  return [{
+    type: "message.updated",
+    properties: {
+      info: {
+        id: ompMessageId(sessionId, "system", now),
+        sessionID: sessionId,
+        role: "system",
+        time: { created: now },
+        text,
+        ...(event.source ? { description: event.source } : {}),
+      },
+    },
+  }]
+}
+
+// ---------------------------------------------------------------------------
 // Projector
 // ---------------------------------------------------------------------------
 
@@ -336,6 +411,10 @@ export const createOmpEventProjector = (options: { now?: () => number } = {}): O
         // A skipped compaction changed nothing and must not open a record.
         if (event.skipped) return []
         return [compactionMessage(sessionId, event, now())]
+      case "command_output":
+        return projectCommandOutput(sessionId, state, event.text, now())
+      case "notice":
+        return projectNotice(sessionId, event, now())
       default:
         // Turn boundaries, tool progress and the other OMP frames the sync
         // layer does not model.
@@ -347,5 +426,9 @@ export const createOmpEventProjector = (options: { now?: () => number } = {}): O
     stateFor(sessionId).pendingUserMessageID = messageID
   }
 
-  return { project, expectUserMessage }
+  const expectCommand = (sessionId: string, command: string): void => {
+    stateFor(sessionId).pendingCommand = command
+  }
+
+  return { project, expectUserMessage, expectCommand }
 }

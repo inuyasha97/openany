@@ -377,6 +377,92 @@ describe("OMP history", () => {
   })
 })
 
+describe("OMP command output and notices", () => {
+  const shellInfo = (event: SyncEvent) => {
+    if (event.type !== "message.updated" || event.properties.info.role !== "shell") {
+      throw new Error("expected a shell message")
+    }
+    return event.properties.info
+  }
+
+  // OMP runs `/name` inside the session process and answers on `command_output`;
+  // dropping the frame left every command the composer offers with no visible
+  // answer at all.
+  test("a command's output becomes a row naming the command", () => {
+    const p = projector()
+    p.expectCommand("ses_a", "/usage")
+
+    expect(p.project("ses_a", { type: "command_output", text: "Usage (1m ago)" })).toEqual([
+      {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: ompMessageId("ses_a", "shell", NOW),
+            sessionID: "ses_a",
+            role: "shell",
+            time: { created: NOW, completed: NOW },
+            shellID: ompMessageId("ses_a", "shell", NOW),
+            command: "/usage",
+            status: "exited",
+            exit: 0,
+            output: { output: "Usage (1m ago)", cursor: 14, size: 14, truncated: false },
+          },
+        },
+      },
+    ])
+  })
+
+  test("two outputs inside one millisecond keep distinct ids", () => {
+    const p = projector()
+    const first = p.project("ses_a", { type: "command_output", text: "one" })[0]
+    const second = p.project("ses_a", { type: "command_output", text: "two" })[0]
+
+    expect(shellInfo(first).id).not.toBe(shellInfo(second).id)
+  })
+
+  test("an empty output opens no row", () => {
+    expect(project([{ type: "command_output", text: "   " }])).toEqual([])
+  })
+
+  test("a user message drops a command text that produced no output", () => {
+    const p = projector()
+    p.expectCommand("ses_a", "/usage")
+    p.project("ses_a", { type: "message_start", message: user({ content: "hi" }) })
+
+    const [later] = p.project("ses_a", { type: "command_output", text: "later" })
+
+    expect(shellInfo(later).command).toBe("")
+  })
+
+  test("an informational notice becomes a system row", () => {
+    expect(project([{ type: "notice", level: "info", message: "Fast mode disabled.", source: "priority" }])).toEqual([
+      {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: ompMessageId("ses_a", "system", NOW),
+            sessionID: "ses_a",
+            role: "system",
+            time: { created: NOW },
+            text: "Fast mode disabled.",
+            description: "priority",
+          },
+        },
+      },
+    ])
+  })
+
+  test("an error notice becomes a session error", () => {
+    expect(project([{ type: "notice", level: "error", message: "boom" }])).toEqual([
+      { type: "session.error", properties: { sessionID: "ses_a", error: { type: "notice", message: "boom" } } },
+    ])
+  })
+
+  test("an empty notice opens nothing", () => {
+    expect(project([{ type: "notice", level: "info", message: "  " }])).toEqual([])
+  })
+})
+
 describe("OMP message identity", () => {
   test("the same timestamp in two sessions yields distinct message ids", () => {
     const message = assistant()

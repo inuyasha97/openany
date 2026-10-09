@@ -116,6 +116,13 @@ export type OmpEvent =
       /** True when compaction was skipped for a benign reason. */
       skipped?: boolean
     }
+  /**
+   * A slash command's output. OMP runs `/name` inside the session process and
+   * emits its text here instead of as a message.
+   */
+  | { type: "command_output"; text: string }
+  /** Something OMP itself said beside the turn (`/fast`'s "disabled", a failure). */
+  | { type: "notice"; level?: string; message: string; source?: string }
 
 /** OMP's user-facing thinking efforts, least → most intensive (`Effort`). */
 export type OmpThinkingEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max"

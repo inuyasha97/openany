@@ -226,6 +226,9 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
         projectorFor(id).expectUserMessage(id, messageID);
         pendingCutIds.set(id, messageID);
       }
+      // A slash command answers on `command_output` with no message of its own,
+      // so the output's row names the command this prompt carried.
+      projectorFor(id).expectCommand(id, text);
       return applyModel(id, model).then(() => runtime.prompt(id, text, images ? { images } : undefined));
     },
 

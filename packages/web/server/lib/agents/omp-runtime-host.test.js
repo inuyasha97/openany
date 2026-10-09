@@ -134,6 +134,7 @@ const createFakeAdapter = ({ projectImpl } = {}) => {
         event.type === 'agent_end' ? [{ type: 'session.idle', properties: { sessionID: sessionId } }] : []
       )),
       expectUserMessage: vi.fn(),
+      expectCommand: vi.fn(),
     })),
   };
   return { adapter, runtime, sessions };
@@ -227,6 +228,9 @@ describe('createOmpRuntimeHost', () => {
 
     const projector = adapter.createOmpEventProjector.mock.results[0].value;
     expect(projector.expectUserMessage).toHaveBeenCalledWith('ses_a', 'client-msg-1');
+    // A slash command answers on `command_output` with no message of its own, so
+    // the projector is told what the prompt carried.
+    expect(projector.expectCommand).toHaveBeenCalledWith('ses_a', 'hi');
     expect(runtime.prompted).toEqual([['ses_a', 'hi']]);
   });
 
