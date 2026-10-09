@@ -31,16 +31,16 @@ were not run.
 | Attach an image | `PASS` | Dropped a 64×64 magenta PNG with a white diagonal on the composer; the chip appeared, and the session file shows the user message carrying three `image/webp` blocks (the app converts on attach). The model answered "Magenta (with a white diagonal band running from corner to corner)" — it saw the image. |
 | Attach a non-image file | `ABSENT` | `attachmentKinds: "images"`; other files are sent by `@path` mention. |
 | `@` file mention reaches the model | `PASS` | Typed `@package.json` plus "What is the version field in that file?" in a session rooted at the repo; the model answered `0.1.2` — the value in that file. |
-| `@` mention picker (popup list) | `UNTESTED` | Typing `@` (real key events, in a draft and in a repo-rooted session) opened no popup; the mention still works when the path is typed out. Not investigated further. |
+| `@` mention picker (popup list) | `FAIL` (by design) → `FIXED` | Typing `@` — bare, and as `@packages/ui/src`, in a managed chat and in a repo-rooted session — opens **no** popup, while `/` and `#` do. `composer/language/triggers.ts: matchMention()` returns `null` on purpose ("the `@`-mention picker searched the runtime's file index, which OMP does not expose"). The hint that promised it is fixed; §I.11. |
 | `/` command or skill | `FIXED` | Typing `/` opens the Command Palette listing OMP's 30 commands; sending one now renders its output ("Shell Command 0.1s /usage"). Before the fix the command produced nothing visible at all; §I.8. |
-| `#` snippet | `UNTESTED` | Typing `#` with real key events opened no popup, like `@`; the composer's inline triggers did not fire in the harness. The snippet text itself was not exercised. |
+| `#` snippet | `PASS` | Typing `#` with real key events opens the snippet picker: "+ Add new snippet" and the user's own `#expandx` (GLOBAL), with "↑↓ navigate · Enter select · Esc close". The earlier `UNTESTED` was a harness limit (DOM insertion instead of real key events). |
 | `!` shell prefix | `FIXED` | The composer advertised "`!` for shell" while a leading `!` reaches the model (`!echo shell-check` was answered by `DeepSeek V4 Flash · 3.7s`). OMP has no shell command in its RPC, and `ChatInput` pins `inputMode` to "normal" for that reason. The hint no longer promises a shell (all 13 locales) and the dead `chat.chatInput.placeholder.shell` string is gone; §I.5. |
 | Dictation | `BLOCKED` | Needs a microphone/audio device. |
 | Focus mode toggle | `UNTESTED` | |
 | Permissions mode (`ask every time` → …) | `PASS` | Clicking cycled the control from "Permissions: ask every time" to "Permissions: accept everything". |
 | Send while the session is busy (queue) | `UNTESTED` | The "Queue message" button (which needs a running turn *and* composer content) never appeared in the states driven: a follow-up typed while a turn ran did not land in the composer. Not a claim that queueing is broken — the harness could not reach the state. |
 | Stop a running turn | `PASS` | The composer renders "Stop generating" while a turn is in flight (seen at 0.7 s and 2.1 s into two turns) and it disappears the moment the turn ends. Clicking it during the model's thinking phase ended the turn with no answer and freed the composer. A mid-answer abort could not be caught: this model finishes a 400-line answer in 5.7 s. |
-| Visible progress before the first token | `FAIL` | 14 s with no DOM change on a large-context session while the model prefilled; §I.3. |
+| Visible progress before the first token | `PASS` (was `FAIL`) | Measured on the same 565-message session the report named: the transcript renders in 2.5 s and a send puts the composer into "Stop generating" 1.3 s after Enter. OMP itself reports `isStreaming: true` 1.1 s after the prompt is accepted. The reported 14 s of silence does not reproduce; §I.3. |
 | Parallel run ("Run on several models") | `PASS` (opens) | The picker's leading action exists and clicking it puts the UI in a parallel state; a multi-model send was not run. |
 | BTW side composer (`/btw`) | `PARTIAL` | `/btw what is 2+2?` opens a side panel with its own composer ("Ask your question") carrying the question and its own model/effort row. The side answer was not confirmed, and the main transcript stayed clean. |
 | Permission approval prompt (approve / reject) | `PASS` | With `tools.approvalMode: always-ask` in OMP's `config.yml` (OMP's own knob; its default is `yolo`, which is why earlier attempts ran unprompted), a bash prompt raised the dock: "Allow tool: bash Command: echo approval-check 1 of 1". Expanding it revealed **Approve** / **Deny** with a `submit` button. Approving ran the command — output `approval-check`, `Exit 0, 0.04s`, and the model reported "Tool execution approved and working". A second request denied left it unexecuted — "bash call denied by user — echo denied-check never executed. Result: no output, no exit code" — so the gate is per call. `config.yml` was restored byte-for-byte afterwards (855 bytes, no `tools` key). |
@@ -76,20 +76,20 @@ were not run.
 | Copy session ID | `PASS` | Toast "Session ID copied". |
 | Archive session | `PASS` | Confirmation dialog "Archive session? … Cancel / Archive". |
 | Export session as Markdown | `PASS` (was `FAIL`) | A row whose folder is gone now says "This session's folder no longer exists: … OMP cannot open a session whose folder is gone." A healthy session's export was not confirmed (no download was captured). |
-| Rename | `UNTESTED` | Menu item responds; the inline editor's result was not confirmed. |
-| Rename with AI | `UNTESTED` | |
-| Pin session | `UNTESTED` | Menu item responds; the row's pin state was not confirmed. |
-| Track as in work | `UNTESTED` | |
-| Move to folder | `UNTESTED` | |
-| Move to worktree | `UNTESTED` | |
-| Open in Side Panel (beta) | `UNTESTED` | |
+| Rename | `PASS` | Menu → Rename opens an inline input ("Rename", pre-filled with the title); typing `audit-renamed` + Enter put that name in the sidebar. |
+| Rename with AI | `UNTESTED` | Menu item present; not run (costs a model call). |
+| Pin session | `PASS` | Menu → Pin session; the same menu then reads "Unpin session", so the state flipped. |
+| Track as in work | `PASS` | The row's "Track as in work" action moved the session under a new **in work** group in the sidebar. |
+| Move to folder | `UNTESTED` | Menu item present; the pass that clicked it found no surface, so it stays unverified. |
+| Move to worktree | `UNTESTED` | Needs a worktree. |
+| Open in Side Panel (beta) | `UNTESTED` | Menu item present; not opened. |
 | Delete | `UNTESTED` | Destructive; not run on purpose. |
-| Search sessions | `UNTESTED` | |
-| Select sessions (bulk) | `UNTESTED` | |
-| Display mode: Grouped / Timeline / Manual | `UNTESTED` | Menu lists all three plus sorts and scopes. |
-| Display mode: sort (A→Z, Newest, Recent activity) and scope (All/One project) | `UNTESTED` | |
-| Show more sessions (pagination) | `UNTESTED` | |
-| Project menu: New session / Edit / Close project | `UNTESTED` | |
+| Search sessions | `PASS` | "Search sessions" opens an input reading "Press Enter to search / Esc to clear"; typing `thinking` changed the list. |
+| Select sessions (bulk) | `PARTIAL` | Entering the mode shows "0 selected" in the sidebar; no per-row checkbox was found by the probe, so row selection is unverified. |
+| Display mode: Grouped / Timeline / Manual | `PASS` | The menu lists View (Grouped/Timeline/Manual), Sort projects (A→Z/Z→A/Newest/Recent) and Sort worktrees (Recent activity/Manual); choosing **Timeline** changed the sidebar's grouping. Sorts and scope are listed but were not applied. |
+| Display mode: sort (A→Z, Newest, Recent activity) and scope (All/One project) | `UNTESTED` | Listed in the same menu; not applied. |
+| Show more sessions (pagination) | `UNTESTED` | The button responds; the probe's row selector found no rows to count. |
+| Project menu: New session / Edit / Close project | `UNTESTED` | The menu did not open in the probe pass. |
 
 ## D. Panels
 
@@ -98,14 +98,14 @@ were not run.
 | Git panel: status, branch, sync, stashes | `PASS` (renders) | Shows `main`, "Working tree clean", a sync control. Sync itself needs a remote — `UNTESTED`. |
 | Changes panel | `PASS` (renders) | "Changed: 0 — working tree clean, no changes to display". |
 | Terminal panel | `PASS` | The panel mounts a canvas terminal (`.oc-terminal-canvas` + `.oc-terminal-input`); typing `touch /tmp/terminal-proof-…` + Enter created that file, and the server had a live `/bin/zsh` child. A session whose folder is gone is refused with "Invalid working directory". |
-| Files panel: tree, new file, new folder, upload, refresh, collapse | `UNTESTED` | The tree renders (home directory); opening a file was not confirmed — the probe clicked the wrong panel. |
-| Project knowledge: notes/todo/plans | `UNTESTED` | "0/3000, no notes yet". |
+| Files panel: tree, new file, new folder, upload, refresh, collapse | `PASS` (affordances) | Opening the panel exposes New File, New Folder, Upload files, Refresh and Collapse all folders; Refresh and Collapse all folders were clicked and the panel stayed healthy. Creating files in the user's project was not exercised on purpose. |
+| Project knowledge: notes/todo/plans | `PASS` | Opens on "0/3000 — No notes yet. Capture context, reminders, or links." with Notes 0 / Todo 0 / Plans 0 tabs. |
 | Browser panel | `PASS` (renders) | Shows an address bar and detected dev servers (localhost:3191/3991/5000/…). |
 | Pull Request panel | `BLOCKED` | Needs a branch that can open a PR (GitHub remote). |
 | Walkthrough panel | `BLOCKED` | "No small model available" — needs a configured small model. |
 | Context panel | `PASS` (renders) | Empty until a session is open; then shows model/effort/context usage. |
 | Usage readout + Refresh usage | `PASS` (renders) | "Usage 5-Hour 5%". |
-| Configure panels | `UNTESTED` | |
+| Configure panels | `PASS` | Opens "Rail panels — Choose which panels the rail shows. Hidden panels keep their data and stay reachable from the command palette." with Context, Git, Pull Request, Changes, Walkthrough, Linear, Files, Terminal, Project knowledge, Plan, Browser, Chat and 24 checkboxes. |
 
 ## E. Settings
 
@@ -116,30 +116,30 @@ because it rendered.
 
 | Page | Items | Status | Evidence |
 |---|---|---|---|
-| General | 13 | `PASS` (one item) | `appearance.auto-save-enabled` flipped true→false and stayed false after a reload. |
+| General | 13 | `PASS` | `appearance.auto-save-enabled` flipped true→false and stayed false after a reload; `sessions.agent-control-tool` flipped true→false and persisted the same way (restored afterwards). |
 | Appearance | 16 | `PASS` (one item) | Theme mode `Dark` set `data-theme="dark"` and persisted; 15 items (`light-theme`, `scrollbars`, `language`, font sizes, density, …) render, undriven. |
-| Chat | 33 | `PASS` (one item) | `chat.reasoning-traces` toggled on and the transcript then rendered the model's thinking; `chat.streaming-auto-follow` flipped true→false and survived a reload. 31 items undriven. |
-| Notifications | 2 | `UNTESTED` | Clicking the `notifications.delivery` row (a checkbox row, per its markup) left `aria-checked` false and opened nothing; the same row click does flip `routing.enabled` and `appearance.auto-save-enabled`, so the harness did not reach this control's activation. `notifications.push` undriven. |
-| Sessions | 15 | `UNTESTED` | Page renders its defaults (model/thinking/agent/permission/retention/small-model/…); no default changed. |
-| Routing | 4 | `PASS` (one item) | `routing.enabled` flipped false→true and survived a reload. |
-| Shortcuts | 1 | `UNTESTED` | `shortcuts.keyboard-shortcuts` renders. |
-| Voice | 2 | `UNTESTED` | `voice.playback`, `voice.speech-recognition` render; needs audio. |
-| Integrations | 5 | `UNTESTED` | `integrations.first-party`/`github`/`linear`/`extensions` render. |
-| Extensions | 3 | `UNTESTED` | `extensions.add`, `extensions.gitIdentity`, `extensions.updates.check` render. |
-| Usage | 2 | `UNTESTED` | `usage.work-status-panel`, `usage.model-quotas` render. |
-| Projects | 9 | `UNTESTED` | `projects.name`/`default-agent`/`default-model`/`accent-color`/`icon`/`actions`/`worktree`/`shared` render. |
+| Chat | 33 | `PASS` | `chat.reasoning-traces` toggled on and the transcript then rendered the model's thinking; `chat.streaming-auto-follow` and `chat.activity-default` (a Collapsed/Expanded radio) each flipped and survived a reload (both restored). 31 items undriven. |
+| Notifications | 2 | `UNTESTED` | `notifications.delivery` carries no checkbox or switch in its markup, so the probe's toggle pass could not drive it; `notifications.push` undriven. |
+| Sessions | 15 | `PASS` (one item) | `sessions.deletion-dialog` flipped true→false and survived a reload (restored). The other 14 (model/thinking/agent/permission/retention/small-model/…) render, undriven. |
+| Routing | 4 | `PASS` | `routing.enabled` flipped true→false and survived a reload (restored). |
+| Shortcuts | 1 | `UNTESTED` | `shortcuts.keyboard-shortcuts` renders; it opens a shortcut editor rather than a toggle. |
+| Voice | 2 | `PASS` (one item) | `voice.playback` flipped false→true and survived a reload (restored); `voice.speech-recognition` needs audio. |
+| Integrations | 5 | `UNTESTED` | `integrations.first-party`/`github`/`linear`/`extensions` render; each opens a dialog rather than a toggle. |
+| Extensions | 3 | `UNTESTED` | `extensions.add`, `extensions.gitIdentity`, `extensions.updates.check` render; no toggle. |
+| Usage | 2 | `PASS` (one item) | `usage.work-status-panel` flipped true→false and survived a reload (restored). |
+| Projects | 9 | `UNTESTED` | Items `projects.name`/`default-agent`/`default-model`/`accent-color`/`icon`/`actions` render; they are pickers and dialogs, not toggles. |
 | Remote Instances | 1 | `UNTESTED` | `remote-instances.client-auth` renders; needs a remote. |
 | External Tunnel (beta) | 1 | `BLOCKED` | Needs a tunnel provider. |
-| Git | 4 | `UNTESTED` | `git.identities`, `git.changes-view`, `git.gitmoji`, `git.gitignored-files` render. |
-| Providers | 2 | `UNTESTED` | `providers.login`, `providers.models` render; signing in was not run. |
-| Agents | 1 | `UNTESTED` | `agents.create` renders. |
-| Behavior | 2 | `UNTESTED` | `behavior.system-prompt`, `behavior.response-style` render. |
-| Commands | 1 | `UNTESTED` | `commands.create` renders. |
-| MCP | 1 | `UNTESTED` | `mcp.create` renders. |
-| Magic Prompts | 3 | `UNTESTED` | `magic-prompts.*` render. |
-| Snippets | 1 | `UNTESTED` | `snippets.create` renders. |
+| Git | 4 | `PASS` (one item) | `git.gitmoji` flipped false→true and survived a reload (restored). `git.identities`, `git.changes-view`, `git.gitignored-files` render. |
+| Providers | 2 | `PASS` (affordance) | `providers.login` lists ChatGPT Plus/Pro (Codex Subscription) and Anthropic (Claude Pro/Max), both "Not signed in" with a sign-in control; `providers.models` renders. Signing in was not run. |
+| Agents | 1 | `UNTESTED` | `agents.create` renders; the page starts at "Total 0 — No agents configured" and the permission editor only appears for an agent that exists (§I.10). |
+| Behavior | 2 | `PASS` (one item) | `behavior.response-style` flipped false→true and survived a reload (restored); `behavior.system-prompt` renders. |
+| Commands | 1 | `UNTESTED` | `commands.create` renders; no toggle. |
+| MCP | 1 | `PARTIAL` | `mcp.create` renders ("Add MCP server — Local command or remote URL"); the list is empty, so enable/disable is unverified. |
+| Magic Prompts | 3 | `UNTESTED` | `magic-prompts.reset-overrides`, `magic-prompts.visible-prompt`, `magic-prompts.instructions` render; no toggle. |
+| Snippets | 1 | `UNTESTED` | `snippets.create` renders; the `#` picker itself is verified in section A. |
 | Skills | 1 | `UNTESTED` | `skills.create` renders. |
-| Skills Catalog | 3 | `UNTESTED` | `skills.catalog.search`/`source`/`add-catalog` render. |
+| Skills Catalog | 3 | `UNTESTED` | `skills.catalog.search`/`source`/`add-catalog` render; no toggle. |
 
 ## F. Desktop shell (Electron) — 65 IPC commands
 
@@ -199,8 +199,8 @@ the repackaged app, so these exercise the real main-process handlers.
 | Function | Status | Evidence |
 |---|---|---|
 | Model catalog read from the account's credentials | `PASS` | Real catalog returned. |
-| Provider sign-in (OAuth) | `UNTESTED` | `login` route + URL/device flow exist. |
-| MCP server list / enable / disable | `UNTESTED` | |
+| Provider sign-in (OAuth) | `PASS` (affordance) | Settings → Providers lists "Provider sign-in — ChatGPT Plus/Pro (Codex Subscription) — Not signed in — sign in" and "Anthropic (Claude Pro/Max) — Not signed in — sign in"; the `login` route + URL/device flow exist. The flow itself was not completed (it needs the user's account). |
+| MCP server list / enable / disable | `PARTIAL` | Settings → MCP reads "Tool servers your agents can call. Open one to see its status and settings. — No MCP servers yet. Add MCP server — Local command or remote URL". The list and the add affordance render; nothing exists to enable or disable. |
 
 ## J. Plan — the remaining audit (chat nâng cao + 23 Settings pages)
 
@@ -271,14 +271,31 @@ prompt body carries `provider`/`modelId`; the host applies `set_model` before
 prompting and remembers the applied pair. Evidence: badge
 `GLM-5.3-Flash · 3.7s` after picking it.
 
-### I.3 No visible progress before the first token — OPEN (narrower than first reported)
-Measured: 14 s with no DOM change on a 559-message session while the model
-prefilled, then the whole answer; 6.4 s to first token on a fresh session. The
-earlier claim that streamed reasoning is hidden inside a collapsed group was
-wrong: with **Show Reasoning Traces** on, thinking renders in the transcript
-(verified), so a thinking model does show progress — the gap is the window before
-*any* token, where nothing at all is visible. Options: a "working" row from the
-moment the prompt is accepted, or a prefill indicator.
+### I.3 No visible progress before the first token — NOT REPRODUCED
+The claim: 14 s with no DOM change on a 559-message session while the model
+prefilled. Measured on that same session (`01a0ccc4…`, 565 messages, opened via
+`?session=`): the transcript renders in **2.5 s**, and a send puts the composer
+into "Stop generating" **1.3 s** after Enter, with the transcript changing at the
+same moment. On a fresh session the same button appears at 1.1–2.2 s.
+
+The signal is real end to end: `omp --mode rpc` reports `isStreaming: true`
+1.1 s after the prompt is accepted (measured with `get_state` polls; the prefill
+window ran 1.1 s → 4.0 s), the adapter maps `agent_start` to
+`session.status { busy }` (`mapping-events.ts`), and the UI derives both the stop
+button (`ChatContainer: sessionIsWorking`) and the floating status row
+(`useSessionActivity` → `useAssistantStatus().working.isWorking`) from that same
+busy status, so both appear together.
+
+Not measured: whether the *first* send after a cold start of a huge session can
+stall while the client hydrates. Nothing in the code suggests it, and the open
+path measured clean, so the row is downgraded rather than fixed.
+
+**A real gap remains next to it**: inside the transcript, the latest turn shows
+no in-turn working indicator until an activity segment exists
+(`MessageList.tsx: isWorking` requires `hasAnchoredActivitySegment`), so during
+the prefill window the only visible progress is the composer's stop button and
+the floating status chip. That is a design choice, not the reported silence.
+
 
 ### I.4 A session whose folder was deleted failed with a misleading message — FIXED
 The server answers `409 { error: "This session's folder no longer exists: …",
@@ -385,5 +402,39 @@ no `agent` field (`omp-routes.js: promptBodySchema`), so the composer cannot pic
 a custom agent for a chat either. Anyone who wants the session to ask before a
 shell command must set `tools.approvalMode` themselves — the terminal command
 `omp config set` is the supported path.
+
+### I.11 The `@` picker was promised and never opened — FIXED
+`/` opens the command palette and `#` opens the snippet picker (both verified by
+typing them: `/add-dir`, `/advisor`, `/autoresearch`, `/browser`; `+ Add new
+snippet`, `#expandx`). `@` opened **nothing** — in a managed chat *and* in a
+project session, with a bare `@` and with `@packages/ui/src`.
+
+Cause: the picker is switched off on purpose.
+`composer/language/triggers.ts: matchMention()` returns `null` with the reason
+"the `@`-mention picker searched the runtime's file index, which OMP does not
+expose, so no caret position opens it." The composer's hint still promised it:
+"@ for files/agents; / for commands and skills; # for snippets".
+
+Fix: the hint now says "@ to reference a file by path; …" — a mention is still a
+plain token OMP resolves (typing one works), but the text no longer promises a
+completion list that does not exist. Changed in all 13 dictionaries
+(`en`, `de`, `es`, `fr`, `ja`, `ko`, `nl`, `pl`, `pt-BR`, `tr`, `uk`, `zh-CN`,
+`zh-TW`); `bun test src/lib/i18n` passes (18 tests) and the rebuilt bundle shows
+the new text in the composer.
+
+### I.12 The UI type-check was red — FIXED
+`packages/ui` `bun run type-check` reported one error:
+`src/lib/agent/omp-runtime.ts(649,5): Type 'string' is not assignable to type
+'"primary" | "all" | "subagent"'`. `listAgents` mapped OMP's free-form
+`mode: string` straight into the contract's union. An unrecognized mode (the
+agent files are hand-written) now reads as `"all"`, the vocabulary's neutral
+value — the same value an absent mode already produced.
+
+With that fixed, a second error surfaced: `omp-runtime.test.ts(234,44): Expected
+0 arguments, but got 1` — the unsupported stubs declared no parameters while the
+contract gives `stageRevert`, `commitRevert`, `clearRevert` and
+`getSessionTurnDiff` a session id. The stubs now carry the contract's parameter
+lists. `bun run type-check` is clean and `bun test src/lib/agent` passes (64).
+
 
 

@@ -2401,7 +2401,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.linked.pr.number': 'PR #{number}',
   'chat.chatInput.linked.pr.openInBrowserAria': '브라우저에서 PR 열기',
   'chat.chatInput.linked.pr.removeAria': '연결된 PR 제거',
-  'chat.chatInput.placeholder.chat': '@ 파일/에이전트; / 명령 및 스킬; # 스니펫',
+  'chat.chatInput.placeholder.chat': '@ 파일 경로 참조; / 명령 및 스킬; # 스니펫',
   'chat.chatInput.placeholder.chatCompact': '@ / # 도우미 사용',
   'chat.chatInput.placeholder.selectSession': '채팅을 시작할 세션을 선택하거나 새로 만드세요',
   'chat.dictation.start': '받아쓰기 시작',

@@ -651,27 +651,29 @@ export class OmpRuntimeClient implements AgentRuntime {
       name: agent.name,
       displayName: agent.name,
       description: agent.description,
-      // OMP's files may name no mode: "all" is the vocabulary's neutral value.
-      mode: agent.mode ?? "all",
+      // OMP's files may name no mode, or one the contract does not know: "all"
+      // is the vocabulary's neutral value, so anything else reads as neither
+      // primary nor subagent.
+      mode: agent.mode === "primary" || agent.mode === "subagent" ? agent.mode : "all",
       hidden: agent.hidden === true,
       request: { settings: {}, headers: {}, body: {} },
       permissions: [],
     }))
   }
 
-  stageRevert(): Promise<SessionRevert> {
+  stageRevert(_sessionId: string, _messageId: string, _options?: { files?: boolean; directory?: string | null }): Promise<SessionRevert> {
     return unsupported("stageRevert")
   }
 
-  commitRevert(): Promise<void> {
+  commitRevert(_sessionId: string, _directory?: string | null): Promise<void> {
     return unsupported("commitRevert")
   }
 
-  clearRevert(): Promise<void> {
+  clearRevert(_sessionId: string, _directory?: string | null): Promise<void> {
     return unsupported("clearRevert")
   }
 
-  getSessionTurnDiff(): Promise<FileDiffInfo[]> {
+  getSessionTurnDiff(_sessionId: string, _options?: { from?: string; to?: string; context?: number; directory?: string | null }): Promise<FileDiffInfo[]> {
     return unsupported("getSessionTurnDiff")
   }
 

@@ -2334,7 +2334,7 @@ export const dict = {
   'chat.chatInput.linked.pr.number': 'PR #{number}',
   'chat.chatInput.linked.pr.openInBrowserAria': 'Pull request\'i tarayıcıda aç',
   'chat.chatInput.linked.pr.removeAria': 'Bağlı pull request\'i kaldır',
-  'chat.chatInput.placeholder.chat': 'Dosyalar/agent\'ler için @; komutlar ve skill\'ler için /; snippet\'ler için #',
+  'chat.chatInput.placeholder.chat': 'Dosya yolunu belirtmek için @; komutlar ve skill\'ler için /; snippet\'ler için #',
   'chat.chatInput.placeholder.chatCompact': 'Yardımcılar için @ / # kullan',
   'chat.chatInput.placeholder.selectSession': 'Sohbete başlamak için bir session seç veya oluştur',
   'chat.dictation.start': 'Dikteyi başlat',

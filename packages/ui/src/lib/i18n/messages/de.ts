@@ -2190,7 +2190,7 @@ export const dict = {
   'chat.chatInput.linked.pr.number': 'PR #{number}',
   'chat.chatInput.linked.pr.openInBrowserAria': 'Pull Request im Browser öffnen',
   'chat.chatInput.linked.pr.removeAria': 'Verknüpften Pull Request entfernen',
-  'chat.chatInput.placeholder.chat': '@ für Dateien/Agenten; / für Befehle und Fähigkeiten; # für Snippets',
+  'chat.chatInput.placeholder.chat': '@ verweist per Pfad auf eine Datei; / für Befehle und Fähigkeiten; # für Snippets',
   'chat.chatInput.placeholder.chatCompact': 'Verwende @ / # für Hilfsmittel',
   'chat.chatInput.placeholder.selectSession': 'Sitzung auswählen oder erstellen, um zu chatten',
   'chat.dictation.start': 'Dictation starten',

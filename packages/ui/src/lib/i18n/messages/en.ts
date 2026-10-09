@@ -2401,7 +2401,7 @@ export const dict = {
   'chat.chatInput.linked.pr.number': 'PR #{number}',
   'chat.chatInput.linked.pr.openInBrowserAria': 'Open pull request in browser',
   'chat.chatInput.linked.pr.removeAria': 'Remove linked pull request',
-  'chat.chatInput.placeholder.chat': '@ for files/agents; / for commands and skills; # for snippets',
+  'chat.chatInput.placeholder.chat': '@ to reference a file by path; / for commands and skills; # for snippets',
   'chat.chatInput.placeholder.chatCompact': 'Use @ / # for helpers',
   'chat.chatInput.placeholder.selectSession': 'Select or create a session to start chatting',
   'chat.dictation.start': 'Start dictation',

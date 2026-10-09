@@ -2379,7 +2379,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.chatInput.linked.pr.number": "PR #{number}",
   "chat.chatInput.linked.pr.openInBrowserAria": "Abrir PR no navegador",
   "chat.chatInput.linked.pr.removeAria": "Excluir PR vinculada",
-  "chat.chatInput.placeholder.chat": "@ para arquivos/agentes; / para comandos e habilidades; # para snippets",
+  "chat.chatInput.placeholder.chat": "@ para referenciar um arquivo por caminho; / para comandos e habilidades; # para snippets",
   "chat.chatInput.placeholder.chatCompact": "Use @ / # para ajudantes",
   "chat.chatInput.placeholder.selectSession": "Selecione ou crie uma sessão para começar a conversar",
   "chat.snippetAutocomplete.action.addNew": "+ Adicionar novo snippet",

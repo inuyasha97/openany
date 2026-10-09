@@ -2401,7 +2401,7 @@ export const dict = {
   'chat.chatInput.linked.pr.number': 'PR #{number}',
   'chat.chatInput.linked.pr.openInBrowserAria': 'Pull request in de browser openen',
   'chat.chatInput.linked.pr.removeAria': 'Gekoppelde pull request verwijderen',
-  'chat.chatInput.placeholder.chat': '@ voor bestanden/agents; / voor opdrachten en skills; # voor fragmenten',
+  'chat.chatInput.placeholder.chat': '@ om een bestand op pad te verwijzen; / voor opdrachten en skills; # voor fragmenten',
   'chat.chatInput.placeholder.chatCompact': 'Gebruik @ / # voor helpers',
   'chat.chatInput.placeholder.selectSession': 'Selecteer of maak een sessie om te beginnen met chatten',
   'chat.dictation.start': 'Dictaat starten',

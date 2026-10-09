@@ -2397,7 +2397,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.linked.pr.number': 'PR #{number}',
   'chat.chatInput.linked.pr.openInBrowserAria': 'ブラウザでプルリクエストを開く',
   'chat.chatInput.linked.pr.removeAria': 'リンクされたプルリクエストを削除',
-  'chat.chatInput.placeholder.chat': '@でファイル/エージェント、/でコマンド/スキル、#でスニペット',
+  'chat.chatInput.placeholder.chat': '@でファイルをパス指定、/でコマンド/スキル、#でスニペット',
   'chat.chatInput.placeholder.chatCompact': '@ / # でヘルパーを使用',
   'chat.chatInput.placeholder.selectSession': 'セッションを選択または作成してチャットを開始',
   'chat.dictation.start': '音声入力を開始',
