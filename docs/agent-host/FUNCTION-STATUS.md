@@ -104,20 +104,37 @@ were not run.
 
 ## E. Settings
 
-Pages exist (verified by the settings nav): General, Appearance, Chat,
-Notifications, Sessions, Routing, Shortcuts, Voice, Integrations, Extensions,
-Usage, Projects, Remote Instances, External Tunnel (beta), Git, Providers,
-Agents, Behavior, Commands, MCP, Magic Prompts, Snippets, Skills, Skills
-Catalog.
+Every page opens and its items are enumerable by `data-settings-item`. Counts
+below are the items each page carries; a page is `PASS` only where a control's
+effect was observed (a toggle flipped **and** survived a reload), not merely
+because it rendered.
 
-| Function | Status | Evidence |
-|---|---|---|
-| Settings window opens, all 24 pages listed | `PASS` | Nav enumerated: General, Appearance, Chat, Notifications, Sessions, Routing, Shortcuts, Voice, Integrations, Extensions, Usage, Projects, Remote Instances, External Tunnel, Git, Providers, Agents, Behavior, Commands, MCP, Magic Prompts, Snippets, Skills, Skills Catalog. |
-| Appearance: theme mode (System/Light/Dark) | `PASS` | Choosing `Dark` set `data-theme="dark"` and persisted it (`themeMode=dark`, `selectedThemeVariant=dark`, `useSystemTheme=false`). |
-| Appearance: light/dark theme pickers, Reload themes, font sizes, density | `UNTESTED` | Controls render (e.g. "Select light theme", "Reload themes"). |
-| Sessions: Session Defaults (Default Model / Thinking / Agent / Permissions) | `UNTESTED` | The page renders: "New sessions will start with: OMP agent default", Default Model "Not selected", Default Thinking "Default", Default Agent "Not selected". Changing a default was not confirmed. |
-| Chat: Show Reasoning Traces | `PASS` | Toggled it on (`[data-settings-item='chat.reasoning-traces']` → `aria-checked="true"`, persisted `showReasoningTraces: true`), and the transcript then rendered the model's thinking. |
-| Any other settings page's controls change behavior | `UNTESTED` | No other page was driven. |
+| Page | Items | Status | Evidence |
+|---|---|---|---|
+| General | 13 | `PASS` (one item) | `appearance.auto-save-enabled` flipped true→false and stayed false after a reload. |
+| Appearance | 16 | `PASS` (one item) | Theme mode `Dark` set `data-theme="dark"` and persisted; 15 items (`light-theme`, `scrollbars`, `language`, font sizes, density, …) render, undriven. |
+| Chat | 33 | `PASS` (one item) | `chat.reasoning-traces` toggled on and the transcript then rendered the model's thinking; `chat.streaming-auto-follow` flipped true→false and survived a reload. 31 items undriven. |
+| Notifications | 2 | `UNTESTED` | `notifications.delivery` was clicked and did not flip; `notifications.push` undriven. |
+| Sessions | 15 | `UNTESTED` | Page renders its defaults (model/thinking/agent/permission/retention/small-model/…); no default changed. |
+| Routing | 4 | `PASS` (one item) | `routing.enabled` flipped false→true and survived a reload. |
+| Shortcuts | 1 | `UNTESTED` | `shortcuts.keyboard-shortcuts` renders. |
+| Voice | 2 | `UNTESTED` | `voice.playback`, `voice.speech-recognition` render; needs audio. |
+| Integrations | 5 | `UNTESTED` | `integrations.first-party`/`github`/`linear`/`extensions` render. |
+| Extensions | 3 | `UNTESTED` | `extensions.add`, `extensions.gitIdentity`, `extensions.updates.check` render. |
+| Usage | 2 | `UNTESTED` | `usage.work-status-panel`, `usage.model-quotas` render. |
+| Projects | 9 | `UNTESTED` | `projects.name`/`default-agent`/`default-model`/`accent-color`/`icon`/`actions`/`worktree`/`shared` render. |
+| Remote Instances | 1 | `UNTESTED` | `remote-instances.client-auth` renders; needs a remote. |
+| External Tunnel (beta) | 1 | `BLOCKED` | Needs a tunnel provider. |
+| Git | 4 | `UNTESTED` | `git.identities`, `git.changes-view`, `git.gitmoji`, `git.gitignored-files` render. |
+| Providers | 2 | `UNTESTED` | `providers.login`, `providers.models` render; signing in was not run. |
+| Agents | 1 | `UNTESTED` | `agents.create` renders. |
+| Behavior | 2 | `UNTESTED` | `behavior.system-prompt`, `behavior.response-style` render. |
+| Commands | 1 | `UNTESTED` | `commands.create` renders. |
+| MCP | 1 | `UNTESTED` | `mcp.create` renders. |
+| Magic Prompts | 3 | `UNTESTED` | `magic-prompts.*` render. |
+| Snippets | 1 | `UNTESTED` | `snippets.create` renders. |
+| Skills | 1 | `UNTESTED` | `skills.create` renders. |
+| Skills Catalog | 3 | `UNTESTED` | `skills.catalog.search`/`source`/`add-catalog` render. |
 
 ## F. Desktop shell (Electron) — 65 IPC commands
 
