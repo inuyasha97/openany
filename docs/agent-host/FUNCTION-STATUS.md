@@ -110,8 +110,11 @@ Catalog.
 
 | Function | Status | Evidence |
 |---|---|---|
-| Settings window opens, all 24 pages listed | `PASS` | Nav enumerated. |
-| Any page's controls change behavior | `UNTESTED` | No page was driven. |
+| Settings window opens, all 24 pages listed | `PASS` | Nav enumerated: General, Appearance, Chat, Notifications, Sessions, Routing, Shortcuts, Voice, Integrations, Extensions, Usage, Projects, Remote Instances, External Tunnel, Git, Providers, Agents, Behavior, Commands, MCP, Magic Prompts, Snippets, Skills, Skills Catalog. |
+| Appearance: theme mode (System/Light/Dark) | `PASS` | Choosing `Dark` set `data-theme="dark"` and persisted it (`themeMode=dark`, `selectedThemeVariant=dark`, `useSystemTheme=false`). |
+| Appearance: light/dark theme pickers, Reload themes, font sizes, density | `UNTESTED` | Controls render (e.g. "Select light theme", "Reload themes"). |
+| Sessions: Session Defaults (Default Model / Thinking / Agent / Permissions) | `UNTESTED` | The page renders: "New sessions will start with: OMP agent default", Default Model "Not selected", Default Thinking "Default", Default Agent "Not selected". Changing a default was not confirmed. |
+| Any other settings page's controls change behavior | `UNTESTED` | No other page was driven. |
 
 ## F. Desktop shell (Electron) — 65 IPC commands
 
