@@ -214,7 +214,9 @@ const INSTALLED_APPS_CACHE_TTL_SECS = 60 * 60 * 24;
 const INSTALLED_APPS_CACHE_FILE = 'discovered-apps.json';
 // Bump when discovery results change shape or matching semantics change, so cached
 // entries written by an older build are treated as stale and refresh immediately.
-const INSTALLED_APPS_CACHE_VERSION = 2;
+// 3: a hit is only an app bundle when it is a directory, so caches that hold a
+// name `mdfind` matched to an ordinary file (iTerm's terminfo entry) refresh.
+const INSTALLED_APPS_CACHE_VERSION = 3;
 const LINUX_DESKTOP_ENTRIES_CACHE_TTL_MS = 30_000;
 const { autoUpdater } = updaterPkg;
 
@@ -2811,6 +2813,16 @@ const pathExists = async (candidate) => {
   }
 };
 
+/** An app bundle is a directory named `*.app`, not merely a path that exists. */
+const isAppBundle = async (candidate) => {
+  if (!candidate.endsWith('.app')) return false;
+  try {
+    return (await fsp.stat(candidate)).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
 const resolveAppBundlePath = async (appName) => {
   if (process.platform !== 'darwin') return null;
   const bundleName = appName.endsWith('.app') ? appName : `${appName}.app`;
@@ -2821,12 +2833,19 @@ const resolveAppBundlePath = async (appName) => {
     path.join(os.homedir(), 'Applications', bundleName),
   ];
   for (const candidate of candidates) {
-    if (await pathExists(candidate)) return candidate;
+    if (await isAppBundle(candidate)) return candidate;
   }
   try {
     const { stdout } = await execFileAsync('mdfind', ['-name', bundleName], { encoding: 'utf8' });
-    const first = (stdout || '').split('\n').map((line) => line.trim()).find(Boolean);
-    return first || null;
+    // `mdfind -name` matches any indexed file with that name — iTerm's is
+    // `/usr/share/terminfo/69/iTerm.app`, a terminfo entry — so a hit counts
+    // only when it is a bundle directory. Reporting a terminfo file as an
+    // installed app offered an "open in iTerm" that could not work.
+    for (const line of (stdout || '').split('\n')) {
+      const hit = line.trim();
+      if (hit && (await isAppBundle(hit))) return hit;
+    }
+    return null;
   } catch {
     return null;
   }

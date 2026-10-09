@@ -118,29 +118,47 @@ Catalog.
 
 ## F. Desktop shell (Electron) — 65 IPC commands
 
+Driven through the preload bridge (`window.__OPENCHAMBER_DESKTOP__.invoke`) inside
+the repackaged app, so these exercise the real main-process handlers.
+
 | Function | Status | Evidence |
 |---|---|---|
-| App starts; in-process server; UI from `openchamber-ui://app` | `PASS` | Packaged app log + window URL. |
+| App starts; in-process server; UI from `openchamber-ui://app` | `PASS` | Window URL `openchamber-ui://app/index.html`. |
 | Bundled `omp` binary runs a turn | `PASS` | Prompt answered inside the packaged window. |
 | Prompt round-trip in the packaged window (no duplicate) | `PASS` | `PONG` in 2.5 s, marker rendered once. |
-| Update **check** targets this fork | `PASS` | Asks `inuyasha97/openany`. |
+| `desktop_get_app_version` | `PASS` | `0.1.2` — matches the bumped package. |
+| Window state / fullscreen read | `PASS` | `{maximized:false}`, `false`. |
+| Toggle maximise (both ways) | `PASS` | `{maximized:true}` then `{maximized:false}`. |
+| Focus main window | `PASS` | `{focused:true}`. |
+| Keep-awake set/get round-trip | `PASS` | `enabled/active` true → false. |
+| Launch at login read | `PASS` | `{supported:true, enabled:false}`; setting it was not driven. |
+| Minimise to tray | `PASS` (unsupported here) | `{supported:false}` on macOS — expected; the dock owns that role. |
+| Window pin | `PASS` (refuses) | Errors with "Pinning is only available for Mini Chat windows" — correct for the main window. |
+| LAN address | `PASS` | `172.20.10.2`. |
+| Install id | `PASS` | A UUID. |
+| Hosts / SSH instances / SSH status | `PASS` (empty) | `{hosts:[]}`, `{instances:[]}`, `[]` — no remotes configured; handlers answer. |
+| Read a file | `PASS` | `{mime, base64}` whose payload decodes to the real `package.json`. |
+| Installed-app discovery | `FIXED` | Now lists only bundles that exist (Finder, Terminal, VS Code, Sublime Text) with an icon each; §I.7. |
+| Filter installed apps | `FIXED` | Drops names that are not bundles (iTerm, made-up names); §I.7. |
+| Fetch app icons | `PASS` | Returns a PNG data URL per resolvable app. |
+| Capture page rect | `PASS` | Returns a JPEG data URL. |
+| Update **check** | `PASS` | `{available:false, currentVersion:"0.1.2"}`. |
+| Native notification | `PARTIAL` | `desktop_notify` returned null with no throw; the banner itself is not observable from the harness. |
+| Tray update | `UNTESTED` | Takes a live snapshot (`useTraySync`), not the payload the probe sent; the handler tolerated it. |
+| Window title | `UNTESTED` | `desktop_set_window_title` returned null and the title stayed `phonnt | OpenAny`; the UI may re-set it. |
+| Local client token | `UNTESTED` | Empty string — UI auth is off on loopback, so nothing mints one. |
 | Update **install** (download + restart) | `UNTESTED` | Never completed one. |
-| Tray icon, minimise-to-tray, tray menu | `UNTESTED` | |
-| Native notifications | `UNTESTED` | |
-| Mini-chat window | `UNTESTED` | |
-| Deep link `openany://` | `UNTESTED` | Scheme registered in the bundle. |
-| Terminal (PTY) | `UNTESTED` | |
-| LAN access, desktop password, remote password login | `UNTESTED` | |
-| Keep awake, launch at login | `UNTESTED` | |
-| Window pin / theme / title / maximise / drag | `UNTESTED` | |
-| App menu, open path, reveal, external URL | `UNTESTED` | |
-| Read file, save markdown, pick theme file | `UNTESTED` | |
-| Installed-app discovery + icons | `UNTESTED` | |
-| Browser capture page / clear data | `UNTESTED` | |
-| Dev tunnel, relay | `UNTESTED` | |
-| SSH instances (connect/status/logs/import) | `UNTESTED` | |
-| Voice / TTS / dictation | `UNTESTED` | Startup log shows 176 macOS voices available. |
+| Mini-chat window, new window, window drag/minimise/close | `UNTESTED` | |
+| Deep link `openany://` | `UNTESTED` | Scheme is registered in the bundle. |
+| Desktop password, remote password login | `UNTESTED` | |
+| App menu, reveal path, open path, open external URL | `UNTESTED` | Would open Finder/browser windows on this machine. |
+| Save markdown, pick theme file | `UNTESTED` | Needs a native dialog. |
+| Browser clear data | `UNTESTED` | |
+| Dev tunnel, relay | `BLOCKED` | Needs a tunnel provider/account. |
+| SSH connect / logs / import hosts | `BLOCKED` | Needs a remote host. |
+| Voice / TTS / dictation | `BLOCKED` | Would speak aloud on this machine; startup log shows 176 macOS voices. |
 | Scheduled tasks | `UNTESTED` | |
+
 
 ## G. Packaging and release
 
@@ -208,6 +226,18 @@ so there was nothing to wire. The hint drops the shell clause and the `!` in the
 compact variant, and the unreferenced `chat.chatInput.placeholder.shell` string
 is removed, in all 13 locales. Verified in the built UI: the composer now reads
 "Use @ / # for helpers".
+
+### I.7 "Open in app" offered apps that are not installed — FIXED
+`resolveAppBundlePath` fell back to `mdfind -name <name>.app` and accepted the
+first hit if the path merely existed. On this machine `mdfind -name iTerm.app`
+answers `/usr/share/terminfo/69/iTerm.app` — a **terminfo file** — so iTerm was
+reported installed (`desktop_filter_installed_apps(["Finder","iTerm"])` kept it)
+and the app list offered an action that could not work. A hit now counts only
+when it is a directory named `*.app`, the fixed candidates are checked the same
+way, and `INSTALLED_APPS_CACHE_VERSION` is 3 so caches holding the bad name
+refresh instead of surviving a day. Verified in the repackaged app: the list is
+Finder / Terminal / Visual Studio Code / Sublime Text, each with an icon, and the
+filter drops iTerm and made-up names.
 
 ### I.6 Focus mode toggle showed no change — OPEN (unconfirmed)
 `Toggle focus mode` was clicked and the composer's width was unchanged (718 px
