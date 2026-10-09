@@ -1,13 +1,15 @@
-# OpenAny release: build the desktop app on macOS, Windows and Linux, then
-# attach every artifact to a draft GitHub Release.
+# OpenAny release: build the desktop app for both macOS architectures, Windows
+# and Linux, then attach every artifact to a draft GitHub Release.
 #
 # Independent of upstream's `release.yml` (which triggers on `v*` and publishes
 # packages). This one triggers on `openany-v*` and never publishes a package:
-# each OS builds its installer unsigned — the fork ships no signing
-# certificates — and one release job collects them.
+# each target builds its installer unsigned — the fork ships no signing
+# certificates.
 #
 # The update manifests are part of the upload: without `latest*.yml` the
-# packaged app can check for updates but can never find one.
+# packaged app can check for updates but can never find one. macOS needs both
+# architectures' manifests merged into one file, which is why the per-arch
+# manifest travels as its own artifact and a separate job combines them.
 
 name: OpenAny Release
 
@@ -31,11 +33,20 @@ jobs:
       matrix:
         include:
           - os: macos-14
-            package_args: '--publish never -c.mac.notarize=false'
-          - os: windows-latest
-            package_args: '--publish never'
+            target: aarch64-apple-darwin
+            package_args: '--mac --arm64 --publish never -c.mac.notarize=false'
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            package_args: '--mac --x64 --publish never -c.mac.notarize=false'
+          # windows-latest resolves to a runner whose Visual Studio the
+          # electron/node-gyp stack does not detect, so the native rebuild fails
+          # there; pin the last known-good image.
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            package_args: '--win --x64 --publish never'
           - os: ubuntu-latest
-            package_args: '--publish never'
+            target: x86_64-unknown-linux-gnu
+            package_args: '--linux --x64 --publish never'
     runs-on: ${{ matrix.os }}
     env:
       # No signing certificates on the fork; build unsigned installers.
@@ -62,24 +73,74 @@ jobs:
       - name: Verify Linux AppImage
         if: runner.os == 'Linux'
         run: bun run --cwd packages/electron verify:linux-appimage
+      - name: Verify the Linux update manifest matches the AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./packages/electron/package.json').version")
+          node packages/electron/scripts/verify-update-manifest.mjs \
+            "packages/electron/dist/latest-linux.yml" \
+            "$(ls packages/electron/dist/*.AppImage)" \
+            "$VERSION"
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: openany-${{ matrix.os }}
+          name: openany-${{ matrix.target }}
           if-no-files-found: error
           path: |
             packages/electron/dist/*.dmg
             packages/electron/dist/*.zip
             packages/electron/dist/*.exe
             packages/electron/dist/*.AppImage
-            packages/electron/dist/*.yml
             packages/electron/dist/*.blockmap
+            packages/electron/dist/latest.yml
+            packages/electron/dist/latest-linux.yml
+      # macOS ships one merged manifest, so its per-arch files travel
+      # separately and never reach the release on their own.
+      - name: Upload the per-arch macOS manifest for merging
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-yml-${{ matrix.target }}
+          if-no-files-found: error
+          path: packages/electron/dist/latest-mac.yml
 
-  release:
+  merge-mac-manifests:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Collect installers
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Download the per-arch macOS manifests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: latest-yml-*-apple-darwin
+          path: artifacts
+      - name: Read the release version
+        id: version
+        shell: bash
+        run: echo "value=$(node -p "require('./packages/electron/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Merge them into one latest-mac.yml
+        env:
+          MAC_ONLY: '1'
+          LATEST_YML_DIR: ${{ github.workspace }}/artifacts
+          GH_REPO: ${{ github.repository }}
+          OPENCHAMBER_VERSION: ${{ steps.version.outputs.value }}
+        run: node packages/electron/scripts/finalize-latest-yml.mjs
+      - name: Upload the merged manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: openany-mac-manifest
+          if-no-files-found: error
+          path: ${{ runner.temp }}/latest-mac.yml
+
+  release:
+    needs: [build, merge-mac-manifests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect every artifact
         uses: actions/download-artifact@v4
         with:
           pattern: openany-*

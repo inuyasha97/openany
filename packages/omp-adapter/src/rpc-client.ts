@@ -22,7 +22,8 @@ export type OmpRpcChild = {
 export type OmpRpcSpawn = (
   command: string,
   args: string[],
-  options: { cwd?: string; env?: Record<string, string | undefined> },
+  /** `windowsHide` keeps the console window from flashing on Windows. */
+  options: { cwd?: string; env?: Record<string, string | undefined>; windowsHide?: boolean },
 ) => OmpRpcChild
 
 export type OmpRpcFrame = { type: string; id?: string; [key: string]: unknown }
@@ -85,7 +86,13 @@ export class OmpRpcClient {
     })
     if (!this.child) {
       const args = this.options.args ?? ["--mode", "rpc"]
-      const child = this.options.spawn(this.options.command, args, { cwd: this.options.cwd, env: this.options.env })
+      // `windowsHide` is what keeps a console window from flashing on Windows
+      // for a process the user never asked to see — one per open session.
+      const child = this.options.spawn(this.options.command, args, {
+        cwd: this.options.cwd,
+        env: this.options.env,
+        windowsHide: true,
+      })
       this.child = child
       child.stdout.on("data", (chunk) => this.ingest(chunk))
       // stderr is OMP's log stream, never protocol; drain it so a full pipe
