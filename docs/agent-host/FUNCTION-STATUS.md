@@ -33,7 +33,7 @@ were not run.
 | `@` file/agent mention menu | `UNTESTED` | |
 | `/` command or skill | `PASS` (opens) | Typing `/` opens the Command Palette ("Search files, sessions, and commands") listing commands (`/add-dir`, …). Sending one was not run. |
 | `#` snippet | `UNTESTED` | An inline `#` trigger exists in the composer's tokenizer; no picker was observed by the probe. |
-| `!` shell prefix | `FAIL` | The composer advertises "`!` for shell"; `!echo shell-check` was answered by the **model** (`DeepSeek V4 Flash · 3.7s`), not executed; §I.5. |
+| `!` shell prefix | `FIXED` | The composer advertised "`!` for shell" while a leading `!` reaches the model (`!echo shell-check` was answered by `DeepSeek V4 Flash · 3.7s`). OMP has no shell command in its RPC, and `ChatInput` pins `inputMode` to "normal" for that reason. The hint no longer promises a shell (all 13 locales) and the dead `chat.chatInput.placeholder.shell` string is gone; §I.5. |
 | Dictation | `BLOCKED` | Needs a microphone/audio device. |
 | Focus mode toggle | `UNTESTED` | |
 | Permissions mode (`ask every time` → …) | `PASS` | Clicking cycled the control from "Permissions: ask every time" to "Permissions: accept everything". |
@@ -90,8 +90,8 @@ were not run.
 |---|---|---|
 | Git panel: status, branch, sync, stashes | `PASS` (renders) | Shows `main`, "Working tree clean", a sync control. Sync itself needs a remote — `UNTESTED`. |
 | Changes panel | `PASS` (renders) | "Changed: 0 — working tree clean, no changes to display". |
-| Files panel: tree, new file, new folder, upload, refresh, collapse | `UNTESTED` | Controls enumerated. |
-| Terminal panel | `UNTESTED` | Panel opens with the "Terminal" label; no shell was run. |
+| Terminal panel | `PASS` | The panel mounts a canvas terminal (`.oc-terminal-canvas` + `.oc-terminal-input`); typing `touch /tmp/terminal-proof-…` + Enter created that file, and the server had a live `/bin/zsh` child. A session whose folder is gone is refused with "Invalid working directory". |
+| Files panel: tree, new file, new folder, upload, refresh, collapse | `UNTESTED` | The tree renders (home directory); opening a file was not confirmed — the probe clicked the wrong panel. |
 | Project knowledge: notes/todo/plans | `UNTESTED` | "0/3000, no notes yet". |
 | Browser panel | `PASS` (renders) | Shows an address bar and detected dev servers (localhost:3191/3991/5000/…). |
 | Pull Request panel | `BLOCKED` | Needs a branch that can open a PR (GitHub remote). |
@@ -145,7 +145,7 @@ Catalog.
 |---|---|---|
 | macOS arm64 + Intel dmg/zip + merged manifest | `PASS` | CI produced both arches and a 690-byte merged `latest-mac.yml`. |
 | Windows NSIS installer + `latest.yml` | `PASS` (build only) | `windows-2022` job green; manifest size matches the asset. Never run on Windows. |
-| Linux AppImage | `BLOCKED` | Payload check rejected a dependency's darwin-only binary; fixed on the branch, ships with the next tag. |
+| Linux AppImage | `BLOCKED` (rule fixed) | The payload check rejected `onnxruntime-node`'s `bin/napi-v3/linux/arm64/…` binding as an x64 mismatch: the rule only knew darwin/win32/windows and the dashed `linux-arm64` form. It now judges a `.node` by any platform or architecture segment that is not the target's (local test 3 pass/2 fail before, 5/5 after). The `openany-v0.1.2` run is re-running with it. |
 | Unsigned installer opens on a fresh machine | `UNTESTED` | SmartScreen/Gatekeeper behaviour unverified. |
 
 ## H. Providers, models, MCP
@@ -193,15 +193,18 @@ a session whose folder is gone."
 Still open from the same root: none — the export path now shows the runtime's
 own sentence too.
 
-### I.5 The composer promises a shell prefix it cannot deliver — OPEN
-The composer's placeholder reads "`@` for files/agents; `/` for commands and
-skills; `!` for shell; `#` for snippets", and the composer even carries a shell
-input mode (`inputMode: 'shell'`, its own placeholder string
-`chat.chatInput.placeholder.shell`). But no runtime method runs a shell command
-and nothing routes a leading `!` away from the prompt: sending
-`!echo shell-check` produced a **model** turn (`DeepSeek V4 Flash · 3.7s`) whose
-answer happened to be the command text. Either wire a shell through the runtime
-or drop the promise and the unused string.
+### I.5 The composer promised a shell prefix it cannot deliver — FIXED
+The composer's hint read "`@` for files/agents; `/` for commands and skills;
+`!` for shell; `#` for snippets" and carried a shell input mode with its own
+placeholder string, while `ChatInput` pins `inputMode` to "normal" — its own
+comment: "The runtime has no shell route: every send is a normal prompt." OMP's
+RPC has no shell command at all (`abort`, `prompt`, `set_model`,
+`set_thinking_level`, `branch`, `new_session`, `switch_session`, `get_state`,
+`get_*`, `login`, `set_fast_mode`, `cycle_thinking_level`, `set_session_name`),
+so there was nothing to wire. The hint drops the shell clause and the `!` in the
+compact variant, and the unreferenced `chat.chatInput.placeholder.shell` string
+is removed, in all 13 locales. Verified in the built UI: the composer now reads
+"Use @ / # for helpers".
 
 ### I.6 Focus mode toggle showed no change — OPEN (unconfirmed)
 `Toggle focus mode` was clicked and the composer's width was unchanged (718 px
