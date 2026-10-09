@@ -53,18 +53,21 @@ export const assertElfArchitecture = (filePath, expectedArchitecture, label) => 
 };
 
 /**
- * Whether a packaged `.node` file belongs to a platform other than the one being
- * packaged. Some dependencies ship every platform's binaries (`onnxruntime-node`
- * bundles `bin/napi-v3/{linux,darwin,win32}/…`), and the AppImage carries them
- * all: Linux never loads the darwin or win32 ones, so their architecture is not
- * this payload's business.
+ * Whether a packaged `.node` file belongs to a platform or an architecture other
+ * than the one being packaged. Dependencies ship every platform's binaries:
+ * `onnxruntime-node` carries `bin/napi-v3/{linux,darwin,win32}/{x64,arm64}/…`
+ * and `node-pty` carries `prebuilds/<platform>-<arch>/…`, and the AppImage
+ * carries them all. Linux never loads the darwin or the arm64 one, so neither
+ * its format nor its architecture is this payload's business.
  */
-const isForeignPlatformBinary = (normalizedPath, targetArchitecture) => {
-  const foreign = new Set(['darwin', 'win32', 'windows', 'linux-ia32', 'linux-arm']);
-  if (targetArchitecture !== 'x64') foreign.add('linux-x64');
-  if (targetArchitecture !== 'arm64') foreign.add('linux-arm64');
-  return normalizedPath.split('/').some((segment) => foreign.has(segment));
-};
+const FOREIGN_PLATFORM_SEGMENTS = new Set(['darwin', 'win32', 'windows']);
+const ARCHITECTURE_SEGMENTS = ['arm64', 'arm', 'ia32', 'x86', 'x64'];
+
+const isForeignPlatformBinary = (normalizedPath, targetArchitecture) =>
+  normalizedPath.split('/').some((segment) => (
+    FOREIGN_PLATFORM_SEGMENTS.has(segment)
+    || (ARCHITECTURE_SEGMENTS.includes(segment) && segment !== targetArchitecture)
+  ));
 
 const collectFiles = (root, predicate) => {
   const matches = [];

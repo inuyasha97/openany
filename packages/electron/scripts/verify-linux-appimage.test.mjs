@@ -32,6 +32,14 @@ const createPayload = () => {
   );
   fs.mkdirSync(path.dirname(foreign), { recursive: true });
   fs.writeFileSync(foreign, Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), { mode: 0o755 });
+  // The same dependency also ships the other architecture for this platform,
+  // outside `prebuilds/`. CI rejected it as an x64 mismatch once.
+  const otherArch = path.join(
+    root,
+    'resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v3/linux/arm64/onnxruntime_binding.node',
+  );
+  fs.mkdirSync(path.dirname(otherArch), { recursive: true });
+  fs.writeFileSync(otherArch, Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), { mode: 0o755 });
   return root;
 };
 
