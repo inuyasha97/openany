@@ -188,6 +188,12 @@ export type AgentRuntime = {
    * level it applied, which the caller may show as the confirmed value.
    */
   setThinkingLevel(id: string, level: string, directory?: string | null): Promise<string>
+  /**
+   * OMP's fast mode for a session. `enabled` is what was asked for; `active` is
+   * whether the provider can use a fast tier right now, so a caller shows the
+   * requested state and can report that it is not in force yet.
+   */
+  setFastMode(id: string, enabled: boolean, directory?: string | null): Promise<{ enabled: boolean; active: boolean }>
   getActiveStatus(directory?: string | null): Promise<Record<string, SessionStatus> | null>
 
   forkSession(sessionId: string, options?: { before?: string; directory?: string | null }): Promise<AgentSession>

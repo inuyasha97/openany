@@ -722,6 +722,33 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             });
     }, [currentModelDefaultLevel, currentSessionDirectory, effortSessionId]);
 
+    // --- Fast mode (OMP's `set_fast_mode`) ----------------------------------
+    // Per session, like the effort above. `enabled` is what the user asked for;
+    // OMP also reports whether the provider can use a fast tier yet, so the
+    // control stays on the requested state and the tooltip says when it is not
+    // in force.
+    const [fastMode, setFastMode] = React.useState(false);
+    const [fastModeActive, setFastModeActive] = React.useState(false);
+    React.useEffect(() => {
+        setFastMode(false);
+        setFastModeActive(false);
+    }, [effortSessionId, currentModelId, currentProviderId]);
+    const handleFastModeToggle = React.useCallback(() => {
+        if (!effortSessionId) return;
+        const next = !fastMode;
+        setFastMode(next);
+        void getAgentRuntimeForSession(effortSessionId)
+            .setFastMode(effortSessionId, next, currentSessionDirectory ?? null)
+            .then((result) => {
+                setFastMode(result.enabled);
+                setFastModeActive(result.active);
+            })
+            .catch((error) => {
+                console.warn('[model-controls] failed to toggle fast mode:', error instanceof Error ? error.message : error);
+                setFastMode(!next);
+            });
+    }, [currentSessionDirectory, effortSessionId, fastMode]);
+
     const hasRenderableCurrentSessionSnapshot = useSessionRenderable(
         currentSessionId ?? '',
         currentSessionDirectory ?? undefined,
@@ -2963,6 +2990,48 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         );
     };
 
+    /**
+     * OMP's fast mode for the selected session — a session-scoped toggle like the
+     * effort above. OMP reports separately whether the provider can use a fast
+     * tier yet, so the trigger stays on what was asked for and its tooltip says
+     * when that is not in force.
+     */
+    const renderFastModeToggle = () => {
+        if (!isReady || !effortSessionId) {
+            return null;
+        }
+
+        return (
+            <Tooltip delayDuration={600}>
+                <TooltipTrigger asChild>
+                    <button
+                        type="button"
+                        aria-pressed={fastMode}
+                        aria-label={t('chat.modelControls.fastMode')}
+                        onClick={handleFastModeToggle}
+                        className={cn(
+                            'model-controls__fast-mode-trigger flex items-center gap-1.5 transition-colors cursor-pointer select-none min-w-0',
+                            fastMode ? 'text-[color:var(--status-info)]' : 'text-muted-foreground hover:opacity-70',
+                            buttonHeight,
+                        )}
+                    >
+                        <Icon name="rocket" className={cn(controlIconSize, 'flex-shrink-0')} />
+                        <span className={cn('model-controls__fast-mode-label', controlTextSize, 'font-medium min-w-0 truncate')}>
+                            {t('chat.modelControls.fastMode')}
+                        </span>
+                    </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                    <p className="typography-meta">
+                        {fastMode && !fastModeActive
+                            ? t('chat.modelControls.fastModePending')
+                            : t('chat.modelControls.fastMode')}
+                    </p>
+                </TooltipContent>
+            </Tooltip>
+        );
+    };
+
     const renderAgentSelector = () => {
         if (!isCompact) {
             return (
@@ -3165,6 +3234,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                     {!inlineMobileSelection && renderVariantSelector()}
                     {renderModelSelector()}
                     {renderEffortSelector()}
+                    {renderFastModeToggle()}
                     {inlineMobileSelection && renderVariantSelector()}
                     {!selection && !isAutoSelected && canSelectAgent && renderAgentSelector()}
                 </div>

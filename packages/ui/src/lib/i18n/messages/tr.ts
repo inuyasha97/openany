@@ -2497,6 +2497,8 @@ export const dict = {
   'chat.modelControls.clearSearch': 'Aramayı temizle',
   'chat.modelControls.current': 'Mevcut',
   'chat.modelControls.thinking': 'Düşünme',
+  'chat.modelControls.fastMode': 'Hızlı mod',
+  'chat.modelControls.fastModePending': 'Hızlı mod açık; bu sağlayıcıda henüz hızlı katman yok',
   'chat.modelControls.default': 'Varsayılan',
   'chat.modelControls.selectAgent': 'Agent seç',
   'chat.modelControls.costPerMillion': 'Maliyet ($/1M token)',

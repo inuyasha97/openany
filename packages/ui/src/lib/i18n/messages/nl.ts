@@ -2566,6 +2566,8 @@ export const dict = {
   'chat.modelControls.clearSearch': 'Zoekopdracht wissen',
   'chat.modelControls.current': 'Huidig',
   'chat.modelControls.thinking': 'Denken',
+  'chat.modelControls.fastMode': 'Snelle modus',
+  'chat.modelControls.fastModePending': 'De snelle modus staat aan; deze provider heeft nog geen snelle laag',
   'chat.modelControls.default': 'Standaard',
   'chat.modelControls.selectAgent': 'Agent kiezen',
   'chat.modelControls.costPerMillion': 'Kosten ($/1M tokens)',

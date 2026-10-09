@@ -2566,6 +2566,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.modelControls.clearSearch': '검색 지우기',
   'chat.modelControls.current': '현재',
   'chat.modelControls.thinking': '추론',
+  'chat.modelControls.fastMode': '빠른 모드',
+  'chat.modelControls.fastModePending': '빠른 모드가 켜져 있지만 이 공급자에는 아직 빠른 등급이 없습니다',
   'chat.modelControls.default': '기본값',
   'chat.modelControls.selectAgent': '에이전트 선택',
   'chat.modelControls.costPerMillion': '비용 ($/1M 토큰)',

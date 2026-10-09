@@ -2566,6 +2566,8 @@ export const dict = {
   'chat.modelControls.clearSearch': 'Clear search',
   'chat.modelControls.current': 'Current',
   'chat.modelControls.thinking': 'Thinking',
+  'chat.modelControls.fastMode': 'Fast mode',
+  'chat.modelControls.fastModePending': 'Fast mode is on; this provider has no fast tier yet',
   'chat.modelControls.default': 'Default',
   'chat.modelControls.selectAgent': 'Select agent',
   'chat.modelControls.costPerMillion': 'Cost ($/1M tokens)',

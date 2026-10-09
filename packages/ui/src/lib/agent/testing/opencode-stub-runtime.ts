@@ -106,6 +106,7 @@ export const createOpenCodeStubRuntime = (id = "omp"): AgentRuntime => ({
   listPermissions: (options) => delegate("listPermissions", [options]),
   selectModel: (sessionId, model, directory) => delegate("selectModel", [sessionId, model, directory]),
   setThinkingLevel: (sessionId, level, directory) => delegate("setThinkingLevel", [sessionId, level, directory]),
+  setFastMode: (sessionId, enabled, directory) => delegate("setFastMode", [sessionId, enabled, directory]),
   getActiveStatus: (directory) => delegate("getActiveStatus", [directory]),
 
   forkSession: (sessionId, options) => delegate("forkSession", [sessionId, options]),

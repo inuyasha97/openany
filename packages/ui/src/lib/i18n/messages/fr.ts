@@ -2252,6 +2252,8 @@ export const dict = {
   'chat.modelControls.clearSearch': 'Effacer la recherche',
   'chat.modelControls.current': 'Actuel',
   'chat.modelControls.thinking': 'Pensée',
+  'chat.modelControls.fastMode': 'Mode rapide',
+  'chat.modelControls.fastModePending': "Le mode rapide est activé ; ce fournisseur n'a pas encore de palier rapide",
   'chat.modelControls.default': 'Défaut',
   'chat.modelControls.selectAgent': 'Sélectionnez un agent',
   'chat.modelControls.costPerMillion': 'Coût ($/1 million de jetons)',

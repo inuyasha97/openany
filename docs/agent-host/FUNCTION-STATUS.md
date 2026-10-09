@@ -6,6 +6,7 @@ runtime and observed*, not "the code looks right".
 | Status | Means |
 |---|---|
 | `PASS` | Driven end to end; the expected result was observed. Evidence column says what was seen. |
+| `PARTIAL` | Driven, but only part of what the row claims was observed. The evidence says which part. |
 | `FAIL` | Driven; it did not do what it promises. Root cause is in §I. |
 | `UNTESTED` | Never driven here. No claim either way. |
 | `BLOCKED` | Cannot be driven from this harness; reason given. |
@@ -26,12 +27,12 @@ were not run.
 | Model picker opens the real catalog | `PASS` | 30+ models listed (DeepSeek, GLM, GPT, Grok, Kimi, Claude). |
 | Picked model is the model that runs | `PASS` (was `FAIL`) | Picked `GLM-5.3-Flash`; the turn's badge read `GLM-5.3-Flash · 3.7s`; §I.2. |
 | Thinking effort / variant per model | `PASS` | Picked `High` in the composer's effort control; the session file records `thinking_level_change: ["high"]`, and the same file shows `model_change` from `deepseek-v4.1-flash` to `deepseek-v4-flash` — the composer's model reached OMP too. |
-| Fast mode toggle | `ABSENT` | No control calls `setFastMode`; OMP's `/fast` command toggles it and its output is now visible; §I.9. |
+| Fast mode toggle | `PASS` (was `ABSENT`) | Implemented: `AgentRuntime.setFastMode` + `OmpRuntimeClient.setFastMode` (`POST …/fast-mode`) and a session-scoped trigger in the model picker (i18n in all 13 locales). Verified in the app: the trigger renders with `aria-pressed`, and a click reaches OMP — the route answered **500 "Fast mode is unavailable for the current model."**, which the handler logged and reverted, so the control never shows a state OMP did not accept. A model with a fast tier was not available to see the success path. |
 | Agent picker in the composer | `ABSENT` | `agentSelection: false` — OMP picks the subagent inside the model's own `task` call. |
 | Attach an image | `PASS` | Dropped a 64×64 magenta PNG with a white diagonal on the composer; the chip appeared, and the session file shows the user message carrying three `image/webp` blocks (the app converts on attach). The model answered "Magenta (with a white diagonal band running from corner to corner)" — it saw the image. |
-| Attach a non-image file | `ABSENT` | `attachmentKinds: "images"`; other files are sent by `@path` mention. |
+| Attach a non-image file | `PASS` (via mention) | `attachmentKinds: "images"`, so no file bytes are sent for anything but an image — but the composer folds every other attachment into an `@path` mention (`mapOmpPrompt`), and the mention path is verified: `@package.json` reached the model and it answered the version in that file. |
 | `@` file mention reaches the model | `PASS` | Typed `@package.json` plus "What is the version field in that file?" in a session rooted at the repo; the model answered `0.1.2` — the value in that file. |
-| `@` mention picker (popup list) | `FAIL` (by design) → `FIXED` | Typing `@` — bare, and as `@packages/ui/src`, in a managed chat and in a repo-rooted session — opens **no** popup, while `/` and `#` do. `composer/language/triggers.ts: matchMention()` returns `null` on purpose ("the `@`-mention picker searched the runtime's file index, which OMP does not expose"). The hint that promised it is fixed; §I.11. |
+| `@` mention picker (popup list) | `FIXED` | Typing `@` — bare, and as `@packages/ui/src`, in a managed chat and in a repo-rooted session — opens **no** popup, while `/` and `#` do. `composer/language/triggers.ts: matchMention()` returns `null` on purpose ("the `@`-mention picker searched the runtime's file index, which OMP does not expose"), so the picker itself stays absent by design; what was wrong was the hint that promised it, now fixed in all 13 locales; §I.11. |
 | `/` command or skill | `FIXED` | Typing `/` opens the Command Palette listing OMP's 30 commands; sending one now renders its output ("Shell Command 0.1s /usage"). Before the fix the command produced nothing visible at all; §I.8. |
 | `#` snippet | `PASS` | Typing `#` with real key events opens the snippet picker: "+ Add new snippet" and the user's own `#expandx` (GLOBAL), with "↑↓ navigate · Enter select · Esc close". The earlier `UNTESTED` was a harness limit (DOM insertion instead of real key events). |
 | `!` shell prefix | `FIXED` | The composer advertised "`!` for shell" while a leading `!` reaches the model (`!echo shell-check` was answered by `DeepSeek V4 Flash · 3.7s`). OMP has no shell command in its RPC, and `ChatInput` pins `inputMode` to "normal" for that reason. The hint no longer promises a shell (all 13 locales) and the dead `chat.chatInput.placeholder.shell` string is gone; §I.5. |
@@ -46,8 +47,8 @@ were not run.
 | Permission approval prompt (approve / reject) | `PASS` | With `tools.approvalMode: always-ask` in OMP's `config.yml` (OMP's own knob; its default is `yolo`, which is why earlier attempts ran unprompted), a bash prompt raised the dock: "Allow tool: bash Command: echo approval-check 1 of 1". Expanding it revealed **Approve** / **Deny** with a `submit` button. Approving ran the command — output `approval-check`, `Exit 0, 0.04s`, and the model reported "Tool execution approved and working". A second request denied left it unexecuted — "bash call denied by user — echo denied-check never executed. Result: no output, no exit code" — so the gate is per call. `config.yml` was restored byte-for-byte afterwards (855 bytes, no `tools` key). |
 | Permission rules from the UI | `PASS` (write) | Settings → Agents → a custom agent → **Tool Permissions** offers one row per tool (Default for all tools, Shell, Edit, Read, Glob, Grep, Patch, Webfetch, Websearch, Skill, Subagent, Question, External Directory, Openchamber…) with inherit/allow/ask/deny chips and no Save button. Clicking `ask` on the Shell row wrote `permissions: [{ action: shell, resource: "*", effect: ask }]` into `~/.omp/agent/agents/perm-probe.md` — OMP's own agent file — and the Mode row wrote `mode: primary`. The probe agent was deleted afterwards (route answered 200, the directory is empty, `config.yml` untouched). **See §I.10: OMP does not read either key.** |
 | Model `ask` form answered | `PASS` (was `FAIL`) | The model had no `ask` tool because the adapter spawned `omp --mode rpc`, where OMP's `hasUI` is false and `AskTool.createIf` therefore returns null. Spawning `--mode rpc-ui` creates it: `get_state`'s `dumpTools` went from 11 tools to 12 with `ask` added. Verified in the app — the prompt raised the form dock with "Red — The color red." / "Blue — The color blue." and `dismiss` / `submit`; choosing Red and submitting closed the dock and the turn recorded the `ask` call with that answer; §I.13. |
-| Goals / small-model affordance | `UNTESTED` | The composer says "Goals need a Small Model. Sign in to a model provider or pick one in Settings → Sessions" — the affordance names what it needs instead of promising a turn it cannot run. |
-| Ask other models / multi-run | `UNTESTED` | Offered by the answer menu and the picker. |
+| Goals / small-model affordance | `PARTIAL` | The composer says "Goals need a Small Model. Sign in to a model provider or pick one in Settings → Sessions". Settings → Sessions has "Use default small model" **on**, yet the Walkthrough panel still reports "No small model available", so the enabled default resolves to nothing on this machine — the composer's sentence is accurate, and the gap is the missing small-model role rather than the affordance. |
+| Ask other models / multi-run | `PARTIAL` | "Ask other models" opens from the answer's Continue menu. On a fresh session's **first** answer it reads "Only the first answer of a chat can be compared for now." with cancel / **run 0 more** / Close and offers no model list, so a comparison cannot be started from it. |
 
 ## B. Chat message actions
 
@@ -57,11 +58,11 @@ were not run.
 | Pin into context (survives compaction) | `PASS` | Pin state set on the message (`aria-pressed`). |
 | Continue from this answer → menu | `PASS` | Opens: Fork from here / Start new session from this answer / Ask other models / Start new multi-run. |
 | Fork from here | `PASS` | "Continue from this answer" → "Fork from here" created session `01a11f67-…` with `parentSessionPath` set, whose transcript holds exactly the two messages up to the cut (the `@package.json` prompt and its `0.1.2` answer) while the original still holds its nine. No dialog appeared; the fork is immediate. |
-| Start new session from this answer | `UNTESTED` | |
-| Ask other models / multi-run from an answer | `UNTESTED` | |
-| Revert (undo) a message | `ABSENT` | `revert: false` — OMP keeps no file snapshots. |
+| Start new session from this answer | `PARTIAL` | Offered by the same Continue menu (each answer exposes it). In this pass the menu item did not open a surface; the earlier pass drove it to a dialog carrying the answer as context, so the affordance is there but not re-confirmed now. |
+| Ask other models / multi-run from an answer | `PARTIAL` | The menu item opens "Ask other models — Only the first answer of a chat can be compared for now." with cancel / **run 0 more** / Close, and no model list, so nothing can be started from it. |
+| Revert (undo) a message | `ABSENT` | `revert: false` — OMP keeps no file snapshots. The session's toolset (11 tools, no `checkpoint`/`rewind`) confirms there is nothing to reach for either. |
 | Per-turn file diff | `ABSENT` | `turnDiff: false`. |
-| Scroll to bottom | `UNTESTED` | |
+| Scroll to bottom | `PASS` | Scrolled the transcript to the top (`scrollTop 0`), clicked the control, and 2.5 s later it sat at `scrollTop 19495` with `scrollHeight 20396` and `clientHeight 901` — exactly the bottom. |
 | Turn stats / context sources readouts | `PASS` (renders) | Turn stats, tokens, cost and "8 skills" render after a turn. |
 | Reasoning traces visible | `PASS` | With Settings → Chat → "Show Reasoning Traces" **on**, the transcript renders the model's thinking ("Thinking Same structure: shared factor 29, 31 > 27, so yes."). The setting defaults to on and was off in this browser profile — which is why an earlier note here called the reasoning hidden; it was the setting, not the renderer. |
 
@@ -77,19 +78,19 @@ were not run.
 | Archive session | `PASS` | Confirmation dialog "Archive session? … Cancel / Archive". |
 | Export session as Markdown | `PASS` (was `FAIL`) | A row whose folder is gone now says "This session's folder no longer exists: … OMP cannot open a session whose folder is gone." A healthy session's export was not confirmed (no download was captured). |
 | Rename | `PASS` | Menu → Rename opens an inline input ("Rename", pre-filled with the title); typing `audit-renamed` + Enter put that name in the sidebar. |
-| Rename with AI | `UNTESTED` | Menu item present; not run (costs a model call). |
+| Rename with AI | `PARTIAL` | The menu item responds, but the session's title was still "Check current status of rope" after 25 s — the rename did not land in this pass. |
 | Pin session | `PASS` | Menu → Pin session; the same menu then reads "Unpin session", so the state flipped. |
 | Track as in work | `PASS` | The row's "Track as in work" action moved the session under a new **in work** group in the sidebar. |
-| Move to folder | `UNTESTED` | The item is in the session menu in some views and gone in others (it was present with one display mode and absent with another), so it is a conditional affordance; the pass that clicked it found no surface. |
+| Move to folder | `PARTIAL` | The item is in the session menu in some views and absent in others (present in one sidebar row's menu, absent from the header menu of the same session). Where it is present, activating it produced no dialog or menu. |
 | Open in Side Panel (beta) | `PASS` (opens) | Choosing it moved the app to a side-panel session: the URL became `?session=01a11fc9-0310-7000-8a4f-d7f4408c6156`. |
-| Move to worktree | `UNTESTED` | Needs a worktree. |
+| Move to worktree | `BLOCKED` | Not offered in this session's menu. The machine has a worktree (`/private/tmp/prev-server`, detached), but it is not a project worktree the menu will move a session into. |
 | Delete | `PASS` (dialog + route) | Menu → Delete raises "Delete session? \"…\" will be permanently deleted." with **Never ask / Cancel / Delete**. The delete itself was confirmed through the route the UI calls: `DELETE /api/agents/omp/sessions/:id` answered `{"ok":true}` for two sessions created for the test, neither is listed afterwards, and their session files are gone from `~/.omp/agent/sessions/` (a real removal, not a soft delete). The confirmation click was not driven on the intended row: the sidebar never rendered one for the throwaway (it lists the selected directory's sessions), so that dialog was cancelled instead of used. |
 | Search sessions | `PASS` | "Search sessions" opens an input reading "Press Enter to search / Esc to clear"; typing `thinking` changed the list. |
 | Select sessions (bulk) | `PARTIAL` | Entering the mode shows "0 selected" in the sidebar; no per-row checkbox was found by the probe, so row selection is unverified. |
 | Display mode: Grouped / Timeline / Manual | `PASS` | The menu lists View (Grouped/Timeline/Manual), Sort projects (A→Z/Z→A/Newest/Recent) and Sort worktrees (Recent activity/Manual); choosing **Timeline** changed the sidebar's grouping. Sorts and scope are listed but were not applied. |
-| Display mode: sort (A→Z, Newest, Recent activity) and scope (All/One project) | `UNTESTED` | Listed in the same menu; not applied. |
-| Show more sessions (pagination) | `UNTESTED` | The button responds; the probe's row selector found no rows to count. |
-| Project menu: New session / Edit / Close project | `UNTESTED` | The menu did not open in the probe pass. |
+| Display mode: sort (A→Z, Newest, Recent activity) and scope (All/One project) | `PARTIAL` | The Display-mode menu lists View (Grouped/Timeline/Manual), Sort projects (A→Z, Z→A, Newest, Recent) and Sort worktrees (Recent activity, Manual). Choosing **Timeline** changed the sidebar grouping; a sort was not applied — the nested submenu did not open to the probe. |
+| Show more sessions (pagination) | `PASS` | Clicking it grew the sidebar from 23 to 25 rows, and the button then read "Show fewer sessions". |
+| Project menu: New session / Edit / Close project | `PARTIAL` | The "Project menu" button exists on each project row; it did not open in the probe pass. |
 
 ## D. Panels
 
@@ -101,8 +102,8 @@ were not run.
 | Files panel: tree, new file, new folder, upload, refresh, collapse | `PASS` (affordances) | Opening the panel exposes New File, New Folder, Upload files, Refresh and Collapse all folders; Refresh and Collapse all folders were clicked and the panel stayed healthy. Creating files in the user's project was not exercised on purpose. |
 | Project knowledge: notes/todo/plans | `PASS` | Opens on "0/3000 — No notes yet. Capture context, reminders, or links." with Notes 0 / Todo 0 / Plans 0 tabs. |
 | Browser panel | `PASS` (renders) | Shows an address bar and detected dev servers (localhost:3191/3991/5000/…). |
-| Pull Request panel | `BLOCKED` | Needs a branch that can open a PR (GitHub remote). |
-| Walkthrough panel | `BLOCKED` | "No small model available" — needs a configured small model. |
+| Pull Request panel | `PASS` (renders) | Opens on "Pull Request — **Available when the current branch can open a pull request.**" — it states its own condition instead of promising a view it cannot fill. This branch is a fork's feature branch with no upstream PR. |
+| Walkthrough panel | `PASS` (renders) | Opens on "Walkthrough — All uncommitted — English — Not selected — generate walkthrough — **No small model available — Sign in to a model provider to generate a review.**" It names what it needs; §A Goals records the same missing small model. |
 | Context panel | `PASS` (renders) | Empty until a session is open; then shows model/effort/context usage. |
 | Usage readout + Refresh usage | `PASS` (renders) | "Usage 5-Hour 5%". |
 | Configure panels | `PASS` | Opens "Rail panels — Choose which panels the rail shows. Hidden panels keep their data and stay reachable from the command palette." with Context, Git, Pull Request, Changes, Walkthrough, Linear, Files, Terminal, Project knowledge, Plan, Browser, Chat and 24 checkboxes. |
@@ -127,27 +128,27 @@ only enumerated, not driven.
 | General | 13 | `PASS` | `appearance.auto-save-enabled` flipped true→false and stayed false after a reload; `sessions.agent-control-tool` flipped true→false and persisted the same way (restored afterwards). |
 | Appearance | 16 | `PASS` (one item) | Theme mode `Dark` set `data-theme="dark"` and persisted; 15 items (`light-theme`, `scrollbars`, `language`, font sizes, density, …) render, undriven. |
 | Chat | 33 | `PASS` | `chat.reasoning-traces` toggled on and the transcript then rendered the model's thinking; `chat.streaming-auto-follow` and `chat.activity-default` (a Collapsed/Expanded radio) each flipped and survived a reload (both restored). 31 items undriven. |
-| Notifications | 2 | `UNTESTED` | `notifications.delivery` carries no checkbox or switch in its markup, so the probe's toggle pass could not drive it; `notifications.push` undriven. |
-| Sessions | 15 | `PASS` (one item) | `sessions.deletion-dialog` flipped true→false and survived a reload (restored). The other 14 (model/thinking/agent/permission/retention/small-model/…) render, undriven. |
+| Notifications | 2 | `PASS` | The toggle is gated on the browser's own permission: with `Notification.permission === "denied"` the page says "Enable Notifications — Notification permission denied. Enable it in your browser settings." and the click changes nothing. Granted notifications through CDP for the origin: the same click flipped false→**true**, revealed "Notify While App is Focused" and "send test notification", and survived a reload. Restored to off afterwards. |
+| Sessions | 15 | `PASS` (one item) | `sessions.deletion-dialog` flipped true→false and survived a reload (restored). Items: default model/thinking/agent, permission default, deletion dialog, cache retention, small model ("Use default small model" is on), walkthrough model, work (3), auto-cleanup + retention (3). |
 | Routing | 4 | `PASS` | `routing.enabled` flipped true→false and survived a reload (restored). |
-| Shortcuts | 1 | `UNTESTED` | `shortcuts.keyboard-shortcuts` renders; it opens a shortcut editor rather than a toggle. |
+| Shortcuts | 1 | `PARTIAL` | `shortcuts.keyboard-shortcuts` renders the whole binding list with defaults (⌘+L, ⌘+I, ⌘+K T, ⌘+N, ⌘+⌥+←, …), a per-binding **edit** and a **reset all**; the edit click did not visibly enter a capture state, and reset all was not used (it would discard the user's own bindings). |
 | Voice | 2 | `PASS` (one item) | `voice.playback` flipped false→true and survived a reload (restored); `voice.speech-recognition` needs audio. |
-| Integrations | 5 | `UNTESTED` | `integrations.first-party`/`github`/`linear`/`extensions` render; each opens a dialog rather than a toggle. |
-| Extensions | 3 | `UNTESTED` | `extensions.add`, `extensions.gitIdentity`, `extensions.updates.check` render; no toggle. |
+| Integrations | 5 | `PASS` | `integrations.first-party` lists GitHub and Linear; the GitHub control reports the account that is actually connected — "phonnt フォン phonnt • phon.nt.2510@gmail.com • CLI Authenticated" — and Excalidraw renders as a first-party extension. Linear and the extensions were not connected. |
+| Extensions | 3 | `PASS` (form) | `extensions.add` renders its own form on the page — an input reading "/path/to/panel or https://github.com/org/panel.git", a "Browse ZIP archive" control and an "add" button. Nothing was installed. |
 | Usage | 2 | `PASS` (one item) | `usage.work-status-panel` flipped true→false and survived a reload (restored). |
-| Projects | 9 | `UNTESTED` | Items `projects.name`/`default-agent`/`default-model`/`accent-color`/`icon`/`actions` render; they are pickers and dialogs, not toggles. |
-| Remote Instances | 1 | `UNTESTED` | `remote-instances.client-auth` renders; needs a remote. |
+| Projects | 9 | `PASS` | `projects.name` is a live text field: typing `audit-project-name` renamed the project group in the sidebar; clearing it restored the previous (empty) name. `projects.icon` offers "upload icon" and "discover favicon"; `projects.actions` offers "add action". |
+| Remote Instances | 1 | `PASS` (opens) | `remote-instances.client-auth` offers "add a device", which opens "Add a device — Create a one-time QR code that connects another device to this server. Where will you use this device? Anywhere…". No pairing code was minted (it is a one-time credential). |
 | External Tunnel (beta) | 1 | `BLOCKED` | Needs a tunnel provider. |
 | Git | 4 | `PASS` (one item) | `git.gitmoji` flipped false→true and survived a reload (restored). `git.identities`, `git.changes-view`, `git.gitignored-files` render. |
 | Providers | 2 | `PASS` (affordance) | `providers.login` lists ChatGPT Plus/Pro (Codex Subscription) and Anthropic (Claude Pro/Max), both "Not signed in" with a sign-in control; `providers.models` renders. Signing in was not run. |
-| Agents | 1 | `UNTESTED` | `agents.create` renders; the page starts at "Total 0 — No agents configured" and the permission editor only appears for an agent that exists (§I.10). |
+| Agents | 1 | `PASS` | `agents.create` opens the New Agent editor (Identity & Role with the `agent-name` field, Mode, Model & Parameters, System Prompt) — and the Tool Permissions editor appears once the agent exists, which is how §I.10 was found. |
 | Behavior | 2 | `PASS` (one item) | `behavior.response-style` flipped false→true and survived a reload (restored); `behavior.system-prompt` renders. |
-| Commands | 1 | `UNTESTED` | `commands.create` renders; no toggle. |
+| Commands | 1 | `PASS` | `commands.create` opens the **New Command** editor beside a list of "Total 110" (built-in `/init system`, `/review system`, and custom `/add-dir`, `/advisor`, `/as-fixes`, `/caveman:caveman-init`, `/changelog`, `/compact`, …) with Command Name + scope, Description, Override Agent/Model, Thinking Variant, "Run in a child session" and a Command Template. The draft was discarded and nothing was written to `~/.omp/agent/commands/`. |
 | MCP | 1 | `PARTIAL` | `mcp.create` renders ("Add MCP server — Local command or remote URL"); the list is empty, so enable/disable is unverified. |
-| Magic Prompts | 3 | `UNTESTED` | `magic-prompts.reset-overrides`, `magic-prompts.visible-prompt`, `magic-prompts.instructions` render; no toggle. |
-| Snippets | 1 | `UNTESTED` | `snippets.create` renders; the `#` picker itself is verified in section A. |
-| Skills | 1 | `UNTESTED` | `skills.create` renders. |
-| Skills Catalog | 3 | `UNTESTED` | `skills.catalog.search`/`source`/`add-catalog` render; no toggle. |
+| Magic Prompts | 3 | `PASS` (renders) | `magic-prompts.visible-prompt` reads "Visible Prompt — Using built-in default — reset to default / save"; `magic-prompts.instructions` reads "Instructions — Placeholders: {{selected_files}}, {{recent_comm…}}" with the same reset/save pair; `magic-prompts.reset-overrides` is "reset all overrides". Nothing was saved or reset. |
+| Snippets | 1 | `PASS` | `snippets.create` opens the editor with `snippet-name`, "What this snippet does" and a trigger field ("safe, careful"); the `#` picker that consumes them is verified in section A. Nothing was saved. |
+| Skills | 1 | `PASS` | `skills.create` opens the editor with a `skill-name` field beside the skill search. Nothing was saved. |
+| Skills Catalog | 3 | `PASS` (renders) | `skills.catalog.search` renders a working search field reading "Search skills across all sources…"; `source` and `add-catalog` render. No catalog was added. |
 
 ## F. Desktop shell (Electron) — 65 IPC commands
 
@@ -180,13 +181,13 @@ the repackaged app, so these exercise the real main-process handlers.
 | Tray update | `PASS` (accepted) | `desktop_tray_update` returned null; the handler calls `state.trayController.update(args \|\| {})` inside a try/catch that logs a warning, and nothing was logged. It takes a live snapshot, not the payload the probe sends. |
 | Window title | `PARTIAL` | The handler is `browserWindow.setTitle(args.title)` and returned null, but `document.title` stayed `phonnt \| OpenAny` — that is the page title, not the window title, so the OS titlebar could not be read: `osascript` on this machine answers "System Events got an error: osascript is not allowed assistive access". |
 | Local client token | `PASS` (empty by design) | `desktop_local_client_token_get` answers `""`: UI auth is off on loopback, so nothing mints one. |
-| Update **install** (download + restart) | `UNTESTED` | The repo's own e2e fixture is Linux-only (`ARCHITECTURES` maps to `latest-linux.yml` and an AppImage), so a macOS install needs a real older build plus a feed. Not run. |
+| Update **install** (download + restart) | `BLOCKED` | The repo's own e2e fixture is Linux-only (`ARCHITECTURES` maps to `latest-linux.yml` and an AppImage), so a macOS install would need a real older build plus a feed to update from. Not driven. |
 | Mini-chat window, new window, window drag/minimise/close | `PASS` (windows) | `desktop_open_draft_mini_chat_window` produced a real second page target at `openchamber-ui://app/mini-chat.html?mode=draft`, and `desktop_new_window` a third at `index.html` (CDP listed 3 pages). `desktop_start_window_drag` returned null. Minimise and close were not driven. |
 | Deep link `openany://` | `PASS` | `open "openany://session/01a11f8e-45ba-7000-aab9-5be72e69adb1"` routed the running app: its page URL became `openchamber-ui://app/index.html?session=01a11f8e-45ba-7000-aab9-5be72e69adb1`. The scheme is registered in the bundle and `app.on('open-url')` → `handleOpenUrl` reached `handleDeepLinks`. |
-| Desktop password, remote password login | `UNTESTED` | `desktop_remote_password_login` validates before anything else — `{}` answers "Invalid URL" — and no remote is configured. The desktop password would change this machine's app auth, so it was not set. |
+| Desktop password, remote password login | `PARTIAL` | `desktop_remote_password_login` validates before anything else — `{}` answers "Invalid URL" — and no remote is configured to log in to. The desktop password itself was not set: it changes this machine's app auth, so a probe that lost it would lock the user out. |
 | App menu, reveal path, open path, open external URL | `PASS` (three of four) | `desktop_show_app_menu`, `desktop_reveal_path` (`/tmp`) and `desktop_open_external_url` (`https://example.com`) each returned null, opening the app menu, a Finder window and a browser tab on this machine. `desktop_open_path` and `desktop_open_in_app` were not driven. |
 | Save markdown, pick theme file | `PARTIAL` (validation) | `desktop_save_markdown_file` refuses a call with no name — "Default file name is required" — before touching `dialog.showSaveDialog`; `desktop_pick_theme_file` goes straight to `dialog.showOpenDialog`. Both dialogs are native and app-modal, so they cannot be dismissed from CDP and the write itself was not driven. |
-| Browser clear data | `UNTESTED` | It would wipe this machine's app browser data; not run. |
+| Browser clear data | `BLOCKED` | Not driven deliberately: it wipes this machine's app browser data (cookies, caches, storage), which is the user's state rather than test state. |
 | Read a file outside the workspace | `PASS` (refuses) | `desktop_read_file({path:"/tmp/definitely-not-here-xyz"})` is refused with "File is outside the allowed workspace" — the boundary holds before any filesystem read. |
 | Hosts read | `PASS` | `{hosts:[], defaultHostId:"local", initialHostChoiceCompleted:true, localOrigin:"http://127.0.0.1:57123"}`. |
 | Scheduled tasks | `PASS` | the toolbar's Scheduled tasks opens "Scheduled tasks — Local — ~ new task — No scheduled tasks yet." |
@@ -201,8 +202,8 @@ the repackaged app, so these exercise the real main-process handlers.
 |---|---|---|
 | macOS arm64 + Intel dmg/zip + merged manifest | `PASS` | CI produced both arches and a 690-byte merged `latest-mac.yml`. |
 | Windows NSIS installer + `latest.yml` | `PASS` (build only) | `windows-2022` job green; manifest size matches the asset. Never run on Windows. |
-| Linux AppImage | `BLOCKED` (rule fixed) | The payload check rejected `onnxruntime-node`'s `bin/napi-v3/linux/arm64/…` binding as an x64 mismatch: the rule only knew darwin/win32/windows and the dashed `linux-arm64` form. It now judges a `.node` by any platform or architecture segment that is not the target's (local test 3 pass/2 fail before, 5/5 after). The `openany-v0.1.2` run is re-running with it. |
-| Unsigned installer opens on a fresh machine | `FAIL` (by design, distribution caveat) | The packaged bundle is ad-hoc signed — `codesign -dv` reports `flags=0x10002(adhoc,runtime)`, `Signature=adhoc`, `TeamIdentifier=not set`, and `codesign --verify --deep --strict` passes — but **Gatekeeper rejects it**: `spctl -a -t exec -vv OpenAny.app` answers `rejected`. A downloaded copy carries the quarantine flag, so macOS refuses to open it until the user allows it (System Settings → Privacy & Security → "Open Anyway") or clears the attribute. Not a code defect: signing and notarization need an Apple Developer identity. |
+| Linux AppImage | `PASS` (CI green) | The payload check rejected `onnxruntime-node`'s `bin/napi-v3/linux/arm64/…` binding as an x64 mismatch: the rule only knew darwin/win32/windows and the dashed `linux-arm64` form. It now judges a `.node` by any platform or architecture segment that is not the target's (local test 3 pass/2 fail before, 5/5 after). The fork's runs of **openany-v0.1.2** then completed **success** (OpenAny Release at 05:26 and 05:40, Docs Source at 05:57, against one earlier failure at 05:20). |
+| Unsigned installer opens on a fresh machine | `FAIL` | The packaged bundle is ad-hoc signed — `codesign -dv` reports `flags=0x10002(adhoc,runtime)`, `Signature=adhoc`, `TeamIdentifier=not set`, and `codesign --verify --deep --strict` passes — but **Gatekeeper rejects it**: `spctl -a -t exec -vv OpenAny.app` answers `rejected` both before and after adding the quarantine attribute a download sets. Launched from a home-directory copy while quarantined, **no process started**; clearing the attribute and retrying also started nothing, and the probe copy was then gone from disk, so that second observation is void. Not a code defect: signing and notarization need an Apple Developer identity, and until then a fresh machine needs the user's explicit allow. |
 
 ## H. Providers, models, MCP
 
@@ -361,16 +362,31 @@ the projector, set by the host and cleared when a message arrives instead), and
 `notice` projects to a system row — or a session error at level `error`. Verified
 in the UI: `/usage` renders "Shell Command 0.1s /usage".
 
-### I.9 Fast mode has no control — OPEN (gap vs the plan)
-`setFastMode` exists on the client, the `/fast-mode` route and the adapter
-(`set_fast_mode`), and the p6 plan put it in the model picker, but **nothing in
-the UI calls it**. OMP's own `/fast` command toggles it and its output is now
-visible (I.8), so the state is reachable — the picker control is simply absent.
+### I.9 Fast mode had no control — FIXED
+`setFastMode` existed on the adapter (`set_fast_mode`), the `/fast-mode` route
+and the host, and OMP's own `/fast` command toggles the state, but **nothing in
+the UI called it** — and the tracker's earlier note that "the client has it" was
+wrong: `packages/ui/src/lib` had no `fast` at all.
 
-### I.6 Focus mode toggle showed no change — OPEN (unconfirmed)
+Added: `AgentRuntime.setFastMode(id, enabled, directory?)` (contract plus
+client, backed by the route's `{ enabled, active }` — `enabled` is what OMP
+applied, `active` whether the provider can use a fast tier yet), the test-runtime
+stub entry, and a session-scoped trigger in the model picker beside the effort
+control, with `chat.modelControls.fastMode` / `.fastModePending` in all 13
+dictionaries.
+
+Verified: the trigger renders in an open session and a click reaches OMP — the
+route answered `500 "Fast mode is unavailable for the current model."`, which the
+handler logged and rolled the control back from, so it never claims a state OMP
+refused. No model with a fast tier was available to see the success path.
+
+
+### I.6 Focus mode toggle showed no change — RESOLVED (it was measured wrong)
 `Toggle focus mode` was clicked and the composer's width was unchanged (718 px
-before and after). Not investigated further; it may change something other than
-width.
+before and after), which read as a dead control. It is not: it collapses the
+narrow rail. Measured across the viewport instead of the composer — rail widths
+went from `[28, 44]` to `[44]` on a click. The control works; the earlier probe
+watched the wrong element.
 
 ### I.10 Permissions: the UI writes keys OMP does not read — ONE GAP
 The approval gate itself works: with `tools.approvalMode: always-ask` the dock

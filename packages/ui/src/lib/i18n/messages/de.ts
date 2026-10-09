@@ -2354,6 +2354,8 @@ export const dict = {
   'chat.modelControls.clearSearch': 'Suche löschen',
   'chat.modelControls.current': 'Aktuell',
   'chat.modelControls.thinking': 'Denken',
+  'chat.modelControls.fastMode': 'Schnellmodus',
+  'chat.modelControls.fastModePending': 'Der Schnellmodus ist an; dieser Anbieter hat noch keine schnelle Stufe',
   'chat.modelControls.default': 'Standard',
   'chat.modelControls.selectAgent': 'Agent auswählen',
   'chat.modelControls.costPerMillion': 'Kosten ($/1M Tokens)',

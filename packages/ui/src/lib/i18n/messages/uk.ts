@@ -2532,6 +2532,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.modelControls.clearSearch": "Очистити пошук",
   "chat.modelControls.current": "поточний",
   "chat.modelControls.thinking": "Мислення",
+  "chat.modelControls.fastMode": "Швидкий режим",
+  "chat.modelControls.fastModePending": "Швидкий режим увімкнено; цей постачальник ще не має швидкого рівня",
   "chat.modelControls.default": "За замовчуванням",
   "chat.modelControls.selectAgent": "Вибрати агента",
   "chat.modelControls.costPerMillion": "Вартість ($/1 млн токенів)",

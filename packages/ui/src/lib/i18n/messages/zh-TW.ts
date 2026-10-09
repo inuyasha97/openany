@@ -2536,6 +2536,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.modelControls.clearSearch': '清除搜尋',
   'chat.modelControls.current': '目前',
   'chat.modelControls.thinking': '思考',
+  'chat.modelControls.fastMode': '快速模式',
+  'chat.modelControls.fastModePending': '快速模式已開啟，但此提供者尚無快速層級',
   'chat.modelControls.default': '預設',
   'chat.modelControls.selectAgent': '選擇 Agent',
   'chat.modelControls.costPerMillion': '成本（$/百萬 tokens）',

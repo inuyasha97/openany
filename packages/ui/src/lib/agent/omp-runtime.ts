@@ -229,6 +229,8 @@ const agentsListSchema = z.object({
 })
 /** `set_thinking_level` answers with the level OMP applied. */
 const thinkingLevelSchema = z.object({ level: z.string().min(1) })
+/** `POST …/fast-mode`: what OMP applied, and whether the provider can use a fast tier yet. */
+const fastModeSchema = z.object({ enabled: z.boolean(), active: z.boolean() })
 const commandSchema = z.object({ name: z.string(), source: z.string(), description: z.string().optional() })
 const commandsSchema = z.object({ commands: z.array(commandSchema) })
 /** OMP's own context-usage numbers (`ContextUsage` in `pi-tui`); optional on the route. */
@@ -624,6 +626,16 @@ export class OmpRuntimeClient implements AgentRuntime {
       body: JSON.stringify({ level }),
     })
     return (await readJson(response, thinkingLevelSchema)).level
+  }
+
+  async setFastMode(id: string, enabled: boolean, directory?: string | null): Promise<{ enabled: boolean; active: boolean }> {
+    void directory
+    const response = await this.fetchImpl(`${this.basePath}/sessions/${encodeURIComponent(id)}/fast-mode`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    })
+    return await readJson(response, fastModeSchema)
   }
 
   private async fetchSessions(): Promise<OmpSessionRecord[]> {

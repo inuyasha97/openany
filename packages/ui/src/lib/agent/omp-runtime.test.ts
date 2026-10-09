@@ -262,6 +262,18 @@ describe("OmpRuntimeClient", () => {
     ])
   })
 
+  test("toggles fast mode and reports whether the provider can use it", async () => {
+    const { client, calls } = makeClient({
+      "POST /api/agents/omp/sessions/ses_a/fast-mode": { body: { enabled: true, active: false } },
+    })
+    // `active: false` is a real answer: the toggle is on, the provider has no
+    // fast tier. The caller needs both halves, not a collapsed boolean.
+    expect(await client.setFastMode("ses_a", true)).toEqual({ enabled: true, active: false })
+    expect(calls).toEqual([
+      { url: "/api/agents/omp/sessions/ses_a/fast-mode", method: "POST", body: { enabled: true } },
+    ])
+  })
+
   test("carries the status detail beside the busy tag", async () => {
     const { client } = makeClient({
       "GET /api/agents/omp/sessions": { body: { sessions } },

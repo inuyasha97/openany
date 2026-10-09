@@ -1372,6 +1372,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.modelControls.showThinkingModes': 'Pokaż tryby myślenia',
   'chat.modelControls.temperature': 'Temperatura',
   'chat.modelControls.thinking': 'Myślenie',
+  'chat.modelControls.fastMode': 'Tryb szybki',
+  'chat.modelControls.fastModePending': 'Tryb szybki jest włączony; ten dostawca nie ma jeszcze szybkiego poziomu',
   'chat.modelControls.topP': 'Top P',
   'chat.modelControls.unfavoriteAria': 'Usuń z ulubionych',
   'chat.modelControls.webFetch': 'WebFetch',

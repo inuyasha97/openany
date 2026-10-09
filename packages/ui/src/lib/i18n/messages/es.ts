@@ -2532,6 +2532,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.modelControls.clearSearch": "Limpiar búsqueda",
   "chat.modelControls.current": "Actual",
   "chat.modelControls.thinking": "Pensando",
+  "chat.modelControls.fastMode": "Modo rápido",
+  "chat.modelControls.fastModePending": "El modo rápido está activo; este proveedor aún no tiene nivel rápido",
   "chat.modelControls.default": "Predeterminado",
   "chat.modelControls.selectAgent": "Seleccionar agente",
   "chat.modelControls.costPerMillion": "Costo ($/1M tokens)",
