@@ -26,7 +26,7 @@ import {
 recordEarlyStartupMark('electron.entry');
 
 // Set the product name early so electron-log derives its log directory as
-// ~/Library/Logs/OpenAny/ (not ~/Library/Logs/@openchamber/electron/).
+// ~/Library/Logs/OpenAny/ rather than from the package name.
 app.setName('OpenAny');
 if (process.platform === 'linux') {
   app.setDesktopName('openany.desktop');

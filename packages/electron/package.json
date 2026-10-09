@@ -1,8 +1,8 @@
 {
-  "name": "@openchamber/electron",
+  "name": "openany-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "OpenAny desktop runtime for OpenChamber",
+  "description": "OpenAny desktop runtime",
   "author": "OpenAny",
   "type": "module",
   "main": "./dist-bundle/entry.mjs",

@@ -638,16 +638,18 @@ async function chooseOpencodeConfigDir(options, config) {
 
 async function startElectronApp(options, config) {
   const env = devAppEnv(await chooseOpencodeConfigDir(options, config));
-  prepareOpenCodeCli();
+  prepareOmpCli();
   run('bun', ['run', 'electron:dev'], { env });
 }
 
-function prepareOpenCodeCli() {
-  step('Preparing bundled OpenCode CLI', () => run('bun', ['--filter', '@openchamber/electron', 'prepare:opencode-cli']));
+// The desktop runs the pinned OMP binary, staged into `resources/omp-cli`; the
+// packaging chain stages it again (idempotent), so this only matters for the
+// dev launcher.
+function prepareOmpCli() {
+  step('Preparing the bundled OMP CLI', () => run('bun', ['--cwd', 'packages/electron', 'prepare:omp-cli']));
 }
 
 function buildElectronApp() {
-  prepareOpenCodeCli();
   run('bun', ['run', 'electron:build'], { env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' } });
   const distDir = path.join(repoRoot, 'packages/electron/dist');
   if (!existsSync(distDir) || !isMac) return;
