@@ -28,11 +28,12 @@ were not run.
 | Thinking effort / variant per model | `PASS` | Picked `High` in the composer's effort control; the session file records `thinking_level_change: ["high"]`, and the same file shows `model_change` from `deepseek-v4.1-flash` to `deepseek-v4-flash` — the composer's model reached OMP too. |
 | Fast mode toggle | `ABSENT` | No control calls `setFastMode`; OMP's `/fast` command toggles it and its output is now visible; §I.9. |
 | Agent picker in the composer | `ABSENT` | `agentSelection: false` — OMP picks the subagent inside the model's own `task` call. |
-| Attach an image | `UNTESTED` | Prompt body carries base64 images; never attached one. |
+| Attach an image | `PASS` | Dropped a 64×64 magenta PNG with a white diagonal on the composer; the chip appeared, and the session file shows the user message carrying three `image/webp` blocks (the app converts on attach). The model answered "Magenta (with a white diagonal band running from corner to corner)" — it saw the image. |
 | Attach a non-image file | `ABSENT` | `attachmentKinds: "images"`; other files are sent by `@path` mention. |
-| `@` file/agent mention menu | `UNTESTED` | |
+| `@` file mention reaches the model | `PASS` | Typed `@package.json` plus "What is the version field in that file?" in a session rooted at the repo; the model answered `0.1.2` — the value in that file. |
+| `@` mention picker (popup list) | `UNTESTED` | Typing `@` (real key events, in a draft and in a repo-rooted session) opened no popup; the mention still works when the path is typed out. Not investigated further. |
 | `/` command or skill | `FIXED` | Typing `/` opens the Command Palette listing OMP's 30 commands; sending one now renders its output ("Shell Command 0.1s /usage"). Before the fix the command produced nothing visible at all; §I.8. |
-| `#` snippet | `UNTESTED` | An inline `#` trigger exists in the composer's tokenizer; no picker was observed by the probe. |
+| `#` snippet | `UNTESTED` | Typing `#` with real key events opened no popup, like `@`; the composer's inline triggers did not fire in the harness. The snippet text itself was not exercised. |
 | `!` shell prefix | `FIXED` | The composer advertised "`!` for shell" while a leading `!` reaches the model (`!echo shell-check` was answered by `DeepSeek V4 Flash · 3.7s`). OMP has no shell command in its RPC, and `ChatInput` pins `inputMode` to "normal" for that reason. The hint no longer promises a shell (all 13 locales) and the dead `chat.chatInput.placeholder.shell` string is gone; §I.5. |
 | Dictation | `BLOCKED` | Needs a microphone/audio device. |
 | Focus mode toggle | `UNTESTED` | |
@@ -57,6 +58,7 @@ were not run.
 | Per-turn file diff | `ABSENT` | `turnDiff: false`. |
 | Scroll to bottom | `UNTESTED` | |
 | Turn stats / context sources readouts | `PASS` (renders) | Turn stats, tokens, cost and "8 skills" render after a turn. |
+| Reasoning traces visible | `PASS` | With Settings → Chat → "Show Reasoning Traces" **on**, the transcript renders the model's thinking ("Thinking Same structure: shared factor 29, 31 > 27, so yes."). The setting defaults to on and was off in this browser profile — which is why an earlier note here called the reasoning hidden; it was the setting, not the renderer. |
 
 ## C. Sessions
 
@@ -114,6 +116,7 @@ Catalog.
 | Appearance: theme mode (System/Light/Dark) | `PASS` | Choosing `Dark` set `data-theme="dark"` and persisted it (`themeMode=dark`, `selectedThemeVariant=dark`, `useSystemTheme=false`). |
 | Appearance: light/dark theme pickers, Reload themes, font sizes, density | `UNTESTED` | Controls render (e.g. "Select light theme", "Reload themes"). |
 | Sessions: Session Defaults (Default Model / Thinking / Agent / Permissions) | `UNTESTED` | The page renders: "New sessions will start with: OMP agent default", Default Model "Not selected", Default Thinking "Default", Default Agent "Not selected". Changing a default was not confirmed. |
+| Chat: Show Reasoning Traces | `PASS` | Toggled it on (`[data-settings-item='chat.reasoning-traces']` → `aria-checked="true"`, persisted `showReasoningTraces: true`), and the transcript then rendered the model's thinking. |
 | Any other settings page's controls change behavior | `UNTESTED` | No other page was driven. |
 
 ## F. Desktop shell (Electron) — 65 IPC commands
@@ -246,12 +249,14 @@ prompt body carries `provider`/`modelId`; the host applies `set_model` before
 prompting and remembers the applied pair. Evidence: badge
 `GLM-5.3-Flash · 3.7s` after picking it.
 
-### I.3 No visible progress before the first token — OPEN (needs a product call)
+### I.3 No visible progress before the first token — OPEN (narrower than first reported)
 Measured: 14 s with no DOM change on a 559-message session while the model
-prefilled, then the whole answer; 6.4 s to first token on a fresh session.
-Streamed reasoning tokens exist but render only inside the collapsed Activity
-group (`[data-reasoning]` count 0 during the turn). Options: a "working" row from
-the moment the prompt is accepted, or revealing the reasoning stream.
+prefilled, then the whole answer; 6.4 s to first token on a fresh session. The
+earlier claim that streamed reasoning is hidden inside a collapsed group was
+wrong: with **Show Reasoning Traces** on, thinking renders in the transcript
+(verified), so a thinking model does show progress — the gap is the window before
+*any* token, where nothing at all is visible. Options: a "working" row from the
+moment the prompt is accepted, or a prefill indicator.
 
 ### I.4 A session whose folder was deleted failed with a misleading message — FIXED
 The server answers `409 { error: "This session's folder no longer exists: …",
