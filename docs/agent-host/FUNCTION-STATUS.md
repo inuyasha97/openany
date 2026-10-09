@@ -36,16 +36,16 @@ were not run.
 | `#` snippet | `PASS` | Typing `#` with real key events opens the snippet picker: "+ Add new snippet" and the user's own `#expandx` (GLOBAL), with "↑↓ navigate · Enter select · Esc close". The earlier `UNTESTED` was a harness limit (DOM insertion instead of real key events). |
 | `!` shell prefix | `FIXED` | The composer advertised "`!` for shell" while a leading `!` reaches the model (`!echo shell-check` was answered by `DeepSeek V4 Flash · 3.7s`). OMP has no shell command in its RPC, and `ChatInput` pins `inputMode` to "normal" for that reason. The hint no longer promises a shell (all 13 locales) and the dead `chat.chatInput.placeholder.shell` string is gone; §I.5. |
 | Dictation | `BLOCKED` | Needs a microphone/audio device. |
-| Focus mode toggle | `UNTESTED` | |
+| Focus mode toggle | `PASS` | Clicking it collapses the narrow rail: the rail widths measured `[28, 44]` before and `[44]` after. The earlier "no change" reading only measured the composer width. |
 | Permissions mode (`ask every time` → …) | `PASS` | Clicking cycled the control from "Permissions: ask every time" to "Permissions: accept everything". |
-| Send while the session is busy (queue) | `UNTESTED` | The "Queue message" button (which needs a running turn *and* composer content) never appeared in the states driven: a follow-up typed while a turn ran did not land in the composer. Not a claim that queueing is broken — the harness could not reach the state. |
+| Send while the session is busy (queue) | `PASS` | Mid-turn, with text in the composer, the composer exposes **both** "Queue message" and "Stop generating"; pressing Enter queued it (the transcript shows a queued chip) and the turn carried on. The earlier `UNTESTED` was the harness: text inserted into the DOM instead of typed never reached the composer. |
 | Stop a running turn | `PASS` | The composer renders "Stop generating" while a turn is in flight (seen at 0.7 s and 2.1 s into two turns) and it disappears the moment the turn ends. Clicking it during the model's thinking phase ended the turn with no answer and freed the composer. A mid-answer abort could not be caught: this model finishes a 400-line answer in 5.7 s. |
 | Visible progress before the first token | `PASS` (was `FAIL`) | Measured on the same 565-message session the report named: the transcript renders in 2.5 s and a send puts the composer into "Stop generating" 1.3 s after Enter. OMP itself reports `isStreaming: true` 1.1 s after the prompt is accepted. The reported 14 s of silence does not reproduce; §I.3. |
 | Parallel run ("Run on several models") | `PASS` (opens) | The picker's leading action exists and clicking it puts the UI in a parallel state; a multi-model send was not run. |
 | BTW side composer (`/btw`) | `PARTIAL` | `/btw what is 2+2?` opens a side panel with its own composer ("Ask your question") carrying the question and its own model/effort row. The side answer was not confirmed, and the main transcript stayed clean. |
 | Permission approval prompt (approve / reject) | `PASS` | With `tools.approvalMode: always-ask` in OMP's `config.yml` (OMP's own knob; its default is `yolo`, which is why earlier attempts ran unprompted), a bash prompt raised the dock: "Allow tool: bash Command: echo approval-check 1 of 1". Expanding it revealed **Approve** / **Deny** with a `submit` button. Approving ran the command — output `approval-check`, `Exit 0, 0.04s`, and the model reported "Tool execution approved and working". A second request denied left it unexecuted — "bash call denied by user — echo denied-check never executed. Result: no output, no exit code" — so the gate is per call. `config.yml` was restored byte-for-byte afterwards (855 bytes, no `tools` key). |
 | Permission rules from the UI | `PASS` (write) | Settings → Agents → a custom agent → **Tool Permissions** offers one row per tool (Default for all tools, Shell, Edit, Read, Glob, Grep, Patch, Webfetch, Websearch, Skill, Subagent, Question, External Directory, Openchamber…) with inherit/allow/ask/deny chips and no Save button. Clicking `ask` on the Shell row wrote `permissions: [{ action: shell, resource: "*", effect: ask }]` into `~/.omp/agent/agents/perm-probe.md` — OMP's own agent file — and the Mode row wrote `mode: primary`. The probe agent was deleted afterwards (route answered 200, the directory is empty, `config.yml` untouched). **See §I.10: OMP does not read either key.** |
-| Model `ask` form answered | `UNTESTED` | |
+| Model `ask` form answered | `FAIL` (unreachable) | Asked the model to use its ask tool to offer a red/blue choice. It answered: "No ask tool exists in this session's toolset (Read, Bash, Edit, Eval, Glob, Grep, Task, Hub, Todo, Web Search, Write, plus the xd:// devices: security_scan, ast_edit, debug, lsp). I can't invoke a tool I don't have, and I won't fake one." Measured independently: `get_state`'s `dumpTools` lists exactly those 11 tools — OMP's own `BUILTIN_TOOL_NAMES` contains `ask`, but the session never gets it, so no `select`/`editor` frame is ever emitted and the FormDock cannot appear; §I.13. |
 | Goals / small-model affordance | `UNTESTED` | The composer says "Goals need a Small Model. Sign in to a model provider or pick one in Settings → Sessions" — the affordance names what it needs instead of promising a turn it cannot run. |
 | Ask other models / multi-run | `UNTESTED` | Offered by the answer menu and the picker. |
 
@@ -80,9 +80,9 @@ were not run.
 | Rename with AI | `UNTESTED` | Menu item present; not run (costs a model call). |
 | Pin session | `PASS` | Menu → Pin session; the same menu then reads "Unpin session", so the state flipped. |
 | Track as in work | `PASS` | The row's "Track as in work" action moved the session under a new **in work** group in the sidebar. |
-| Move to folder | `UNTESTED` | Menu item present; the pass that clicked it found no surface, so it stays unverified. |
+| Move to folder | `UNTESTED` | The item is in the session menu in some views and gone in others (it was present with one display mode and absent with another), so it is a conditional affordance; the pass that clicked it found no surface. |
+| Open in Side Panel (beta) | `PASS` (opens) | Choosing it moved the app to a side-panel session: the URL became `?session=01a11fc9-0310-7000-8a4f-d7f4408c6156`. |
 | Move to worktree | `UNTESTED` | Needs a worktree. |
-| Open in Side Panel (beta) | `UNTESTED` | Menu item present; not opened. |
 | Delete | `UNTESTED` | Destructive; not run on purpose. |
 | Search sessions | `PASS` | "Search sessions" opens an input reading "Press Enter to search / Esc to clear"; typing `thinking` changed the list. |
 | Select sessions (bulk) | `PARTIAL` | Entering the mode shows "0 selected" in the sidebar; no per-row checkbox was found by the probe, so row selection is unverified. |
@@ -113,6 +113,14 @@ Every page opens and its items are enumerable by `data-settings-item`. Counts
 below are the items each page carries; a page is `PASS` only where a control's
 effect was observed (a toggle flipped **and** survived a reload), not merely
 because it rendered.
+
+Measured limit of the harness, so the `UNTESTED` rows are read correctly: on a
+page whose items are editors rather than toggles (Commands, Snippets, Projects,
+Notifications), clicking the `data-settings-item` **row** changes nothing —
+dialog count, input count and body text length are identical before and after,
+and focus stays on a button. The activator is a control *inside* the item
+("sign in", "Add", a select), which differs per item; those pages were therefore
+only enumerated, not driven.
 
 | Page | Items | Status | Evidence |
 |---|---|---|---|
@@ -437,6 +445,31 @@ With that fixed, a second error surfaced: `omp-runtime.test.ts(234,44): Expected
 contract gives `stageRevert`, `commitRevert`, `clearRevert` and
 `getSessionTurnDiff` a session id. The stubs now carry the contract's parameter
 lists. `bun run type-check` is clean and `bun test src/lib/agent` passes (64).
+
+### I.13 The form path cannot fire for an OMP session — OPEN (gap)
+The UI carries a whole form surface — `FormDock`, `FormCard`, the contract's
+`listPendingForms`/`replyForm`, and the `form.created`/`form.settled` events —
+which the server projects from OMP's `extension_ui_request` frames with method
+`select` or `editor` (`omp-approvals.js`: "the model asking the user a question
+(the `ask` tool)").
+
+Asked to ask a question, the model answered: "No ask tool exists in this
+session's toolset (Read, Bash, Edit, Eval, Glob, Grep, Task, Hub, Todo, Web
+Search, Write, plus the xd:// devices: security_scan, ast_edit, debug, lsp)."
+That is accurate — measured against `omp --mode rpc`, `get_state`'s `dumpTools`
+lists exactly those 11 tools. OMP ships the tool (`src/tools/ask.ts`,
+registered in `src/tools/index.ts`, present in `BUILTIN_TOOL_NAMES`), but a
+session never receives it, so no `select`/`editor` frame is ever emitted.
+
+Consequences: the FormDock is unreachable, `listPendingForms` always answers an
+empty list, and the composer's form-dock slot is dead weight. The `confirm` and
+`input` frames do arrive — the approval dock and the OAuth code prompt both work
+— so only the question half of the projection is dead. This is the third
+affordance in the fork backed by nothing at runtime, after the agent permission
+editor (§I.10) and the `@` picker (§I.11); unlike those two, nothing here
+promises the user anything, so the fix is either enabling OMP's `ask` tool for
+the session or deleting the form path.
+
 
 
 
