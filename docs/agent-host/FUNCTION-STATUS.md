@@ -41,8 +41,12 @@ were not run.
 | Send while the session is busy (queue) | `UNTESTED` | The "Queue message" button (which needs a running turn *and* composer content) never appeared in the states driven: a follow-up typed while a turn ran did not land in the composer. Not a claim that queueing is broken — the harness could not reach the state. |
 | Stop a running turn | `PASS` | The composer renders "Stop generating" while a turn is in flight (seen at 0.7 s and 2.1 s into two turns) and it disappears the moment the turn ends. Clicking it during the model's thinking phase ended the turn with no answer and freed the composer. A mid-answer abort could not be caught: this model finishes a 400-line answer in 5.7 s. |
 | Visible progress before the first token | `FAIL` | 14 s with no DOM change on a large-context session while the model prefilled; §I.3. |
-| Parallel run ("Run on several models") | `UNTESTED` | Offered by the picker. |
-| BTW side composer | `UNTESTED` | |
+| Parallel run ("Run on several models") | `PASS` (opens) | The picker's leading action exists and clicking it puts the UI in a parallel state; a multi-model send was not run. |
+| BTW side composer (`/btw`) | `PARTIAL` | `/btw what is 2+2?` opens a side panel with its own composer ("Ask your question") carrying the question and its own model/effort row. The side answer was not confirmed, and the main transcript stayed clean. |
+| Permission approval prompt (approve / reject) | `UNTESTED` | With the composer on "Permissions: ask every time", asking for `bash echo permission-check` ran the command with no prompt — OMP's own policy allowed it. Forcing an ask needs OMP's config, which was left alone. |
+| Model `ask` form answered | `UNTESTED` | |
+| Goals / small-model affordance | `UNTESTED` | The composer says "Goals need a Small Model. Sign in to a model provider or pick one in Settings → Sessions" — the affordance names what it needs instead of promising a turn it cannot run. |
+| Ask other models / multi-run | `UNTESTED` | Offered by the answer menu and the picker. |
 
 ## B. Chat message actions
 
