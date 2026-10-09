@@ -118,7 +118,7 @@ because it rendered.
 | General | 13 | `PASS` (one item) | `appearance.auto-save-enabled` flipped true→false and stayed false after a reload. |
 | Appearance | 16 | `PASS` (one item) | Theme mode `Dark` set `data-theme="dark"` and persisted; 15 items (`light-theme`, `scrollbars`, `language`, font sizes, density, …) render, undriven. |
 | Chat | 33 | `PASS` (one item) | `chat.reasoning-traces` toggled on and the transcript then rendered the model's thinking; `chat.streaming-auto-follow` flipped true→false and survived a reload. 31 items undriven. |
-| Notifications | 2 | `UNTESTED` | `notifications.delivery` was clicked and did not flip; `notifications.push` undriven. |
+| Notifications | 2 | `UNTESTED` | Clicking the `notifications.delivery` row (a checkbox row, per its markup) left `aria-checked` false and opened nothing; the same row click does flip `routing.enabled` and `appearance.auto-save-enabled`, so the harness did not reach this control's activation. `notifications.push` undriven. |
 | Sessions | 15 | `UNTESTED` | Page renders its defaults (model/thinking/agent/permission/retention/small-model/…); no default changed. |
 | Routing | 4 | `PASS` (one item) | `routing.enabled` flipped false→true and survived a reload. |
 | Shortcuts | 1 | `UNTESTED` | `shortcuts.keyboard-shortcuts` renders. |
