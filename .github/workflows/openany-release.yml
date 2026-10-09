@@ -107,6 +107,9 @@ jobs:
 
   merge-mac-manifests:
     needs: build
+    # A failing target must not hide the installers that did build, so this and
+    # the release run whatever the matrix produced.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -138,6 +141,7 @@ jobs:
 
   release:
     needs: [build, merge-mac-manifests]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Collect every artifact
