@@ -47,7 +47,7 @@ were not run.
 | Permission approval prompt (approve / reject) | `PASS` | With `tools.approvalMode: always-ask` in OMP's `config.yml` (OMP's own knob; its default is `yolo`, which is why earlier attempts ran unprompted), a bash prompt raised the dock: "Allow tool: bash Command: echo approval-check 1 of 1". Expanding it revealed **Approve** / **Deny** with a `submit` button. Approving ran the command — output `approval-check`, `Exit 0, 0.04s`, and the model reported "Tool execution approved and working". A second request denied left it unexecuted — "bash call denied by user — echo denied-check never executed. Result: no output, no exit code" — so the gate is per call. `config.yml` was restored byte-for-byte afterwards (855 bytes, no `tools` key). |
 | Permission rules from the UI | `PASS` (write) | Settings → Agents → a custom agent → **Tool Permissions** offers one row per tool (Default for all tools, Shell, Edit, Read, Glob, Grep, Patch, Webfetch, Websearch, Skill, Subagent, Question, External Directory, Openchamber…) with inherit/allow/ask/deny chips and no Save button. Clicking `ask` on the Shell row wrote `permissions: [{ action: shell, resource: "*", effect: ask }]` into `~/.omp/agent/agents/perm-probe.md` — OMP's own agent file — and the Mode row wrote `mode: primary`. The probe agent was deleted afterwards (route answered 200, the directory is empty, `config.yml` untouched). **See §I.10: OMP does not read either key.** |
 | Model `ask` form answered | `PASS` (was `FAIL`) | The model had no `ask` tool because the adapter spawned `omp --mode rpc`, where OMP's `hasUI` is false and `AskTool.createIf` therefore returns null. Spawning `--mode rpc-ui` creates it: `get_state`'s `dumpTools` went from 11 tools to 12 with `ask` added. Verified in the app — the prompt raised the form dock with "Red — The color red." / "Blue — The color blue." and `dismiss` / `submit`; choosing Red and submitting closed the dock and the turn recorded the `ask` call with that answer; §I.13. |
-| Goals / small-model affordance | `PARTIAL` | The composer says "Goals need a Small Model. Sign in to a model provider or pick one in Settings → Sessions". Settings → Sessions has "Use default small model" **on**, yet the Walkthrough panel still reports "No small model available", so the enabled default resolves to nothing on this machine — the composer's sentence is accurate, and the gap is the missing small-model role rather than the affordance. |
+| Goals / small-model affordance | `PASS` | The composer offers "Start a goal with the next message". It used to say "Goals need a Small Model…" because the small-model service saw no authenticated provider at all; that was a wiring bug (§I.15), and with it fixed and an explicit small model chosen the control resolves a model. |
 | Ask other models / multi-run | `PARTIAL` | "Ask other models" opens from the answer's Continue menu. On a fresh session's **first** answer it reads "Only the first answer of a chat can be compared for now." with cancel / **run 0 more** / Close and offers no model list, so a comparison cannot be started from it. |
 
 ## B. Chat message actions
@@ -103,7 +103,7 @@ were not run.
 | Project knowledge: notes/todo/plans | `PASS` | Opens on "0/3000 — No notes yet. Capture context, reminders, or links." with Notes 0 / Todo 0 / Plans 0 tabs. |
 | Browser panel | `PASS` (renders) | Shows an address bar and detected dev servers (localhost:3191/3991/5000/…). |
 | Pull Request panel | `PASS` (renders) | Opens on "Pull Request — **Available when the current branch can open a pull request.**" — it states its own condition instead of promising a view it cannot fill. This branch is a fork's feature branch with no upstream PR. |
-| Walkthrough panel | `PASS` (renders) | Opens on "Walkthrough — All uncommitted — English — Not selected — generate walkthrough — **No small model available — Sign in to a model provider to generate a review.**" It names what it needs; §A Goals records the same missing small model. |
+| Walkthrough panel | `PASS` | Opens on "Walkthrough — All uncommitted — English — **DeepSeek V4 Flash** — generate walkthrough — No walkthrough yet. Build a guided reading path through these changes. This calls the small model and costs tokens, so it only ever runs when you ask." It names the model it will use; the generated walkthrough itself was not run (it spends a model call). |
 | Context panel | `PASS` (renders) | Empty until a session is open; then shows model/effort/context usage. |
 | Usage readout + Refresh usage | `PASS` (renders) | "Usage 5-Hour 5%". |
 | Configure panels | `PASS` | Opens "Rail panels — Choose which panels the rail shows. Hidden panels keep their data and stay reachable from the command palette." with Context, Git, Pull Request, Changes, Walkthrough, Linear, Files, Terminal, Project knowledge, Plan, Browser, Chat and 24 checkboxes. |
@@ -420,6 +420,38 @@ control away is not mine to decide.
 `tools.approval` (a per-tool record: `allow` / `prompt` / `deny`). Both live in
 `config.yml` and are reachable through `omp config set`.
 
+
+### I.15 The OMP host handed to the server features was the wrong object — FIXED
+`configureOmpRuntimeHost(() => ompAgentRuntime)` passed the **controller** that
+`installOmpAgentRuntime` returns (`{ getHost, dispose }`), not the host. Every
+reader in `omp-host-access.js` calls host methods on whatever it is given
+(`listModels`, `getMessages`, `listSessions`, `getSessionStatus`, …), so each one
+threw `… is not a function` — and `listModelInfos` catches that and answers `[]`,
+so the failure had no voice.
+
+Consequences: the small-model service saw **no authenticated provider at all**
+(`GET /api/small-model` answered `authenticatedProviders: []`), which is why
+Goals and the Walkthrough panel said "No small model available" even with the
+default enabled, and why the override picker had nothing to offer. The session
+routes were unaffected — they call the controller's own `getHost()` — so the app
+looked healthy while every feature behind this module was degraded.
+
+A second, smaller surprise in the same service: the default picker resolves a
+small model by **family** (`gpt-luna`, `gemini-flash-lite`, `gemini-flash`,
+`claude-haiku`, `gpt-nano`, `gpt-mini`), and this machine's providers offer
+DeepSeek, GLM and Kimi. So `available: false` with no override is correct
+behaviour, not a bug: the explicit override is the working path.
+
+Fix: `configureOmpRuntimeHost(() => ompAgentRuntime.getHost())`. Verified:
+`GET /api/small-model` answers `authenticatedProviders: ["opencode-go",
+"opencode-zen"]`; with the override set to `opencode-go/deepseek-v4-flash` it
+answers `available: true, source: "settings"`; the Walkthrough panel then names
+"DeepSeek V4 Flash" with a "generate walkthrough" button, and the composer offers
+"Start a goal with the next message" instead of "Goals need a Small Model".
+
+Note: `packages/web/server/index.js` is not covered by any test (nothing loads
+the wiring), so the only thing that catches an error there is booting the server
+— which is how this and the missing-import crash above were both found.
 
 ### I.14 Writing an OMP-native setting rewrote the user's config.yml — FIXED
 `GET|PUT /api/config/cache-retention` and `/api/config/tool-approval` read the

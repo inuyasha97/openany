@@ -1810,7 +1810,10 @@ async function main(options = {}) {
     broadcast: broadcastOpenChamberUiEvent,
   });
   // Fork: let the server features that used OpenCode reach the OMP host.
-  configureOmpRuntimeHost(() => ompAgentRuntime);
+  // `ompAgentRuntime` is the controller the routes use, not the host: the
+  // features here call `listModels`/`getMessages`/`listSessions` on what they
+  // are given, so hand them the host itself.
+  configureOmpRuntimeHost(() => ompAgentRuntime.getHost());
 
   // After bootstrap: the upgrade gate needs the real UI auth controller.
   guestSurfaceRuntime = createGuestSurfaceRuntime({
