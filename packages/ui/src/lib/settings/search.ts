@@ -877,12 +877,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['steps', 'loop', 'tool calls'],
   },
   {
-    id: 'agents.permissions',
-    page: 'agents',
-    titleKey: 'settings.agents.page.section.toolPermissions',
-    keywords: ['tools', 'permissions', 'rules', 'allow', 'ask', 'deny'],
-  },
-  {
     id: 'commands.create',
     page: 'commands',
     titleKey: 'settings.commands.page.title.new',

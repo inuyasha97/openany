@@ -40,7 +40,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Icon } from '@/components/icon/Icon';
-import { AgentPermissionsEditor } from './AgentPermissionsEditor';
 import { SettingsLegacyFormatNote } from '@/components/sections/shared/SettingsLegacyFormatNote';
 import { resolveSessionCapabilities } from '@/lib/agent/session-capabilities';
 
@@ -135,17 +134,11 @@ export const AgentsPage: React.FC = () => {
   const entityRef = React.useRef<AgentEntity>({});
 
   /**
-   * The permissions section's save routine. It writes its own request, but the
-   * page owns the indicator, so the page's save runs it too and reports one
-   * outcome for both.
+   * Permission rules are not editable here: OMP reads an agent's `tools` list
+   * and its own `tools.approval` policy, not the OpenCode rule objects this page
+   * used to write (see §I.10). The approval policy lives in Settings → Sessions
+   * → Tool approval, which writes the key OMP actually reads.
    */
-  const permissionsSaveRef = React.useRef<(() => Promise<AutosaveResult>) | null>(null);
-  const registerPermissionsSave = React.useCallback(
-    (routine: (() => Promise<AutosaveResult>) | null) => {
-      permissionsSaveRef.current = routine;
-    },
-    [],
-  );
 
   // What the agent's config file currently holds. A save writes only when the
   // form differs from it, and an incoming refresh only repopulates the form
@@ -317,12 +310,6 @@ export const AgentsPage: React.FC = () => {
     const agentName = selectedAgentName?.trim();
     if (isNewAgent || !saved || !agentName) return AUTOSAVE_UNCHANGED;
 
-    // The permissions section is part of this page, so its write goes out with
-    // the page's and both report through one indicator.
-    const permissionsResult = permissionsSaveRef.current
-      ? await permissionsSaveRef.current()
-      : AUTOSAVE_UNCHANGED;
-
     const unchanged =
       description === saved.description &&
       mode === saved.mode &&
@@ -332,8 +319,7 @@ export const AgentsPage: React.FC = () => {
       temperature === saved.temperature &&
       topP === saved.topP &&
       system === saved.system;
-    if (unchanged) return permissionsResult;
-    if (!permissionsResult.ok) return permissionsResult;
+    if (unchanged) return AUTOSAVE_UNCHANGED;
 
     const config = buildConfig(agentName);
     const result: AgentMutationResult = await updateAgent(agentName, config, settingsDirectory);
@@ -745,14 +731,6 @@ export const AgentsPage: React.FC = () => {
           className="w-full font-mono typography-meta min-h-[120px] max-h-[60vh] bg-transparent"
         />
       </SettingsSection>
-
-      {!isNewAgent && selectedAgent && (
-        <AgentPermissionsEditor
-          agent={selectedAgent}
-          registerSave={registerPermissionsSave}
-          requestSave={requestSave}
-        />
-      )}
 
       {isNewAgent && (
         <div className="flex items-center gap-2 pb-8">

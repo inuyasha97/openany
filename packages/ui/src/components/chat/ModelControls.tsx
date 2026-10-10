@@ -2,9 +2,9 @@ import { OPENCODE_TOOLS } from '@/lib/opencode/tools';
 import React from 'react';
 import { focusChatInput } from './composer/editor/dom';
 import { MobileModelButton } from './MobileModelButton';
-import type { EditPermissionMode } from '@/stores/types/sessionTypes';
+import { ToolApprovalSummary } from './ToolApprovalSummary';
 import type { ModelMetadata } from '@/types';
-import type { Agent, PermissionEffect, PermissionRuleset } from '@/lib/opencode/model';
+import type { Agent } from '@/lib/opencode/model';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -28,7 +28,6 @@ import { useAgentColors } from '@/hooks/useAgentColors';
 import { useDeviceInfo } from '@/lib/device';
 import { mergeModelMetadataWithLiveModel } from '@/lib/modelMetadata';
 import { getModelDisplayName as getSharedModelDisplayName } from '@/lib/modelDisplay';
-import { getEditModeColors } from '@/lib/permissions/editModeColors';
 import { cn } from '@/lib/utils';
 import { agentLabel } from '@/lib/agentLabel';
 import { matchesRankQuery, rankByQuery } from '@/lib/search/fuzzySearch';
@@ -103,30 +102,6 @@ const agentSampling = (agent: Agent, key: 'temperature' | 'topP'): number | unde
 const agentTemperature = (agent: Agent): number | undefined => agentSampling(agent, 'temperature');
 const agentTopP = (agent: Agent): number | undefined => agentSampling(agent, 'topP');
 
-/**
- * The effect a ruleset gives an action, most specific rule last.
- *
- * v2 rules are `{ action, resource, effect }`: `action` is the capability
- * ("edit", "shell"), `resource` the pattern it applies to. A wildcard rule for
- * the action wins over the catch-all `*` rule.
- */
-const resolveWildcardPermissionEffect = (rules: PermissionRuleset, action: string): PermissionEffect | undefined => {
-    for (let i = rules.length - 1; i >= 0; i -= 1) {
-        const rule = rules[i];
-        if (rule.action === action && rule.resource === '*') {
-            return rule.effect;
-        }
-    }
-
-    for (let i = rules.length - 1; i >= 0; i -= 1) {
-        const rule = rules[i];
-        if (rule.action === '*' && rule.resource === '*') {
-            return rule.effect;
-        }
-    }
-
-    return undefined;
-};
 
 interface CapabilityDefinition {
     key: 'tool_call' | 'reasoning';
@@ -230,23 +205,6 @@ const IconBadge: React.FC<{ iconName: IconComponent; label: string }> = ({ iconN
     </span>
 );
 
-const EditModeIcon: React.FC<{ mode: EditPermissionMode; className?: string }> = ({ mode, className }) => {
-    const combinedClassName = cn(className, 'flex-shrink-0');
-    const modeColors = getEditModeColors(mode);
-    const iconColor = modeColors ? modeColors.text : 'var(--foreground)';
-    const iconStyle = { color: iconColor };
-
-    if (mode === 'full') {
-        return <Icon name="pencil-ai" className={combinedClassName} style={iconStyle} />;
-    }
-    if (mode === 'allow') {
-        return <Icon name="checkbox-circle" className={combinedClassName} style={iconStyle} />;
-    }
-    if (mode === 'deny') {
-        return <Icon name="close-circle" className={combinedClassName} style={iconStyle} />;
-    }
-    return <Icon name="question" className={combinedClassName} style={iconStyle} />;
-};
 
 const formatTokens = (value?: number | null) => {
     if (typeof value !== 'number' || Number.isNaN(value)) {
@@ -1648,23 +1606,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         const hasModelConfig = currentAgent.model?.providerID && currentAgent.model?.id;
         const hasTemperatureOrTopP = agentTemperature(currentAgent) !== undefined || agentTopP(currentAgent) !== undefined;
 
-        const summarizePermission = (permissionName: string): { mode: EditPermissionMode; label: string } => {
-            const rules = currentAgent.permissions ?? [];
-            const hasCustom = rules.some((rule) => rule.action === permissionName && rule.resource !== '*');
-            const action = resolveWildcardPermissionEffect(rules, permissionName) ?? 'ask';
-
-            if (hasCustom) {
-                return { mode: 'ask', label: t('chat.modelControls.permissionLabel.custom') };
-            }
-
-            if (action === 'allow') return { mode: 'allow', label: t('chat.modelControls.permissionLabel.allow') };
-            if (action === 'deny') return { mode: 'deny', label: t('chat.modelControls.permissionLabel.deny') };
-            return { mode: 'ask', label: t('chat.modelControls.permissionLabel.ask') };
-        };
-
-        const editPermissionSummary = summarizePermission('edit');
-        const bashPermissionSummary = summarizePermission(OPENCODE_TOOLS.shell);
-        const webfetchPermissionSummary = summarizePermission(OPENCODE_TOOLS.webfetch);
 
         return (
             <MobileOverlayPanel
@@ -1723,38 +1664,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                     )}
 
                     {}
-                    <div className="rounded-xl border border-border/40 bg-sidebar/30 px-2 py-1.5">
-                        <div className="typography-micro text-muted-foreground mb-1">{t('chat.modelControls.permissions')}</div>
-                        <div className="flex flex-col gap-1">
-                            <div className="flex items-center justify-between">
-                                <span className="typography-meta text-muted-foreground/80">{t('chat.modelControls.edit')}</span>
-                                <div className="flex items-center gap-1.5">
-                                    <EditModeIcon mode={editPermissionSummary.mode} className="size-3.5" />
-                                    <span className="typography-meta font-medium text-foreground">
-                                        {editPermissionSummary.label}
-                                    </span>
-                                </div>
-                            </div>
-                            <div className="flex items-center justify-between">
-                                <span className="typography-meta text-muted-foreground/80">{t('chat.modelControls.bash')}</span>
-                                <div className="flex items-center gap-1.5">
-                                    <EditModeIcon mode={bashPermissionSummary.mode} className="size-3.5" />
-                                    <span className="typography-meta font-medium text-foreground">
-                                        {bashPermissionSummary.label}
-                                    </span>
-                                </div>
-                            </div>
-                            <div className="flex items-center justify-between">
-                                <span className="typography-meta text-muted-foreground/80">{t('chat.modelControls.webFetch')}</span>
-                                <div className="flex items-center gap-1.5">
-                                    <EditModeIcon mode={webfetchPermissionSummary.mode} className="size-3.5" />
-                                    <span className="typography-meta font-medium text-foreground">
-                                        {webfetchPermissionSummary.label}
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                    <ToolApprovalSummary />
 
                     {}
                     {hasCustomPrompt && (
@@ -2711,23 +2621,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         const hasModelConfig = currentAgent.model?.providerID && currentAgent.model?.id;
         const hasTemperatureOrTopP = agentTemperature(currentAgent) !== undefined || agentTopP(currentAgent) !== undefined;
 
-        const summarizePermission = (permissionName: string): { mode: EditPermissionMode; label: string } => {
-            const rules = currentAgent.permissions ?? [];
-            const hasCustom = rules.some((rule) => rule.action === permissionName && rule.resource !== '*');
-            const action = resolveWildcardPermissionEffect(rules, permissionName) ?? 'ask';
-
-            if (hasCustom) {
-                                return { mode: 'ask', label: t('chat.modelControls.permissionLabel.custom') };
-                            }
-
-            if (action === 'allow') return { mode: 'allow', label: t('chat.modelControls.permissionLabel.allow') };
-            if (action === 'deny') return { mode: 'deny', label: t('chat.modelControls.permissionLabel.deny') };
-            return { mode: 'ask', label: t('chat.modelControls.permissionLabel.ask') };
-        };
-
-        const editPermissionSummary = summarizePermission('edit');
-        const bashPermissionSummary = summarizePermission(OPENCODE_TOOLS.shell);
-        const webfetchPermissionSummary = summarizePermission(OPENCODE_TOOLS.webfetch);
 
         return (
             <TooltipContent align="start" sideOffset={8} className="max-w-[280px]">
@@ -2783,36 +2676,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                         </div>
                     )}
 
-                    <div className="flex flex-col gap-1">
-                        <span className="typography-meta font-semibold uppercase tracking-wide text-muted-foreground/90">{t('chat.modelControls.permissions')}</span>
-                        <div className="flex items-center gap-3">
-                            <span className="typography-meta text-muted-foreground/80 w-16">{t('chat.modelControls.edit')}</span>
-                            <div className="flex items-center gap-1.5">
-                                <EditModeIcon mode={editPermissionSummary.mode} className="size-3.5" />
-                                <span className="typography-meta font-medium text-foreground w-12">
-                                    {editPermissionSummary.label}
-                                </span>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <span className="typography-meta text-muted-foreground/80 w-16">{t('chat.modelControls.bash')}</span>
-                            <div className="flex items-center gap-1.5">
-                                <EditModeIcon mode={bashPermissionSummary.mode} className="size-3.5" />
-                                <span className="typography-meta font-medium text-foreground w-12">
-                                    {bashPermissionSummary.label}
-                                </span>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <span className="typography-meta text-muted-foreground/80 w-16">{t('chat.modelControls.webFetch')}</span>
-                            <div className="flex items-center gap-1.5">
-                                <EditModeIcon mode={webfetchPermissionSummary.mode} className="size-3.5" />
-                                <span className="typography-meta font-medium text-foreground w-12">
-                                    {webfetchPermissionSummary.label}
-                                </span>
-                            </div>
-                        </div>
-                    </div>
+                    <ToolApprovalSummary variant="inline" />
 
                     {hasCustomPrompt && (
                         <div className="flex items-center justify-between gap-3">

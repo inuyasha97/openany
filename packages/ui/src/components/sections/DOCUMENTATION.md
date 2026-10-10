@@ -27,9 +27,8 @@ The contract, implemented by `shared/SettingsAutosave.tsx`:
   something the user waits for. A failure is an error toast,
   "Couldn't save: <reason>", raised by the hook itself.
 - **One page, one save routine.** A section that writes its own request still
-  reports through the page: `agents/AgentPermissionsEditor.tsx` hands its save
-  routine to `AgentsPage` via `registerSave`, and the page's save runs it, so a
-  failure is reported once.
+  reports through the page: it hands its save routine up via `registerSave`, and
+  the page's save runs it, so a failure is reported once.
 - Saves run serially. A save request received during a write queues one follow-up
   using the latest committed form state. Unmounting prevents that follow-up.
 
@@ -109,8 +108,8 @@ Two consequences worth knowing:
 - **Edit the stored entry, never the resolved one.** `AgentInfo` and the model
   catalog are what OpenCode resolved: built-in defaults, global config and live
   session grants are already merged in. Writing that back would bake them into
-  the file. `agents/AgentsPage.tsx` and `AgentPermissionsEditor.tsx` therefore
-  read `GET /api/config/agents/:name/config` and `…/permissions`, and the
+  the file. `agents/AgentsPage.tsx` therefore reads
+  `GET /api/config/agents/:name/config`, and the
   commands store reads `GET /api/config/commands/:name/config` because the v2
   `CommandInfo` carries only a name and a description.
 - **`request` is replaced wholesale.** A PATCH that sends `request` overwrites
@@ -122,24 +121,23 @@ no page exposes it as an on/off switch for agents. For MCP servers `disabled` is
 the documented way to keep a server configured but inactive, and the page's
 "Enable" checkbox writes it.
 
-### Agent permissions
+### Tool permissions and approval
 
-OpenCode 2 replaced the v1 `permission` map (`bash`/`task`/`list`/`lsp` keys with
-allow/deny/ask per pattern) with an ORDERED list of `{ action, resource, effect }`
-rules where the LAST match wins. The user does not think in ordered rules, so
-the editor keeps the v1 mental model: one row per tool with inherit / allow /
-ask / deny, an arrow showing what OpenCode will actually do for that tool right
-now, and resource patterns under an expanded row. `agents/agentPermissionModel.ts`
-translates this view to and from the rule list. Because order is part of the
-policy, a save edits the stored list in place: changed effects replace their
-rule where it stands, removed rows drop theirs, rules the view cannot show (an
-`*` action with a resource pattern) pass through untouched, and only new rules
-are inserted (agent wildcard first, a tool's wildcard before its patterns, a
-pattern last), so decisions for tools the user did not touch never change. The
-arrow is computed from OpenCode's built-in defaults
-(`OPENCODE_DEFAULT_RULES`), the global `opencode.json` rules and the agent's
-own wildcard, in that order. v1-only keys (`LEGACY_ACTIONS`) are neither shown
-nor written back.
+There is no per-agent permission editor. The page used to expose one built on
+OpenCode 2's ordered `{ action, resource, effect }` rules, but OMP reads neither
+those rules nor a `mode` field from an agent's markdown — its agent parser wants
+`name`, `description`, `tools`, `spawns`, `model`, `thinkingLevel` and the other
+fields in `src/discovery/helpers.ts`, and its policy lives in the settings file
+instead. A control that saved a key nothing reads is a false safety guarantee, so
+it was removed rather than left in place; the same reasoning applies to the model
+picker's per-tool summary, which rendered those same dead rules.
+
+What decides whether a tool call reaches the user is OMP's own
+`tools.approvalMode` (`always-ask` / `write` / `yolo`) and its per-tool
+`tools.approval` record. Settings → Sessions → **Tool approval** writes the mode
+through `GET|PUT /api/config/tool-approval`, which is real over OMP: with
+`always-ask`, a session's shell call raises the approval dock. `tools.approval`
+is intentionally not surfaced yet.
 
 Below the built-in tools the editor lists one row per MCP server from the
 Settings directory's config (`useMcpConfigStore`), keyed `<server>_*`, which
