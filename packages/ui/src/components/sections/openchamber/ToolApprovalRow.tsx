@@ -1,38 +1,26 @@
 import React from 'react';
-import { z } from 'zod';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { SettingsFieldRow, SETTINGS_SELECT_SIZE, SETTINGS_SELECT_ROW_TRIGGER_CLASS } from '@/components/sections/shared/SettingsSection';
-import { useI18n, type I18nKey } from '@/lib/i18n';
+import { useI18n } from '@/lib/i18n';
 import { reportSettingsSaveState } from '@/lib/persistence';
 import { runtimeFetch } from '@/lib/runtime-fetch';
+import {
+  readToolApprovalMode,
+  TOOL_APPROVAL_MODE_LABEL_KEYS,
+  TOOL_APPROVAL_MODES,
+  toolApprovalModeSchema,
+  type ToolApprovalMode,
+} from '@/lib/toolApproval';
 
 /**
  * OMP's `tools.approvalMode` — the policy behind a tool call reaching the user.
  *
- * `always-ask` auto-approves read-only tools and prompts for write and exec
- * ones, `write` auto-approves read and write, `yolo` auto-approves every tier.
- * OMP's default is `yolo`, so until this is set a session runs commands without
- * asking; the approval dock the UI already renders appears once OMP is told to
- * ask. The value is read from and written to `GET|PUT /api/config/tool-approval`,
- * which answers OMP's own default when the key is absent.
- *
- * This is the session-facing half of OMP's policy. The per-tool half
- * (`tools.approval`) is not exposed here yet, and is preserved by the write.
+ * Read from and written to `GET|PUT /api/config/tool-approval`, which answers
+ * OMP's own default when the key is absent. The vocabulary and the read live in
+ * `@/lib/toolApproval`, shared with the composer's chip; this is the half that
+ * writes. The per-tool half (`tools.approval`) is not exposed yet, and is
+ * preserved by the write.
  */
-const TOOL_APPROVAL_MODES = ['always-ask', 'write', 'yolo'] as const;
-
-type ToolApprovalMode = (typeof TOOL_APPROVAL_MODES)[number];
-
-/** The route answers one of the three modes; anything else is not a mode. */
-const toolApprovalModeSchema = z.enum(TOOL_APPROVAL_MODES);
-const toolApprovalSchema = z.object({ mode: toolApprovalModeSchema });
-
-const MODE_LABEL_KEYS = {
-  'always-ask': 'settings.openchamber.defaults.toolApproval.option.alwaysAsk',
-  write: 'settings.openchamber.defaults.toolApproval.option.write',
-  yolo: 'settings.openchamber.defaults.toolApproval.option.yolo',
-} satisfies Record<ToolApprovalMode, I18nKey>;
-
 export const ToolApprovalRow: React.FC = () => {
   const { t } = useI18n();
   const [mode, setMode] = React.useState<ToolApprovalMode | null>(null);
@@ -42,14 +30,7 @@ export const ToolApprovalRow: React.FC = () => {
 
   React.useEffect(() => {
     let cancelled = false;
-    /** Reads OMP's mode, or null when the route refused or answered something else. */
-    const readMode = async (): Promise<ToolApprovalMode | null> => {
-      const response = await runtimeFetch('/api/config/tool-approval', { headers: { Accept: 'application/json' } });
-      if (!response.ok) return null;
-      const parsed = toolApprovalSchema.safeParse(await response.json());
-      return parsed.success ? parsed.data.mode : null;
-    };
-    readMode()
+    readToolApprovalMode()
       .then((value) => {
         if (cancelled || latestWrite.current !== 0 || value === null) return;
         setMode(value);
@@ -93,14 +74,14 @@ export const ToolApprovalRow: React.FC = () => {
     >
       <Select value={selected} onValueChange={handleChange} disabled={mode === null}>
         <SelectTrigger size={SETTINGS_SELECT_SIZE} className={SETTINGS_SELECT_ROW_TRIGGER_CLASS}>
-          <SelectValue placeholder={t(MODE_LABEL_KEYS.yolo)}>
-            {t(MODE_LABEL_KEYS[selected])}
+          <SelectValue placeholder={t(TOOL_APPROVAL_MODE_LABEL_KEYS.yolo)}>
+            {t(TOOL_APPROVAL_MODE_LABEL_KEYS[selected])}
           </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {TOOL_APPROVAL_MODES.map((value) => (
             <SelectItem key={value} value={value}>
-              {t(MODE_LABEL_KEYS[value])}
+              {t(TOOL_APPROVAL_MODE_LABEL_KEYS[value])}
             </SelectItem>
           ))}
         </SelectContent>

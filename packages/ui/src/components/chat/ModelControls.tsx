@@ -2,7 +2,7 @@ import { OPENCODE_TOOLS } from '@/lib/opencode/tools';
 import React from 'react';
 import { focusChatInput } from './composer/editor/dom';
 import { MobileModelButton } from './MobileModelButton';
-import { ToolApprovalSummary } from './ToolApprovalSummary';
+import { ToolApprovalChip } from './ToolApprovalChip';
 import type { ModelMetadata } from '@/types';
 import type { Agent } from '@/lib/opencode/model';
 import {
@@ -1663,10 +1663,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                         </div>
                     )}
 
-                    {}
-                    <ToolApprovalSummary />
-
-                    {}
                     {hasCustomPrompt && (
                         <div className="rounded-xl border border-border/40 bg-sidebar/30 px-2 py-1.5">
                             <div className="flex items-center justify-between">
@@ -2676,8 +2672,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                         </div>
                     )}
 
-                    <ToolApprovalSummary variant="inline" />
-
                     {hasCustomPrompt && (
                         <div className="flex items-center justify-between gap-3">
                             <span className="typography-meta text-muted-foreground/80">{t('chat.modelControls.customPrompt')}</span>
@@ -3099,6 +3093,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                     {renderModelSelector()}
                     {renderEffortSelector()}
                     {renderFastModeToggle()}
+                    {isReady && <ToolApprovalChip className={controlTextSize} />}
                     {inlineMobileSelection && renderVariantSelector()}
                     {!selection && !isAutoSelected && canSelectAgent && renderAgentSelector()}
                 </div>
