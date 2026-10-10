@@ -244,3 +244,116 @@ describe('skill search roots', () => {
     expect(found).toEqual([path.join('nested', 'deep', 'SKILL.md')]);
   });
 });
+
+describe('writeConfigKey', () => {
+  let dir;
+
+  beforeEach(() => {
+    dir = tempDir('omp-config-key-');
+  });
+
+  afterEach(() => {
+    restoreEnv();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const configPath = () => path.join(dir, 'config.yml');
+
+  it('rewrites only the key it owns, keeping comments and empty-mapping layout', async () => {
+    // A write that re-serializes the document costs the user every comment and
+    // the layout of every empty mapping — this is the guarantee that it does
+    // not.
+    const mod = await loadModule({ PI_CODING_AGENT_DIR: dir });
+    const before = [
+      'setupVersion: 2',
+      '# keep me',
+      'workspace:',
+      '  additionalDirectories:',
+      '    []',
+      'memories:',
+      '  {}',
+      'tools:',
+      '  approval: { shell: prompt }',
+      '',
+    ].join('\n');
+    fs.writeFileSync(configPath(), before, 'utf8');
+
+    mod.writeConfigKey(configPath(), ['tools', 'approvalMode'], 'always-ask');
+
+    expect(fs.readFileSync(configPath(), 'utf8')).toBe([
+      'setupVersion: 2',
+      '# keep me',
+      'workspace:',
+      '  additionalDirectories:',
+      '    []',
+      'memories:',
+      '  {}',
+      'tools:',
+      '  approval: { shell: prompt }',
+      '  approvalMode: always-ask',
+      '',
+    ].join('\n'));
+    expect(mod.readConfigFile(configPath()).tools.approval).toEqual({ shell: 'prompt' });
+  });
+
+  it('replaces an existing key in place and leaves the rest alone', async () => {
+    const mod = await loadModule({ PI_CODING_AGENT_DIR: dir });
+    fs.writeFileSync(configPath(), 'tools:\n  approvalMode: yolo\n  other: true\n', 'utf8');
+
+    mod.writeConfigKey(configPath(), ['tools', 'approvalMode'], 'write');
+
+    expect(mod.readConfigFile(configPath()).tools).toEqual({ approvalMode: 'write', other: true });
+  });
+
+  it('appends the parent block when the file has none', async () => {
+    const mod = await loadModule({ PI_CODING_AGENT_DIR: dir });
+    fs.writeFileSync(configPath(), 'setupVersion: 2\n', 'utf8');
+
+    mod.writeConfigKey(configPath(), ['providers', 'cacheRetention'], 'long');
+
+    expect(mod.readConfigFile(configPath())).toEqual({ setupVersion: 2, providers: { cacheRetention: 'long' } });
+  });
+
+  it('refuses a write that would land somewhere else, leaving the file untouched', async () => {
+    // `tools` as a sequence cannot take a nested key; the edit produces a
+    // document that does not parse, so nothing is written.
+    const mod = await loadModule({ PI_CODING_AGENT_DIR: dir });
+    const before = 'tools:\n  - read\n  - write\n';
+    fs.writeFileSync(configPath(), before, 'utf8');
+
+    expect(() => mod.writeConfigKey(configPath(), ['tools', 'approvalMode'], 'yolo')).toThrow();
+    expect(fs.readFileSync(configPath(), 'utf8')).toBe(before);
+    expect(fs.existsSync(`${configPath()}.openchamber.backup`)).toBe(false);
+  });
+
+  it('keeps a copy of the file before it changes it', async () => {
+    const mod = await loadModule({ PI_CODING_AGENT_DIR: dir });
+    const before = 'tools:\n  other: true\n';
+    fs.writeFileSync(configPath(), before, 'utf8');
+
+    mod.writeConfigKey(configPath(), ['tools', 'approvalMode'], 'yolo');
+
+    expect(fs.readFileSync(`${configPath()}.openchamber.backup`, 'utf8')).toBe(before);
+  });
+
+  it('removes a key, and the parent it empties, back to the original text', async () => {
+    const mod = await loadModule({ PI_CODING_AGENT_DIR: dir });
+    const before = 'setupVersion: 2\n# keep me\n';
+    fs.writeFileSync(configPath(), before, 'utf8');
+    mod.writeConfigKey(configPath(), ['tools', 'approvalMode'], 'yolo');
+    expect(mod.readConfigFile(configPath()).tools).toEqual({ approvalMode: 'yolo' });
+
+    mod.writeConfigKey(configPath(), ['tools', 'approvalMode'], null);
+
+    expect(fs.readFileSync(configPath(), 'utf8')).toBe(before);
+  });
+
+  it('keeps a parent that still has other keys when one is removed', async () => {
+    const mod = await loadModule({ PI_CODING_AGENT_DIR: dir });
+    fs.writeFileSync(configPath(), 'tools:\n  approvalMode: yolo\n  other: true\n', 'utf8');
+
+    mod.writeConfigKey(configPath(), ['tools', 'approvalMode'], null);
+
+    expect(fs.readFileSync(configPath(), 'utf8')).toBe('tools:\n  other: true\n');
+  });
+});

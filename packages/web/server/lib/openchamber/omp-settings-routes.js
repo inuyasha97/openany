@@ -5,7 +5,7 @@ import {
   getUserConfigPath,
   readConfigFile as defaultReadConfigFile,
   isPlainObject,
-  writeConfig as defaultWriteConfig,
+  writeConfigKey as defaultWriteConfigKey,
 } from './agent-config-files.js';
 
 /**
@@ -51,7 +51,7 @@ const TOOL_APPROVAL_DEFAULT = 'yolo';
 export const registerOmpSettingsRoutes = (app, dependencies = {}) => {
   const {
     readConfigFile = defaultReadConfigFile,
-    writeConfig = defaultWriteConfig,
+    writeConfigKey = defaultWriteConfigKey,
   } = dependencies;
 
   /**
@@ -92,9 +92,8 @@ export const registerOmpSettingsRoutes = (app, dependencies = {}) => {
         throw new Error('the providers section is not a mapping');
       }
 
-      const providers = config.providers ?? {};
       const previous = readRetention();
-      writeConfig({ ...config, providers: { ...providers, cacheRetention: parsed.data } }, configFile);
+      writeConfigKey(configFile, ['providers', 'cacheRetention'], parsed.data);
 
       res.json({ retention: parsed.data, changed: previous !== parsed.data });
     } catch (error) {
@@ -146,9 +145,8 @@ export const registerOmpSettingsRoutes = (app, dependencies = {}) => {
         throw new Error('the tools section is not a mapping');
       }
 
-      const tools = config.tools ?? {};
       const previous = readToolApproval();
-      writeConfig({ ...config, tools: { ...tools, approvalMode: parsed.data } }, configFile);
+      writeConfigKey(configFile, ['tools', 'approvalMode'], parsed.data);
 
       res.json({ mode: parsed.data, changed: previous !== parsed.data });
     } catch (error) {

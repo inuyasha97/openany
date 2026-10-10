@@ -159,7 +159,6 @@ export const createFeatureRoutesRuntime = (dependencies) => {
     // home: they live in the agent dir's own `config.yml`.
     registerOmpSettingsRoutes(app, {
       readConfigFile,
-      writeConfig,
     });
 
     registerConfigSnippetRoutes(app, { resolveOptionalProjectDirectory });

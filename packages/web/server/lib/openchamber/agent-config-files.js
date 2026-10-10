@@ -460,6 +460,119 @@ function writeConfig(config, filePath = CONFIG_FILE) {
   }
 }
 
+/**
+ * The indentation of a YAML line, or null when the line is blank or a comment
+ * (neither belongs to a block, so neither ends one).
+ */
+function lineIndent(line) {
+  if (typeof line !== 'string') return null;
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith('#')) return null;
+  return line.length - line.trimStart().length;
+}
+
+/** A scalar as YAML: bare unless the text needs quoting. */
+function serializeScalar(value) {
+  return /^[A-Za-z0-9_.\-/]+$/.test(value) ? value : JSON.stringify(value);
+}
+
+/** `key` of a block line (`  key: value`) with no indentation applied. */
+function blockKeyOf(line) {
+  const match = /^\s*([^\s:#][^:]*?)\s*:(\s|$)/.exec(line);
+  return match ? match[1] : null;
+}
+
+/** The value at `path` in a parsed document, or undefined. */
+function readPath(document, path) {
+  let current = document;
+  for (const key of path) {
+    if (!isPlainObject(current)) return undefined;
+    current = current[key];
+  }
+  return current;
+}
+
+/**
+ * Write one scalar key into a YAML settings file by editing its text.
+ *
+ * `writeConfig` re-serializes the parsed document, so comments die and empty
+ * mappings lose their layout — a settings row that owns a single key should not
+ * cost the user the rest of their file. This finds the key's own line and
+ * rewrites only it, inserts the key under its parent block when missing, or
+ * appends the block when the parent is absent.
+ *
+ * The edited text is parsed back and the key checked before anything is
+ * written: an edit that landed on the wrong line is refused rather than saved.
+ * `null` removes the key's line.
+ */
+function writeConfigKey(filePath, keyPath, value) {
+  const existed = fs.existsSync(filePath);
+  const original = existed ? fs.readFileSync(filePath, 'utf8') : '';
+  if (existed && original.trim()) {
+    // Same defense as `writeConfig`: never rewrite a file we cannot parse.
+    parseConfigObject(original, filePath);
+  }
+
+  const endsWithNewline = original.endsWith('\n');
+  const lines = (endsWithNewline ? original.slice(0, -1) : original).split('\n');
+  const leafIndent = (keyPath.length - 1) * 2;
+  const leafLine = (key) => `${' '.repeat(leafIndent)}${key}: ${serializeScalar(value)}`;
+  const leaf = keyPath[keyPath.length - 1];
+
+  let edited;
+  if (keyPath.length === 1) {
+    const at = lines.findIndex((line) => lineIndent(line) === 0 && blockKeyOf(line) === leaf);
+    edited = at >= 0
+      ? lines.map((line, index) => (index === at ? (value === null ? null : leafLine(leaf)) : line))
+      : [...lines, ...(value === null ? [] : [leafLine(leaf)])];
+  } else {
+    const parent = keyPath[0];
+    const parentAt = lines.findIndex((line) => lineIndent(line) === 0 && blockKeyOf(line) === parent);
+    if (parentAt >= 0) {
+      let end = lines.length;
+      for (let index = parentAt + 1; index < lines.length; index += 1) {
+        const indent = lineIndent(lines[index]);
+        if (indent === 0) { end = index; break; }
+      }
+      const at = lines.findIndex((line, index) => index > parentAt && index < end && lineIndent(line) === leafIndent && blockKeyOf(line) === leaf);
+      if (at >= 0) {
+        // Removing the block's only key would leave an empty parent behind;
+        // drop it so the file reads as it did before the key existed.
+        const dropParent = value === null
+          && lines.slice(parentAt + 1, end).every((line, index) => parentAt + 1 + index === at || lineIndent(line) === null);
+        edited = lines
+          .map((line, index) => (index === at ? (value === null ? null : leafLine(leaf)) : line))
+          .filter((line, index) => !(dropParent && index === parentAt));
+      } else {
+        edited = [
+          ...lines.slice(0, end),
+          ...(value === null ? [] : [leafLine(leaf)]),
+          ...lines.slice(end),
+        ];
+      }
+    } else {
+      edited = value === null
+        ? lines
+        : [...lines, `${parent}:`, leafLine(leaf)];
+    }
+  }
+
+  const text = edited.filter((line) => line !== null).join('\n') + (endsWithNewline ? '\n' : '');
+  if (value !== null || keyPath.length === 1) {
+    const parsed = parseConfigObject(text, filePath) ?? {};
+    if (readPath(parsed, keyPath) !== value) {
+      throw new Error(`Refusing to write: ${keyPath.join('.')} did not land as expected`);
+    }
+  }
+
+  if (existed) {
+    const backupFile = `${filePath}.openchamber.backup`;
+    fs.copyFileSync(filePath, backupFile);
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, text, 'utf8');
+}
+
 function getLayerError(layers, filePath) {
   if (!filePath || !Array.isArray(layers?.layerErrors)) {
     return null;
@@ -810,6 +923,7 @@ export {
   readConfig,
   getConfigForPath,
   writeConfig,
+  writeConfigKey,
   lookupSectionEntry,
   getJsonEntrySource,
   getJsonWriteTarget,

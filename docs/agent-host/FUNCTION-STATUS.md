@@ -421,27 +421,38 @@ control away is not mine to decide.
 `config.yml` and are reachable through `omp config set`.
 
 
-### I.14 Writing an OMP-native setting rewrites the user's config.yml — OPEN
-`GET|PUT /api/config/cache-retention` and the new `/api/config/tool-approval`
-both read the file, change one key and write the whole document back through
-`writeConfig`, which serializes the parsed object. Anything the parse does not
-carry survives only as data, not as text:
+### I.14 Writing an OMP-native setting rewrote the user's config.yml — FIXED
+`GET|PUT /api/config/cache-retention` and `/api/config/tool-approval` read the
+file, changed one key and wrote the whole parsed document back through
+`writeConfig`, which serializes the object. So a settings row cost the user
+whatever a parse does not carry: comments, the layout of empty mappings
+(`memories:\n  {}` became `memories: {}`), and their key order. Measured on this
+machine: the pristine file was **855 bytes**; after one write and removing the key
+again the same settings measured **842**.
 
-- comments are gone;
-- empty mappings are collapsed (`memories:\n  {}` becomes `memories: {}`);
-- key order is the parser's, not the user's.
+Fix: `writeConfigKey(filePath, keyPath, value)` in `agent-config-files.js` edits
+the **text**. It finds the key's own line and rewrites only that line, inserts
+the key under its parent block when missing, appends the block when the parent is
+absent, and — for `null` — removes the key plus a parent it empties. It parses
+the edited text back and checks the key before writing anything, so an edit that
+landed elsewhere (a `tools` that is a sequence, say) throws with the file
+untouched and no backup left behind. Both routes now use it instead of
+`writeConfig`.
 
-Measured on this machine's `config.yml`: the pristine file was **855 bytes**;
-after one settings write and removing the key again the same content measured
-**842**. It was restored by hand to 854 bytes — every key and value identical,
-one whitespace byte apart — and `omp config get setupVersion` still answers 2,
-so the loss is formatting, not settings. `writeConfig` does keep a
-`<file>.openchamber.backup`, but it holds the state from *before* the last write,
-which is why it could not undo the earlier collapse.
+Verified on the real file: a write grew it 854 → 888 bytes — exactly the two
+added lines — with `memories:\n  {}` and `additionalDirectories:\n    []` still
+in their original layout, and removing the key returned it to **854 bytes and
+the identical text**. `omp config get setupVersion` answers 2 throughout.
+Covered by five tests: whole-text preservation on insert, in-place replacement,
+block append, refusal with the file untouched, backup, and removal restoring the
+original text (including a parent that still holds other keys).
 
-Not a correctness bug for OMP (it parses the result), but it is a real cost for a
-hand-maintained file. The fix is a write that touches only the key it owns —
-the same shape the docs already describe for that helper's refusal cases.
+Found while wiring this: the failure that proves the point — passing a key the
+wiring had not imported crashed the server at startup, and **no test loads
+`feature-routes-runtime.js`** (only booting the server exercises it), while
+`oxlint` on that file does not check for undefined identifiers. The import was
+reverted; the wiring remains covered only by a real boot.
+
 
 ### I.11 The `@` picker was promised and never opened — FIXED
 `/` opens the command palette and `#` opens the snippet picker (both verified by
