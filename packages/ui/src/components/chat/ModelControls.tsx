@@ -1,4 +1,3 @@
-import { OPENCODE_TOOLS } from '@/lib/opencode/tools';
 import React from 'react';
 import { focusChatInput } from './composer/editor/dom';
 import { MobileModelButton } from './MobileModelButton';
