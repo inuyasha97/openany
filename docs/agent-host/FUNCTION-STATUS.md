@@ -202,7 +202,7 @@ the repackaged app, so these exercise the real main-process handlers.
 |---|---|---|
 | macOS arm64 + Intel dmg/zip + merged manifest | `PASS` | CI produced both arches and a 690-byte merged `latest-mac.yml`. |
 | Windows NSIS installer + `latest.yml` | `PASS` (build only) | `windows-2022` job green; manifest size matches the asset. Never run on Windows. |
-| Linux AppImage | `PASS` (CI green) | The payload check rejected `onnxruntime-node`'s `bin/napi-v3/linux/arm64/…` binding as an x64 mismatch: the rule only knew darwin/win32/windows and the dashed `linux-arm64` form. It now judges a `.node` by any platform or architecture segment that is not the target's (local test 3 pass/2 fail before, 5/5 after). The fork's runs of **openany-v0.1.2** then completed **success** (OpenAny Release at 05:26 and 05:40, Docs Source at 05:57, against one earlier failure at 05:20). |
+| Linux AppImage | `PASS` (CI green) | The payload check rejected `onnxruntime-node`'s `bin/napi-v3/linux/arm64/…` binding as an x64 mismatch: the rule only knew darwin/win32/windows and the dashed `linux-arm64` form. It now judges a `.node` by any platform or architecture segment that is not the target's (local test 3 pass/2 fail before, 5/5 after). The fork's runs of **openany-v0.1.2** then completed **success** (OpenAny Release at 05:26 and 05:40, Docs Source at 05:57, against one earlier failure at 05:20). The Linux-specific code paths were also run here — `bun run test:linux-desktop` covers the autostart unit, the app-discovery smoke and the path-open smoke, all green, including the Linux-only answer "Opening projects in a specific app is not supported on Linux yet" — but **the app itself has never been run on Linux**: no container runtime is available on this machine, so the packaged binary is unexercised there. |
 | Unsigned installer opens on a fresh machine | `FAIL` | The packaged bundle is ad-hoc signed — `codesign -dv` reports `flags=0x10002(adhoc,runtime)`, `Signature=adhoc`, `TeamIdentifier=not set`, and `codesign --verify --deep --strict` passes — but **Gatekeeper rejects it**: `spctl -a -t exec -vv OpenAny.app` answers `rejected` both before and after adding the quarantine attribute a download sets. Launched from a home-directory copy while quarantined, **no process started**; clearing the attribute and retrying also started nothing, and the probe copy was then gone from disk, so that second observation is void. Not a code defect: signing and notarization need an Apple Developer identity, and until then a fresh machine needs the user's explicit allow. |
 
 ## H. Providers, models, MCP
@@ -388,7 +388,7 @@ narrow rail. Measured across the viewport instead of the composer — rail width
 went from `[28, 44]` to `[44]` on a click. The control works; the earlier probe
 watched the wrong element.
 
-### I.10 Permissions: the UI writes keys OMP does not read — PARTLY FIXED
+### I.10 Permissions: the UI described a policy OMP ignores — FIXED
 The approval gate itself works (§B: with OMP told to ask, the dock appears,
 Approve runs the tool, Deny leaves it unexecuted). What was missing was any way
 to tell OMP to ask: nothing in the server or the UI wrote `tools.approvalMode`,
@@ -408,17 +408,33 @@ Cache Retention. Verified: the row reads OMP's default, writes the chosen mode
 into `config.yml`, and setting it to `always-ask` makes a shell prompt raise the
 approval dock that previously stayed silent.
 
-**Still open:** the agent-level editor and the model picker's per-tool summary
-both still present OpenCode's rule vocabulary. They are the only surfaces left
-that describe a permission state OMP does not honour, and the shape of the fix
-is the maintainer's call — map them onto OMP's `tools.approval` / per-agent
-`tools` list, or remove them. Nothing was removed here: taking a user-visible
-control away is not mine to decide.
+**The dead surfaces are gone.** Settings → Agents carried a per-tool permission
+editor (inherit / allow / ask / deny per tool) built on OpenCode 2's ordered
+`{ action, resource, effect }` rules, and the model picker rendered the same
+rules per tool (edit / shell / webfetch). OMP reads neither those rules nor a
+`mode` field from an agent's markdown, so both described a policy the runtime
+never applies — the dangerous kind of wrong, because a user could believe they
+had restricted a tool. The editor, its model, its test, the model picker's two
+permission cards, 26 locale keys per dictionary, the search entry and the
+documentation that described them are all removed; the picker now shows OMP's
+real answer, the tool approval mode, read from the route the settings row
+writes.
 
-**What OMP reads** (`@oh-my-pi/pi-coding-agent`, `src/config/settings-schema.ts`):
+What OMP reads (`@oh-my-pi/pi-coding-agent`, `src/config/settings-schema.ts`):
 `tools.approvalMode` (`always-ask` | `write` | `yolo`, default `yolo`) and
-`tools.approval` (a per-tool record: `allow` / `prompt` / `deny`). Both live in
-`config.yml` and are reachable through `omp config set`.
+`tools.approval` (a per-tool record: `allow` / `prompt` / `deny`). The mode has
+a real control; `tools.approval` is deliberately not surfaced yet.
+
+One loose end from the same edit: the replacement summary
+(`components/chat/ToolApprovalSummary.tsx`) took the place the dead cards held —
+inside the agent panel and the agent tooltip — and OMP's runtime never renders
+those, because `agentSelection` is false and the agent picker is absent by
+design. So the picker no longer states anything false, but it also does not yet
+show the mode; the honest value lives in Settings → Sessions → Tool approval,
+which is where the control is. Moving the summary next to the composer's
+model/effort/fast-mode row is a small follow-up, not a defect.
+
+
 
 
 ### I.15 The OMP host handed to the server features was the wrong object — FIXED
