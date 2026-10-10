@@ -9,11 +9,13 @@ const createRouteRegistry = () => {
 
   return {
     app: {
-      get(routePath, handler) {
-        routes.set(`GET ${routePath}`, handler);
+      get(routePath, ...handlers) {
+        routes.set(`GET ${routePath}`, handlers.at(-1));
       },
-      put(routePath, handler) {
-        routes.set(`PUT ${routePath}`, handler);
+      // `...handlers` because the real routes attach a body parser per route;
+      // the last one is the handler under test.
+      put(routePath, ...handlers) {
+        routes.set(`PUT ${routePath}`, handlers.at(-1));
       },
     },
     getRoute(method, routePath) {
@@ -248,5 +250,175 @@ describe('omp settings routes', () => {
     );
     expect(putRes.statusCode).toBe(500);
     expect(putRes.body).toEqual({ error: 'Failed to save cache retention' });
+  });
+});
+
+describe('tool approval route', () => {
+  let agentDir;
+  let configYml;
+
+  beforeEach(() => {
+    agentDir = createTempAgentDir();
+    configYml = path.join(agentDir, 'config.yml');
+    for (const key of ENV_KEYS) delete process.env[key];
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  it("reads and writes OMP's tools.approvalMode", async () => {
+    const { getRoute, readConfigFile } = await mount();
+
+    const putRes = createMockResponse();
+    await getRoute('PUT', '/api/config/tool-approval')(createRequest({ body: { mode: 'always-ask' } }), putRes);
+
+    expect(putRes.statusCode).toBe(200);
+    expect(putRes.body).toEqual({ mode: 'always-ask', changed: true });
+    expect(readConfigFile(configYml).tools.approvalMode).toBe('always-ask');
+
+    const getRes = createMockResponse();
+    await getRoute('GET', '/api/config/tool-approval')(createRequest(), getRes);
+    expect(getRes.body).toEqual({ mode: 'always-ask' });
+  });
+
+  it("answers OMP's own default (yolo) when the key is absent", async () => {
+    const { getRoute } = await mount();
+
+    const res = createMockResponse();
+    await getRoute('GET', '/api/config/tool-approval')(createRequest(), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ mode: 'yolo' });
+  });
+
+  it('reports changed:false when the mode is already the stored one', async () => {
+    const { getRoute } = await mount();
+    await getRoute('PUT', '/api/config/tool-approval')(createRequest({ body: { mode: 'write' } }), createMockResponse());
+
+    const again = createMockResponse();
+    await getRoute('PUT', '/api/config/tool-approval')(createRequest({ body: { mode: 'write' } }), again);
+
+    expect(again.body).toEqual({ mode: 'write', changed: false });
+  });
+
+  it('keeps every other key: per-tool overrides, other tools keys and the rest of the document', async () => {
+    // A mode write that dropped `tools.approval` would silently auto-approve a
+    // tool the user had pinned to `prompt`.
+    const { getRoute, writeConfig, readConfigFile } = await mount();
+    writeConfig({
+      model: 'anthropic/claude',
+      tools: { approval: { shell: 'prompt' }, other: true },
+    }, configYml);
+
+    const res = createMockResponse();
+    await getRoute('PUT', '/api/config/tool-approval')(createRequest({ body: { mode: 'always-ask' } }), res);
+
+    expect(res.statusCode).toBe(200);
+    const after = readConfigFile(configYml);
+    expect(after.tools).toEqual({ approval: { shell: 'prompt' }, other: true, approvalMode: 'always-ask' });
+    expect(after.model).toBe('anthropic/claude');
+  });
+
+  it('rejects an unknown mode without touching the file', async () => {
+    const { getRoute, writeConfig, readConfigFile } = await mount();
+    writeConfig({ tools: { approvalMode: 'write' } }, configYml);
+
+    for (const body of [undefined, {}, { mode: 'sometimes' }, { mode: 5 }]) {
+      const res = createMockResponse();
+      await getRoute('PUT', '/api/config/tool-approval')(createRequest({ body }), res);
+      expect(res.statusCode).toBe(400);
+    }
+    expect(readConfigFile(configYml).tools.approvalMode).toBe('write');
+  });
+
+  it('refuses a tools section that is not a mapping rather than clobbering it', async () => {
+    const { getRoute, writeConfig, readConfigFile } = await mount();
+    writeConfig({ tools: ['not', 'a', 'map'] }, configYml);
+
+    const res = createMockResponse();
+    await getRoute('PUT', '/api/config/tool-approval')(createRequest({ body: { mode: 'yolo' } }), res);
+
+    expect(res.statusCode).toBe(500);
+    expect(readConfigFile(configYml).tools).toEqual(['not', 'a', 'map']);
+  });
+});
+
+/**
+ * The handler tests above call the route functions directly, so they never see
+ * the request pipeline. Mounted on a real express app, a PUT without its own
+ * body parser reads `req.body === undefined` and answers 400 for a body the
+ * client sent — which is exactly what happened before the parser was attached.
+ */
+describe('the routes over real HTTP', () => {
+  let agentDir;
+  let configYml;
+  let server;
+  let base;
+
+  beforeEach(async () => {
+    agentDir = createTempAgentDir();
+    configYml = path.join(agentDir, 'config.yml');
+    for (const key of ENV_KEYS) delete process.env[key];
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+
+    vi.resetModules();
+    const { registerOmpSettingsRoutes } = await import('./omp-settings-routes.js');
+    const express = (await import('express')).default;
+    const app = express();
+    registerOmpSettingsRoutes(app);
+    server = app.listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    base = `http://127.0.0.1:${server.address().port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  it('accepts a JSON body and writes the mode OMP reads', async () => {
+    const response = await fetch(`${base}/api/config/tool-approval`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'always-ask' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ mode: 'always-ask', changed: true });
+    const { readConfigFile } = await import('./agent-config-files.js');
+    expect(readConfigFile(configYml).tools.approvalMode).toBe('always-ask');
+  });
+
+  it('accepts a JSON body and writes the retention OMP reads', async () => {
+    const response = await fetch(`${base}/api/config/cache-retention`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ retention: 'long' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ retention: 'long', changed: true });
+    const { readConfigFile } = await import('./agent-config-files.js');
+    expect(readConfigFile(configYml).providers.cacheRetention).toBe('long');
+  });
+
+  it('still refuses an invalid mode over HTTP', async () => {
+    const response = await fetch(`${base}/api/config/tool-approval`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'sometimes' }),
+    });
+
+    expect(response.status).toBe(400);
   });
 });

@@ -388,46 +388,60 @@ narrow rail. Measured across the viewport instead of the composer — rail width
 went from `[28, 44]` to `[44]` on a click. The control works; the earlier probe
 watched the wrong element.
 
-### I.10 Permissions: the UI writes keys OMP does not read — ONE GAP
-The approval gate itself works: with `tools.approvalMode: always-ask` the dock
-appears, **Approve** runs the tool, **Deny** leaves it unexecuted, per call. The
-gap is that **no UI surface writes that key**, and the one that looks like it
-should writes the wrong vocabulary.
+### I.10 Permissions: the UI writes keys OMP does not read — PARTLY FIXED
+The approval gate itself works (§B: with OMP told to ask, the dock appears,
+Approve runs the tool, Deny leaves it unexecuted). What was missing was any way
+to tell OMP to ask: nothing in the server or the UI wrote `tools.approvalMode`,
+and the one control that looked like it should — Settings → Agents → Tool
+Permissions — saved `permissions: [{action, resource, effect}]` plus
+`mode: primary|subagent` into the agent's markdown frontmatter, none of which
+OMP's agent parser reads (`src/discovery/helpers.ts: parseAgentFields` reads
+name, description, tools, spawns, output, thinkingLevel, model, blocking,
+readSummarize, prewalk, advisor).
 
-**What OMP actually reads** (`@oh-my-pi/pi-coding-agent`,
-`src/config/settings-schema.ts`):
+**Now real:** `GET|PUT /api/config/tool-approval` reads and writes OMP's own
+`tools.approvalMode` (`always-ask | write | yolo`, OMP's default `yolo`),
+preserving every other key in the document and under `tools` — including
+`tools.approval`, the per-tool allow/prompt/deny half, which this route does not
+expose yet. Settings → Sessions carries it as a **Tool approval** select beside
+Cache Retention. Verified: the row reads OMP's default, writes the chosen mode
+into `config.yml`, and setting it to `always-ask` makes a shell prompt raise the
+approval dock that previously stayed silent.
 
-- `tools.approvalMode` — `always-ask` | `write` | `yolo`, **default `yolo`**
-  (auto-approves every tier; the reason an unprompted bash ran in earlier
-  attempts). `always-ask` auto-approves read-only tools and prompts for
-  write/exec.
-- `tools.approval` — a per-tool record: `allow` / `prompt` / `deny`.
+**Still open:** the agent-level editor and the model picker's per-tool summary
+both still present OpenCode's rule vocabulary. They are the only surfaces left
+that describe a permission state OMP does not honour, and the shape of the fix
+is the maintainer's call — map them onto OMP's `tools.approval` / per-agent
+`tools` list, or remove them. Nothing was removed here: taking a user-visible
+control away is not mine to decide.
 
-Both live in `config.yml` and are reachable through OMP's own
-`omp config set tools.approvalMode …`. **OpenChamber's Settings exposes
-neither** — the ~130 settings items enumerated on the Settings pages contain no
-approval control.
+**What OMP reads** (`@oh-my-pi/pi-coding-agent`, `src/config/settings-schema.ts`):
+`tools.approvalMode` (`always-ask` | `write` | `yolo`, default `yolo`) and
+`tools.approval` (a per-tool record: `allow` / `prompt` / `deny`). Both live in
+`config.yml` and are reachable through `omp config set`.
 
-**What the UI writes instead.** Settings → Agents → Tool Permissions saves
-OpenCode-v2 rules (`PATCH /api/config/agents/:name`), which land as
-`permissions: [{action, resource, effect}]` plus `mode: primary|subagent` in the
-agent's markdown frontmatter. OMP's agent parser
-(`src/discovery/helpers.ts: parseAgentFields`) reads `name`, `description`,
-`tools`, `spawns`, `output`, `thinkingLevel`/`thinking`, `model`, `blocking`,
-`readSummarize`, `prewalk`, `advisor` — **no `permissions`, no `mode`**. Its
-`schema`-adjacent reader on OpenChamber's side (`config-entity-routes.js:
-readGlobalPermissionRules`) looks for the v1 `tools`/`permission` and v2
-`permissions` keys in `config.yml`, which OMP's settings carry none of; the
-module's own documentation says `global` is "empty in practice".
 
-**Consequences.** The Tool Permissions editor is a control whose value OMP never
-applies to a session, and a custom agent written by that page has no `name` or
-`description`, so OMP's parser rejects it as an agent at all. `agentSelection` is
-also `false` ("OMP has no session agent to switch") and the prompt body carries
-no `agent` field (`omp-routes.js: promptBodySchema`), so the composer cannot pick
-a custom agent for a chat either. Anyone who wants the session to ask before a
-shell command must set `tools.approvalMode` themselves — the terminal command
-`omp config set` is the supported path.
+### I.14 Writing an OMP-native setting rewrites the user's config.yml — OPEN
+`GET|PUT /api/config/cache-retention` and the new `/api/config/tool-approval`
+both read the file, change one key and write the whole document back through
+`writeConfig`, which serializes the parsed object. Anything the parse does not
+carry survives only as data, not as text:
+
+- comments are gone;
+- empty mappings are collapsed (`memories:\n  {}` becomes `memories: {}`);
+- key order is the parser's, not the user's.
+
+Measured on this machine's `config.yml`: the pristine file was **855 bytes**;
+after one settings write and removing the key again the same content measured
+**842**. It was restored by hand to 854 bytes — every key and value identical,
+one whitespace byte apart — and `omp config get setupVersion` still answers 2,
+so the loss is formatting, not settings. `writeConfig` does keep a
+`<file>.openchamber.backup`, but it holds the state from *before* the last write,
+which is why it could not undo the earlier collapse.
+
+Not a correctness bug for OMP (it parses the result), but it is a real cost for a
+hand-maintained file. The fix is a write that touches only the key it owns —
+the same shape the docs already describe for that helper's refusal cases.
 
 ### I.11 The `@` picker was promised and never opened — FIXED
 `/` opens the command palette and `#` opens the snippet picker (both verified by

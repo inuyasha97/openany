@@ -448,6 +448,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['cache', 'prompt cache', 'retention', 'warming', 'keep alive', 'anthropic'],
   },
   {
+    id: 'sessions.tool-approval',
+    page: 'sessions',
+    titleKey: 'settings.openchamber.defaults.field.toolApproval',
+    descriptionKey: 'settings.openchamber.defaults.field.toolApprovalInfo',
+    keywords: ['approval', 'approve', 'permission', 'permissions', 'ask', 'yolo', 'auto-approve', 'bash', 'shell', 'exec', 'dangerous'],
+  },
+  {
     id: 'sessions.permission-default',
     page: 'sessions',
     titleKey: 'settings.sessions.permissions.defaultMode',

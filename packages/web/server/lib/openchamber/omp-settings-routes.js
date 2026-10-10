@@ -1,3 +1,4 @@
+import express from 'express';
 import { z } from 'zod';
 
 import {
@@ -6,6 +7,14 @@ import {
   isPlainObject,
   writeConfig as defaultWriteConfig,
 } from './agent-config-files.js';
+
+/**
+ * The body parser is attached per route: this family is registered without a
+ * global JSON parser (the generic proxy needs an unread request stream), so a
+ * PUT without one sees `req.body === undefined` and answers 400 for a valid
+ * body.
+ */
+const parseJsonBody = express.json({ limit: '64kb' });
 
 /**
  * `GET|PUT /api/config/cache-retention`.
@@ -31,6 +40,13 @@ const cacheRetentionSchema = z.enum(CACHE_RETENTION_VALUES);
 const CACHE_RETENTION_DEFAULT = 'auto';
 
 const ACCEPTED_VALUES = cacheRetentionSchema.options.join(', ');
+
+/** OMP's `tools.approvalMode` values, most cautious first. OMP's default is `yolo`. */
+export const TOOL_APPROVAL_MODES = ['always-ask', 'write', 'yolo'];
+
+const toolApprovalSchema = z.enum(TOOL_APPROVAL_MODES);
+
+const TOOL_APPROVAL_DEFAULT = 'yolo';
 
 export const registerOmpSettingsRoutes = (app, dependencies = {}) => {
   const {
@@ -62,7 +78,7 @@ export const registerOmpSettingsRoutes = (app, dependencies = {}) => {
     }
   });
 
-  app.put('/api/config/cache-retention', async (req, res) => {
+  app.put('/api/config/cache-retention', parseJsonBody, async (req, res) => {
     const parsed = cacheRetentionSchema.safeParse(req.body?.retention);
     if (!parsed.success) {
       res.status(400).json({ error: `retention must be one of: ${ACCEPTED_VALUES}` });
@@ -84,6 +100,60 @@ export const registerOmpSettingsRoutes = (app, dependencies = {}) => {
     } catch (error) {
       console.error('[API:PUT /api/config/cache-retention] Failed to save cache retention:', error);
       res.status(500).json({ error: 'Failed to save cache retention' });
+    }
+  });
+
+  /**
+   * `GET|PUT /api/config/tool-approval`.
+   *
+   * OMP's own policy for tool calls, `tools.approvalMode`: `always-ask`
+   * auto-approves read-only tools and prompts for write and exec ones, `write`
+   * auto-approves read and write, `yolo` auto-approves everything. OMP's
+   * default is `yolo`, which is why a session runs commands without asking
+   * until this is set.
+   *
+   * The other half of OMP's policy, `tools.approval` (per-tool
+   * allow/prompt/deny), is deliberately not touched here: this route reads and
+   * writes only the mode, and everything else under `tools` — and the rest of
+   * the document — is read back and written unchanged.
+   */
+  const readToolApproval = () => {
+    const config = readConfigFile(resolveConfigFile()) ?? {};
+    const stored = isPlainObject(config.tools) ? config.tools.approvalMode : undefined;
+    return toolApprovalSchema.safeParse(stored).success ? stored : TOOL_APPROVAL_DEFAULT;
+  };
+
+  app.get('/api/config/tool-approval', async (_req, res) => {
+    try {
+      res.json({ mode: readToolApproval() });
+    } catch (error) {
+      console.error('[API:GET /api/config/tool-approval] Failed to read tool approval:', error);
+      res.status(500).json({ error: 'Failed to read tool approval' });
+    }
+  });
+
+  app.put('/api/config/tool-approval', parseJsonBody, async (req, res) => {
+    const parsed = toolApprovalSchema.safeParse(req.body?.mode);
+    if (!parsed.success) {
+      res.status(400).json({ error: `mode must be one of: ${TOOL_APPROVAL_MODES.join(', ')}` });
+      return;
+    }
+
+    try {
+      const configFile = resolveConfigFile();
+      const config = readConfigFile(configFile) ?? {};
+      if (config.tools !== undefined && !isPlainObject(config.tools)) {
+        throw new Error('the tools section is not a mapping');
+      }
+
+      const tools = config.tools ?? {};
+      const previous = readToolApproval();
+      writeConfig({ ...config, tools: { ...tools, approvalMode: parsed.data } }, configFile);
+
+      res.json({ mode: parsed.data, changed: previous !== parsed.data });
+    } catch (error) {
+      console.error('[API:PUT /api/config/tool-approval] Failed to save tool approval:', error);
+      res.status(500).json({ error: 'Failed to save tool approval' });
     }
   });
 };
