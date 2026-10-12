@@ -510,8 +510,8 @@ The evidence trail is worth keeping for the next report: the app's own log is
 `%APPDATA%\OpenAny\logs\main.log`, where electron-log also holds the server's
 console, and the session file names the model each turn was pinned to.
 
-**Resolved on 2026-10-12.** The two runs that separate the layers, all with the
-binary the app ships (`omp/18.1.11`):
+**Resolved on 2026-10-12, then corrected the same day.** The two runs that
+separate the layers, all with the binary the app ships (`omp/18.1.11`):
 
 | Command | macOS arm64 | Windows x64 |
 |---|---|---|
@@ -519,10 +519,26 @@ binary the app ships (`omp/18.1.11`):
 | `omp -p --model "opencode-go/deepseek-v4-flash" "reply with OK"` | `OK` (4.7 s) | `Working…` then `Retry budget exhausted after 10 retries: The socket connection was closed unexpectedly`, nothing else |
 
 The model id is valid, the gateway answers, the binary is the same, and the
-difference is the machine: **that Windows install's `opencode-go` credential no
-longer works**, while whatever the default role uses still does. The chat fails
-because the session is pinned to `opencode-go`, and the app re-applies that model
-before every send, so the failure is total rather than occasional.
+difference is the machine.
+
+**The first explanation was wrong.** It said that install's credential for
+`opencode-go` had gone stale; the maintainer then renewed it —
+`omp.exe auth-broker login opencode-go` answered "Credentials saved to
+C:\Users\phonnt1\.omp\agent\agent.db" — and the same command failed with the
+same sentence. A fresh key rules the credential out. (`auth-broker status`
+answering "No auth-broker configured" is a different feature: a remote vault,
+not the credential store the login writes.)
+
+So the failing link is the path from that machine to the `opencode-go` endpoint
+specifically: the same binary answers on `-p` without a `--model` there, the
+same model answers from macOS, and only that pair fails. `NODE_TLS_REJECT_UNAUTHORIZED=0`
+is set in that machine's environment (not by this repo) and is present in the
+working run too, so it is a suspect worth clearing rather than the cause.
+
+What is left to establish, with the tool that names the request: run
+`$env:BUN_CONFIG_VERBOSE_FETCH="curl"` before the failing command, which makes
+OMP's own Bun fetch print the request it attempted, and the URL that dies
+identifies the host, the proxy or the interceptor in the way.
 
 Two things this exposed in the app, neither a cause:
 
