@@ -32,8 +32,14 @@
 
 const ASKABLE_METHODS = new Set(['confirm', 'select', 'input', 'editor'])
 
-/** Methods that are the model asking a question (a form), not a tool approval. */
-const FORM_METHODS = new Set(['select', 'editor'])
+/**
+ * Methods that are the model or the runtime asking a question (a form), not a
+ * tool approval. `input` belongs here: it is one line of text the user has to
+ * supply, and the case that forced the distinction is the provider login's
+ * "Paste your OpenCode Go API key" prompt. Approve/Deny could never answer it,
+ * so the flow waited out its whole timeout with nothing to type into.
+ */
+const FORM_METHODS = new Set(['select', 'editor', 'input'])
 
 /** The one field key a projected form carries; the reply reads it back. */
 const OMP_FORM_FIELD_KEY = 'value'
@@ -49,6 +55,18 @@ const toFormField = (frame) => {
       title: frame.title,
       ...(typeof frame.prefill === 'string' && frame.prefill ? { default: frame.prefill } : {}),
     }
+  }
+  if (frame.method === 'input') {
+    // OMP's `input` is one line of text with its own placeholder, and the login
+    // that asks for a pasted key is the case this exists for. Built in two
+    // steps so the absent placeholder stays absent rather than an empty spread.
+    const field = {
+      key: OMP_FORM_FIELD_KEY,
+      type: 'string',
+      title: frame.title,
+    }
+    if (typeof frame.placeholder === 'string' && frame.placeholder) field.placeholder = frame.placeholder
+    return field
   }
   const options = Array.isArray(frame.options) ? frame.options : []
   const details = Array.isArray(frame.optionDetails) ? frame.optionDetails : []
@@ -70,13 +88,10 @@ const toFormRequest = (sessionId, frame) => ({
   fields: [toFormField(frame)],
 })
 
-/** The `PermissionRequest` for an approval frame (`confirm`/`input`). */
+/** The `PermissionRequest` for a tool approval; `confirm` is the only one. */
 const toPermissionRequest = (sessionId, frame) => {
-  if (frame.method === 'confirm') {
-    const resource = typeof frame.message === 'string' && frame.message ? frame.message : frame.title
-    return { id: frame.id, sessionID: sessionId, action: 'tool', resources: [resource], message: frame.title }
-  }
-  return { id: frame.id, sessionID: sessionId, action: 'input', resources: [], message: frame.title }
+  const resource = typeof frame.message === 'string' && frame.message ? frame.message : frame.title
+  return { id: frame.id, sessionID: sessionId, action: 'tool', resources: [resource], message: frame.title }
 }
 
 /** The response frame an answered approval sends back to OMP. */

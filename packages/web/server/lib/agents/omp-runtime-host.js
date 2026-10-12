@@ -259,6 +259,15 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     async replyForm(id, requestId, value) {
       const frame = approvals.resolveForm(id, requestId, value);
       if (!frame) return false;
+      // A login's form is the code prompt, and it is answered on the login's own
+      // process rather than a session's. Without this branch the reply reaches
+      // no process: `sendToSession` looks up a session that never existed, and
+      // the login waits out its whole timeout with the code in hand.
+      const login = logins.get(id);
+      if (login) {
+        login.reply(frame);
+        return true;
+      }
       await runtime.sendToSession(id, frame);
       return true;
     },
@@ -266,6 +275,11 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     async cancelForm(id, requestId) {
       const frame = approvals.cancelForm(id, requestId);
       if (!frame) return false;
+      const login = logins.get(id);
+      if (login) {
+        login.reply(frame);
+        return true;
+      }
       await runtime.sendToSession(id, frame);
       return true;
     },

@@ -424,6 +424,35 @@ describe('createOmpRuntimeHost', () => {
     runtime.settleLogin({ providerId: 'anthropic' });
   });
 
+  it('answers the login\'s code prompt on the login process', async () => {
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
+
+    const pending = host.login('opencode-go');
+    runtime.emitLoginFrame({
+      type: 'extension_ui_request',
+      id: 'ui_1',
+      method: 'open_url',
+      url: 'https://opencode.ai/auth',
+    });
+    const started = await pending;
+
+    // OMP asks for the pasted key while the flow is still open.
+    runtime.emitLoginFrame({
+      type: 'extension_ui_request',
+      id: 'ui_2',
+      method: 'input',
+      title: 'Paste your OpenCode Go API key',
+      placeholder: 'sk-...',
+    });
+
+    expect((await host.listForms(started.loginId)).map((form) => form.id)).toEqual(['ui_2']);
+    expect(await host.replyForm(started.loginId, 'ui_2', 'sk-1234')).toBe(true);
+    // The reply goes to the login's own stdin: no session carries that id.
+    expect(runtime.loginReplies).toEqual([{ type: 'extension_ui_response', id: 'ui_2', value: 'sk-1234' }]);
+    runtime.settleLogin({ providerId: 'opencode-go' });
+  });
+
   it('returns a completed login without a URL', async () => {
     const { adapter, runtime } = createFakeAdapter();
     const host = createOmpRuntimeHost({ adapter, broadcast: () => {} });
@@ -444,7 +473,7 @@ describe('createOmpRuntimeHost', () => {
     await expect(pending).rejects.toThrow('Unknown OAuth provider: nope');
   });
 
-  it('maps a login input prompt to a permission and answers it on the login process', async () => {
+  it('broadcasts a login input prompt as a form on the login id', async () => {
     const frames = [];
     const { adapter, runtime } = createFakeAdapter();
     const host = createOmpRuntimeHost({ adapter, broadcast: (frame) => frames.push(frame) });
@@ -454,15 +483,15 @@ describe('createOmpRuntimeHost', () => {
     const started = await pending;
     expect(started.loginId).toBe('omp-login-1');
 
-    runtime.emitLoginFrame({ type: 'extension_ui_request', id: 'ui_2', method: 'input', title: 'Paste the authorization code' });
-    const asked = frames.find((frame) => frame.properties.events[0]?.type === 'permission.asked');
-    expect(asked.properties.sessionID).toBe('omp-login-1');
-    expect(asked.properties.events[0].properties).toMatchObject({ id: 'ui_2', sessionID: 'omp-login-1', action: 'input' });
-
-    expect(await host.replyPermission('omp-login-1', 'ui_2', 'once', 'the-code')).toBe(true);
-    expect(runtime.loginReplies).toEqual([{ type: 'extension_ui_response', id: 'ui_2', value: 'the-code' }]);
-    // The ask is settled, not tied to a session process.
-    expect(runtime.sent).toEqual([]);
+    runtime.emitLoginFrame({ type: 'extension_ui_request', id: 'ui_2', method: 'input', title: 'Paste the authorization code', placeholder: 'code' });
+    const created = frames.find((frame) => frame.properties.events[0]?.type === 'form.created');
+    expect(created.properties.sessionID).toBe('omp-login-1');
+    expect(created.properties.events[0].properties.form).toMatchObject({
+      id: 'ui_2',
+      sessionID: 'omp-login-1',
+      title: 'Paste the authorization code',
+      fields: [{ key: 'value', type: 'string', placeholder: 'code' }],
+    });
 
     runtime.settleLogin({ providerId: 'anthropic' });
   });

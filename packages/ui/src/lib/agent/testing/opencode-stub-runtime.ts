@@ -119,6 +119,7 @@ export const createOpenCodeStubRuntime = (id = "omp"): AgentRuntime => ({
   replyForm: (sessionID, formID, answer, directory) => delegate("replyForm", [sessionID, formID, answer, directory]),
   cancelForm: (sessionID, formID, directory) => delegate("cancelForm", [sessionID, formID, directory]),
   listPendingForms: (options) => delegate("listPendingForms", [options]),
+  listFormsFor: (id) => delegate("listFormsFor", [id]),
   stageRevert: (sessionId, messageId, options) => delegate("stageRevert", [sessionId, messageId, options]),
   commitRevert: (sessionId, directory) => delegate("commitRevert", [sessionId, directory]),
   clearRevert: (sessionId, directory) => delegate("clearRevert", [sessionId, directory]),

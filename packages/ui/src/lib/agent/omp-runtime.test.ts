@@ -343,6 +343,16 @@ describe("OmpRuntimeClient", () => {
     })
   })
 
+  test("reads a login's pending forms by its own id", async () => {
+    const form = { id: "ui_2", sessionID: "omp-login-1", title: "Paste your OpenCode Go API key", fields: [{ key: "value", type: "string", placeholder: "sk-..." }] }
+    const { client, calls } = makeClient({
+      "GET /api/agents/omp/sessions/omp-login-1/forms": { body: { forms: [form] } },
+    })
+
+    expect(await client.listFormsFor("omp-login-1")).toEqual([form])
+    expect(calls[0]).toMatchObject({ url: "/api/agents/omp/sessions/omp-login-1/forms" })
+  })
+
   test("surfaces an HTTP failure instead of an empty result", async () => {
     const { client } = makeClient({})
     await expect(client.listSessions()).rejects.toThrow("OMP request failed: 404")

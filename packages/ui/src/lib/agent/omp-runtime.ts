@@ -716,6 +716,13 @@ export class OmpRuntimeClient implements AgentRuntime {
   // server projects as forms. A reply carries every answer at once; a cancel
   // tells OMP the question was dismissed so the turn does not stall.
 
+  async listFormsFor(id: string): Promise<FormInfo[]> {
+    const response = await this.fetchImpl(`${this.basePath}/sessions/${encodeURIComponent(id)}/forms`)
+    // SAFETY: the server projects these from OMP's askable frames; the body is
+    // trusted JSON from OpenChamber's own server.
+    return (await readJson(response, formsSchema)).forms as unknown as FormInfo[]
+  }
+
   async listPendingForms(options?: PendingRequestListOptions): Promise<FormInfo[]> {
     const sessions = await this.fetchSessions()
     const directories = options?.directories?.filter((value): value is string => Boolean(value))

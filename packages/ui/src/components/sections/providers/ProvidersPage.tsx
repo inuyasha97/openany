@@ -19,10 +19,14 @@ import {
 import { useSettingsDirectory } from '@/hooks/useSettingsDirectory';
 import { useUIStore } from '@/stores/useUIStore';
 import { ClassificationProvidersPage } from '@/components/sections/classification/ClassificationProvidersPage';
+import { FormCard } from '@/components/chat/FormCard';
+import type { FormInfo } from '@/lib/opencode/wire';
 
 /** The browser step of a login, shown until the provider reports it authenticated. */
 type LoginPrompt = {
   providerId: string;
+  /** Addresses the still-running flow, so a code prompt can be read and answered. */
+  loginId?: string;
   url: string;
   launchUrl?: string;
   instructions?: string;
@@ -64,6 +68,9 @@ export const ProvidersPage: React.FC = () => {
 
   const [loginProviders, setLoginProviders] = React.useState<OmpLoginProvider[]>([]);
   const [loginPrompt, setLoginPrompt] = React.useState<LoginPrompt | null>(null);
+  // OMP asks for the manual code on the same channel a session asks a question,
+  // so the login's pending form is what holds the field the user must fill.
+  const [loginForms, setLoginForms] = React.useState<FormInfo[]>([]);
   const [signingInProvider, setSigningInProvider] = React.useState<string | null>(null);
   // Bumped on unmount so an in-flight poll loop stops touching state.
   const loginPollToken = React.useRef(0);
@@ -87,18 +94,24 @@ export const ProvidersPage: React.FC = () => {
     loginPollToken.current += 1;
   }, []);
 
-  const waitForLogin = React.useCallback(async (providerId: string) => {
+  const waitForLogin = React.useCallback(async (providerId: string, loginId?: string) => {
     const token = loginPollToken.current;
     for (let attempt = 0; attempt < LOGIN_POLL_ATTEMPTS; attempt += 1) {
       const { promise: waited, resolve: wake } = Promise.withResolvers<void>();
       window.setTimeout(wake, LOGIN_POLL_INTERVAL_MS);
       await waited;
       if (loginPollToken.current !== token) return;
+      // The code prompt arrives while the login runs, on the login's own id.
+      if (loginId) {
+        const forms = await getOmpRuntimeClient().listFormsFor(loginId).catch(() => null);
+        if (forms && loginPollToken.current === token) setLoginForms(forms);
+      }
       const providers = await getOmpRuntimeClient().listLoginProviders().catch(() => null);
       if (!providers || loginPollToken.current !== token) continue;
       setLoginProviders(providers.filter((provider) => provider.available));
       if (providers.some((provider) => provider.id === providerId && provider.authenticated)) {
         setLoginPrompt(null);
+        setLoginForms([]);
         setSigningInProvider(null);
         return;
       }
@@ -109,6 +122,7 @@ export const ProvidersPage: React.FC = () => {
   const startLogin = React.useCallback(async (providerId: string) => {
     setSigningInProvider(providerId);
     setLoginPrompt(null);
+    setLoginForms([]);
     try {
       const result = await getOmpRuntimeClient().login(providerId);
       if (!result.url) {
@@ -117,9 +131,9 @@ export const ProvidersPage: React.FC = () => {
         await refreshLoginProviders();
         return;
       }
-      setLoginPrompt({ providerId, url: result.url, launchUrl: result.launchUrl, instructions: result.instructions });
+      setLoginPrompt({ providerId, loginId: result.loginId, url: result.url, launchUrl: result.launchUrl, instructions: result.instructions });
       window.open(result.launchUrl ?? result.url, '_blank', 'noopener,noreferrer');
-      void waitForLogin(providerId);
+      void waitForLogin(providerId, result.loginId);
     } catch (error) {
       setSigningInProvider(null);
       toast.error(error instanceof Error ? error.message : t('settings.providers.login.failed'));
@@ -256,6 +270,13 @@ export const ProvidersPage: React.FC = () => {
                   {t('settings.providers.login.copyUrl')}
                 </Button>
               </div>
+              {loginForms.length > 0 ? (
+                <div className="space-y-2" data-login-forms>
+                  {loginForms.map((form) => (
+                    <FormCard key={form.id} form={form} />
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </SettingsSection>

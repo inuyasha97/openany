@@ -206,6 +206,12 @@ export type AgentRuntime = {
   replyForm(sessionID: string, formID: string, answer: FormAnswer, directory?: string | null): Promise<boolean>
   cancelForm(sessionID: string, formID: string, directory?: string | null): Promise<boolean>
   listPendingForms(options?: PendingRequestListOptions): Promise<FormInfo[]>
+  /**
+   * The pending forms for one id, session or login. A login asks for its code
+   * on the same channel a session asks a question, so the caller can read the
+   * question it has to answer.
+   */
+  listFormsFor(id: string): Promise<FormInfo[]>
   stageRevert(sessionId: string, messageId: string, options?: { files?: boolean; directory?: string | null }): Promise<SessionRevert>
   commitRevert(sessionId: string, directory?: string | null): Promise<void>
   clearRevert(sessionId: string, directory?: string | null): Promise<void>

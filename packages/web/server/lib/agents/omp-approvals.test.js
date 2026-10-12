@@ -32,15 +32,24 @@ describe('createOmpApprovals', () => {
     });
   });
 
-  it('maps reject to confirmed:false and keeps input as a permission', () => {
+  it('maps reject to confirmed:false, and reads input as a question', () => {
     const approvals = createOmpApprovals({ broadcast: () => {} });
     approvals.handleRequest('ses_1', { type: 'extension_ui_request', id: 'ui_1', method: 'confirm', title: 't', message: 'm' });
     expect(approvals.resolve('ses_1', 'ui_1', 'reject')).toEqual({ type: 'extension_ui_response', id: 'ui_1', confirmed: false });
 
-    approvals.handleRequest('ses_1', { type: 'extension_ui_request', id: 'ui_2', method: 'input', title: 'Paste the code' });
-    expect(approvals.pending('ses_1')[0]).toMatchObject({ action: 'input', resources: [], message: 'Paste the code' });
-    expect(approvals.resolve('ses_1', 'ui_2', 'once', '1234')).toEqual({ type: 'extension_ui_response', id: 'ui_2', value: '1234' });
-    expect(approvals.forms('ses_1')).toEqual([]);
+    // `input` carries a field, not a decision. The provider login asks for a
+    // pasted API key this way, and approve/deny had nothing to type into.
+    approvals.handleRequest('ses_1', { type: 'extension_ui_request', id: 'ui_2', method: 'input', title: 'Paste the code', placeholder: 'sk-...' });
+    expect(approvals.pending('ses_1')).toHaveLength(0);
+    expect(approvals.forms('ses_1')).toMatchObject([
+      {
+        id: 'ui_2',
+        sessionID: 'ses_1',
+        title: 'Paste the code',
+        fields: [{ key: 'value', type: 'string', title: 'Paste the code', placeholder: 'sk-...' }],
+      },
+    ]);
+    expect(approvals.resolveForm('ses_1', 'ui_2', 'sk-1234')).toEqual({ type: 'extension_ui_response', id: 'ui_2', value: 'sk-1234' });
   });
 
   it('projects a select frame as a form request with its options', () => {
