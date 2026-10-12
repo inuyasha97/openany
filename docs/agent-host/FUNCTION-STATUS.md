@@ -14,8 +14,15 @@ runtime and observed*, not "the code looks right".
 
 Harness: macOS arm64, `bun packages/web/server/index.js --port 4111` (real `omp`
 18.1.11, the repo's built UI), driven over CDP; plus the packaged Electron app
-(`packages/electron/dist/mac-arm64/OpenAny.app`) where noted. Windows and Linux
-were not run.
+(`packages/electron/dist/mac-arm64/OpenAny.app`) where noted.
+
+**Every row was measured on macOS arm64. Windows and Linux were never run, so a
+`PASS` here says nothing about them.** The composer, the shell and the packaging
+rows in particular sit on Windows-specific code paths this machine cannot
+exercise: how the OMP binary is resolved and spawned, how the login-shell
+environment is merged, and which installer a user actually downloaded. Section G
+records what is known about those platforms, and §I.16 records a Windows chat
+failure that reached a user while this table read `PASS`.
 
 ## A. Composer — sending a turn
 
@@ -463,6 +470,47 @@ Goals and the Walkthrough panel said "No small model available" even with the
 default enabled, and why the override picker had nothing to offer. The session
 routes were unaffected — they call the controller's own `getHost()` — so the app
 looked healthy while every feature behind this module was degraded.
+
+### I.16 A Windows user cannot send a chat message — OPEN (platform gap)
+Reported from the maintainer's Windows machine: *every* send fails with
+
+```
+Opencode failed to send message with error: Retry budget exhausted after 10
+retries: The socket connection was closed unexpectedly. For more information,
+pass verbose: true in the second argument to fetch()
+```
+
+What the evidence settles:
+
+- **The failure is OMP's model request, not the app's transport.** Neither the
+  retry wording nor Bun's `pass verbose: true … to fetch()` exists anywhere in
+  this repo, so the message was produced by OMP's own Bun process and relayed
+  by `ChatMessage.tsx`. OMP therefore **started** and took the prompt; what
+  never completed is its call to the model provider, retried ten times.
+- **The Windows spawn path is correct in a Windows-built package.**
+  `resolveOmpCommand` looks for `omp.exe` under `resources/omp-cli` on win32, and
+  `prepare-omp-cli.mjs` names it that way when `process.platform === 'win32'`
+  (`artifactForPlatform('win32')` → `omp-win…`/`omp.exe`). A package built **on
+  macOS** stages the macOS artifact instead: `dist/win-unpacked` in this tree
+  holds a 128.7 MB file named `omp`, and `file` reports it as **Mach-O 64-bit
+  arm64**, which no Windows spawn can run. So an installer produced locally on
+  macOS is broken on Windows while the CI's `windows-2022` artifact is not.
+  That is **not** what the user hit — OMP answered with Bun's own words, so their
+  OMP ran — but it is a trap for anyone who builds the Windows target here.
+- **The layer that fails is OMP's request to the model provider.** OMP is the
+  only Bun process at runtime (Electron runs the server in-process under Node,
+  and `resources/` ships no Bun), so the retry notice and Bun's `fetch()` hint
+  can only come from it. It had the prompt and could not deliver it, ten times.
+- **A branding bug this exposed is fixed**: `ChatMessage.tsx` blamed "Opencode"
+  in three strings (the retry notice, the abort notice and the generic one) and
+  `LongErrorText.test.tsx` repeated it. They now name OMP, the runtime that
+  actually failed.
+
+What is still open is which layer closes the socket on that machine. The next
+evidence is its own: `%APPDATA%\OpenAny\logs\main.log` (electron-log holds the
+server's console too), which provider and model the session used, and whether
+that provider is signed in there. Until then this row stays `OPEN`, and the
+platform note at the top of this file says what a macOS `PASS` is worth.
 
 A second, smaller surprise in the same service: the default picker resolves a
 small model by **family** (`gpt-luna`, `gemini-flash-lite`, `gemini-flash`,

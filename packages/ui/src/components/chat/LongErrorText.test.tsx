@@ -48,7 +48,7 @@ describe('LongErrorText', () => {
   });
 
   test('starts a long error collapsed, without rendering the full text', () => {
-    const text = `Opencode failed to send message with error: ${'x'.repeat(200_000)}`;
+    const text = `OMP failed to send message with error: ${'x'.repeat(200_000)}`;
     const markup = renderError(text);
     expect(markup).not.toContain('x'.repeat(1_000));
     expect(markup).toContain('aria-expanded="false"');
