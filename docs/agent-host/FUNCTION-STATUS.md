@@ -518,11 +518,27 @@ separate the layers, all with the binary the app ships (`omp/18.1.11`):
 | `omp -p "reply with OK"` | `OK` | `OK` |
 | `omp -p --model "opencode-go/deepseek-v4-flash" "reply with OK"` | `OK` (4.7 s) | `Working…` then `Retry budget exhausted after 10 retries: The socket connection was closed unexpectedly`, nothing else |
 
-The endpoint and the key are fine, proven from this machine with that account:
-a minimal `POST https://opencode.ai/zen/go/v1/responses` carrying their key and
-an `x-opencode-session` header answers **200** in 2.0 s with a real SSE
-`response.created` stream, over verified TLS. Without the session header the
-same call answers 400 `MissingSessionID`, which is how the shape is known.
+**The endpoint, the key and every transport variable are clean.** Driven from
+this machine with the maintainer's own key (`oc_sk_e074…`), against
+`https://opencode.ai/zen/go/v1/responses`:
+
+| Request | Result |
+|---|---|
+| small body, verified TLS, `x-opencode-session` header | **200** in 2.0 s, a real SSE `response.created` stream |
+| small body, no session header | 400 `MissingSessionID` |
+| small body, `-k` | 200 |
+| **68 269-byte body** matching OMP's own `Content-Length`, verified TLS | 400 `Model is unavailable` for a deliberately fake model, delivered in 1.5 s |
+| the same 68 KB body, `-k` | 400, delivered |
+| forced IPv4 (`172.65.90.20`) | connected |
+| forced IPv6 (`2606:4700:78::90:0:142`) | connected |
+
+`opencode.ai` is Cloudflare-fronted with both A and AAAA records, and both
+families answer from here. So the key, the endpoint, the request size, the TLS
+verification mode and the address family are each ruled out, and what is left is
+the path from that Windows machine to that host: an antivirus or proxy
+inspecting HTTPS, a VPN in the way, or a broken IPv6 route that Bun picks first.
+The test that separates them is `curl.exe -4` against `curl.exe -6` on that
+machine, with the verified and `-k` pair alongside it.
 
 **The `-p` run that said `OK` never tested this endpoint.** That machine's
 `modelRoles` are all `github-copilot/*` — plan, advisor, slow, smol, tiny and
