@@ -471,8 +471,8 @@ default enabled, and why the override picker had nothing to offer. The session
 routes were unaffected — they call the controller's own `getHost()` — so the app
 looked healthy while every feature behind this module was degraded.
 
-### I.16 A Windows user cannot send a chat message — OPEN (platform gap)
-Reported from the maintainer's Windows machine: *every* send fails with
+### I.16 A Windows user could not send a chat message — DIAGNOSED
+Reported from the maintainer's Windows machine: *every* send failed with
 
 ```
 Opencode failed to send message with error: Retry budget exhausted after 10
@@ -506,11 +506,34 @@ What the evidence settles:
   `LongErrorText.test.tsx` repeated it. They now name OMP, the runtime that
   actually failed.
 
-What is still open is which layer closes the socket on that machine. The next
-evidence is its own: `%APPDATA%\OpenAny\logs\main.log` (electron-log holds the
-server's console too), which provider and model the session used, and whether
-that provider is signed in there. Until then this row stays `OPEN`, and the
-platform note at the top of this file says what a macOS `PASS` is worth.
+The evidence trail is worth keeping for the next report: the app's own log is
+`%APPDATA%\OpenAny\logs\main.log`, where electron-log also holds the server's
+console, and the session file names the model each turn was pinned to.
+
+**Resolved on 2026-10-12.** The two runs that separate the layers, all with the
+binary the app ships (`omp/18.1.11`):
+
+| Command | macOS arm64 | Windows x64 |
+|---|---|---|
+| `omp -p "reply with OK"` | `OK` | `OK` |
+| `omp -p --model "opencode-go/deepseek-v4-flash" "reply with OK"` | `OK` (4.7 s) | `Working…` then `Retry budget exhausted after 10 retries: The socket connection was closed unexpectedly`, nothing else |
+
+The model id is valid, the gateway answers, the binary is the same, and the
+difference is the machine: **that Windows install's `opencode-go` credential no
+longer works**, while whatever the default role uses still does. The chat fails
+because the session is pinned to `opencode-go`, and the app re-applies that model
+before every send, so the failure is total rather than occasional.
+
+Two things this exposed in the app, neither a cause:
+
+- **`Connected` means "a credential exists".** `omp-config.js` marks a provider
+  authenticated when its `auth.credentialId` is present in OMP's own credential
+  database — existence, not validity. A stale credential shows as connected and
+  fails on use. Labeling that state honestly ("signed in", "credential saved")
+  would be a copy decision across 13 locales, so it is left for the maintainer.
+- **The raw socket text reached the user.** Fixed: `isLikelyProviderTransportFailure`
+  recognises the shape and the chat names a transport failure and the two things
+  worth checking, without claiming the credential is the cause.
 
 A second, smaller surprise in the same service: the default picker resolves a
 small model by **family** (`gpt-luna`, `gemini-flash-lite`, `gemini-flash`,
