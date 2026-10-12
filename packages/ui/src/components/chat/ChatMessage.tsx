@@ -26,7 +26,7 @@ import { filterVisibleParts, normalizeParts } from './message/partUtils';
 import { normalizeUserDisplayParts } from './message/normalizeUserDisplayParts';
 import { isHiddenUserMessage } from './message/hiddenUserMessage';
 import { flattenAssistantTextParts, flattenUserTextParts } from '@/lib/messages/messageText';
-import { isLikelyProviderAuthFailure, PROVIDER_AUTH_FAILURE_MESSAGE } from '@/lib/messages/providerAuthError';
+import { isLikelyProviderAuthFailure, isLikelyProviderTransportFailure, PROVIDER_AUTH_FAILURE_MESSAGE, PROVIDER_TRANSPORT_FAILURE_MESSAGE } from '@/lib/messages/providerAuthError';
 import { getProviderModelDisplayName } from '@/lib/modelDisplay';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import type { TurnGroupingContext } from './lib/turns/types';
@@ -579,6 +579,11 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         if (isLikelyProviderAuthFailure(detail)) {
             return {
                 text: PROVIDER_AUTH_FAILURE_MESSAGE,
+            };
+        }
+        if (isLikelyProviderTransportFailure(detail)) {
+            return {
+                text: PROVIDER_TRANSPORT_FAILURE_MESSAGE,
             };
         }
         if (detail.trim().toLowerCase() === 'aborted') {
