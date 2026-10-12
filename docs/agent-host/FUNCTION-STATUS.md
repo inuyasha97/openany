@@ -506,7 +506,24 @@ What the evidence settles:
   `LongErrorText.test.tsx` repeated it. They now name OMP, the runtime that
   actually failed.
 
-The evidence trail is worth keeping for the next report: the app's own log is
+**Resolved on 2026-10-12: the network in front of that machine cuts the host.**
+The same six-cell matrix run on Windows, with the key that answers 200 from here:
+
+| Request | Windows result |
+|---|---|
+| `-6` (IPv6), both TLS modes | `Could not resolve host: opencode.ai` — no AAAA path there at all |
+| IPv4, verified TLS | `curl: (35) schannel: CRYPT_E_NO_REVOCATION_CHECK` — the revocation check cannot reach its own network |
+| IPv4, `-k` | `curl: (56) Recv failure: Connection was reset`, after connecting to `172.65.90.21` |
+
+So IPv6 is out, the TCP connection to Cloudflare **is** established, and
+something in the middle resets it after the handshake while also blocking the
+certificate-revocation endpoints. That is an inline inspector — a corporate
+proxy, firewall or antivirus HTTPS filter — not the key, not OMP, not this app,
+and not the TLS verification mode, since both modes fail.
+
+The product has nothing to fix here, and the transport message added earlier
+names exactly the right first suspects. The evidence trail is worth keeping for
+the next report: the app's own log is
 `%APPDATA%\OpenAny\logs\main.log`, where electron-log also holds the server's
 console, and the session file names the model each turn was pinned to.
 
