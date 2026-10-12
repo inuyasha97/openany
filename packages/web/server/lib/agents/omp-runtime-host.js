@@ -32,7 +32,17 @@ const IDLE_SWEEP_MS = 60_000;
  */
 export function createOmpRuntimeHost({ adapter, broadcast, now }) {
   const clock = now ?? Date.now;
-  const runtime = new adapter.OmpRuntime(adapter.createOmpHost());
+  // OMP's own log. The adapter drains the child's stderr so a full pipe cannot
+  // stall it; without a sink here that drain goes nowhere and the only account
+  // of why a turn failed is the message the UI relays second-hand.
+  const runtime = new adapter.OmpRuntime(adapter.createOmpHost({
+    onStderr: (text) => {
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed) console.info('[omp]', trimmed);
+      }
+    },
+  }));
   const config = createOmpConfig();
   const projectors = new Map();
   const directories = new Map();

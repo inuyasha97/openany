@@ -34,7 +34,16 @@ export type OmpRpcOptions = {
   cwd?: string
   env?: Record<string, string | undefined>
   spawn: OmpRpcSpawn
+  /**
+   * OMP's stderr, line by line. It is the runtime's own log, so this is where
+   * the reason a turn failed appears; a caller that drops it loses the only
+   * voice that knows why.
+   */
+  onStderr?: (text: string) => void
 }
+
+/** One stderr chunk can be a whole log; keep the loudest part. */
+const STDERR_CHUNK_LIMIT = 8_192
 
 /** How long `start()` waits for the protocol-v2 negotiation before falling back to v1. */
 const NEGOTIATE_TIMEOUT_MS = 5_000
@@ -102,8 +111,15 @@ export class OmpRpcClient {
       this.child = child
       child.stdout.on("data", (chunk) => this.ingest(chunk))
       // stderr is OMP's log stream, never protocol; drain it so a full pipe
-      // cannot stall the child.
-      child.stderr.on("data", () => {})
+      // cannot stall the child, and hand it to the sink so the reason a turn
+      // failed is visible. Decoded separately from stdout: one decoder cannot
+      // carry two interleaved streams.
+      child.stderr.on("data", (chunk) => {
+        const sink = this.options.onStderr
+        if (!sink) return
+        const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")
+        sink(text.length > STDERR_CHUNK_LIMIT ? text.slice(0, STDERR_CHUNK_LIMIT) : text)
+      })
       child.on("error", (error) => {
         this.fail(error instanceof Error ? error : new Error(String(error)))
       })

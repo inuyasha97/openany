@@ -39,6 +39,8 @@ export type OmpHostOptions = {
   store?: OmpSessionStore
   /** Reads a session file for branch-cut resolution; injectable so tests need no real file. */
   readFile?: (file: string) => string
+  /** OMP's stderr, forwarded from every session process. */
+  onStderr?: (text: string) => void
 }
 
 /** The `get_state` payload fields the host reads. */
@@ -194,7 +196,7 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
     // '<command>'`, which blames the binary. Name the real cause instead of
     // letting that reach the caller.
     if (cwd !== undefined && !isExistingDirectory(cwd)) throw new OmpSessionDirectoryMissingError(cwd)
-    return new OmpRpcClient({ command, args, cwd, env: options.env, spawn })
+    return new OmpRpcClient({ command, args, cwd, env: options.env, spawn, onStderr: options.onStderr })
   }
 
   const withProcessClient = async <T>(run: (client: OmpRpcClient) => Promise<T>, cwd?: string): Promise<T> => {

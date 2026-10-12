@@ -3,12 +3,13 @@ import { OmpRpcClient, OmpRpcError, type OmpRpcChild } from "./rpc-client"
 
 const createFakeChild = () => {
   const stdoutListeners: Array<(chunk: string | Uint8Array) => void> = []
+  const stderrListeners: Array<(chunk: string | Uint8Array) => void> = []
   const exitListeners: Array<(code: unknown) => void> = []
   const errorListeners: Array<(error: unknown) => void> = []
   const written: string[] = []
   const child: OmpRpcChild = {
     stdout: { on: (_event, listener) => stdoutListeners.push(listener) },
-    stderr: { on: () => {} },
+    stderr: { on: (_event, listener) => stderrListeners.push(listener) },
     stdin: { write: (chunk) => written.push(chunk), end: () => {} },
     on: (event, listener) => {
       if (event === "exit") exitListeners.push(listener)
@@ -19,7 +20,10 @@ const createFakeChild = () => {
   const emit = (line: string) => {
     for (const listener of stdoutListeners) listener(`${line}\n`)
   }
-  return { child, written, emit, exit: (code: unknown) => { for (const l of exitListeners) l(code) } }
+  const emitStderr = (text: string) => {
+    for (const listener of stderrListeners) listener(text)
+  }
+  return { child, written, emit, emitStderr, exit: (code: unknown) => { for (const l of exitListeners) l(code) } }
 }
 
 const client = (fake: ReturnType<typeof createFakeChild>) =>
@@ -32,6 +36,35 @@ describe("OmpRpcClient", () => {
     const started = rpc.start()
     fake.emit(JSON.stringify({ type: "ready", protocolVersion: 1 }))
     await started
+  })
+
+  test("hands the child's stderr to the sink, so a failed turn keeps its reason", async () => {
+    const fake = createFakeChild()
+    const seen: string[] = []
+    const rpc = new OmpRpcClient({ command: "omp", spawn: () => fake.child, onStderr: (text) => seen.push(text) })
+    const started = rpc.start()
+    fake.emit(JSON.stringify({ type: "ready", protocolVersion: 1 }))
+    await started
+    fake.emitStderr("Retry budget exhausted after 10 retries\n")
+    expect(seen).toEqual(["Retry budget exhausted after 10 retries\n"])
+  })
+
+  test("drains stderr without a sink and keeps serving commands", async () => {
+    const fake = createFakeChild()
+    const rpc = client(fake)
+    const started = rpc.start()
+    fake.emit(JSON.stringify({ type: "ready" }))
+    await started
+
+    fake.emitStderr("noise\n")
+
+    const pending = rpc.command<{ sessionId: string }>("get_state")
+    const request: unknown = JSON.parse(fake.written[0] ?? "{}")
+    if (!(request && typeof request === "object" && "id" in request && typeof request.id === "string")) {
+      throw new Error("the client did not write a command carrying an id")
+    }
+    fake.emit(JSON.stringify({ id: request.id, type: "response", command: "get_state", success: true, data: { sessionId: "ses_1" } }))
+    expect(await pending).toEqual({ sessionId: "ses_1" })
   })
 
   test("correlates a command response by id", async () => {
