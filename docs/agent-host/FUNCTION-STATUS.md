@@ -518,8 +518,19 @@ separate the layers, all with the binary the app ships (`omp/18.1.11`):
 | `omp -p "reply with OK"` | `OK` | `OK` |
 | `omp -p --model "opencode-go/deepseek-v4-flash" "reply with OK"` | `OK` (4.7 s) | `Working…` then `Retry budget exhausted after 10 retries: The socket connection was closed unexpectedly`, nothing else |
 
-The model id is valid, the gateway answers, the binary is the same, and the
-difference is the machine.
+The endpoint and the key are fine, proven from this machine with that account:
+a minimal `POST https://opencode.ai/zen/go/v1/responses` carrying their key and
+an `x-opencode-session` header answers **200** in 2.0 s with a real SSE
+`response.created` stream, over verified TLS. Without the session header the
+same call answers 400 `MissingSessionID`, which is how the shape is known.
+
+**The `-p` run that said `OK` never tested this endpoint.** That machine's
+`modelRoles` are all `github-copilot/*` — plan, advisor, slow, smol, tiny and
+task — and there is no `default:` role, so the unqualified run used a different
+provider entirely. It proves the machine can do HTTPS with a streamed response,
+and nothing about `opencode.ai`. The remaining question is still the path from
+that machine to that host, which the two `curl` runs in this file's next
+instruction separate.
 
 **The first explanation was wrong.** It said that install's credential for
 `opencode-go` had gone stale; the maintainer then renewed it —
