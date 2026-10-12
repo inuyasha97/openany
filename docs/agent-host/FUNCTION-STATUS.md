@@ -190,7 +190,7 @@ the repackaged app, so these exercise the real main-process handlers.
 | Browser clear data | `BLOCKED` | The earlier reason was too broad: `desktop_browser_clear_data` is **scoped to the browser panel's partition** — an exact-match guard throws for any other partition, and the comment promises clearing "can never touch OpenChamber's session or any other window's storage" — so it is not a profile-wide wipe. It is not drivable here for a different reason: it is an Electron IPC command, and this harness drives the server with headless Chromium, which has no desktop bridge. |
 | Read a file outside the workspace | `PASS` (refuses) | `desktop_read_file({path:"/tmp/definitely-not-here-xyz"})` is refused with "File is outside the allowed workspace" — the boundary holds before any filesystem read. |
 | Hosts read | `PASS` | `{hosts:[], defaultHostId:"local", initialHostChoiceCompleted:true, localOrigin:"http://127.0.0.1:57123"}`. |
-| Host probe and hosts write | `PASS` (one note) | `desktop_host_probe` refuses `{hostId:"local"}` with "Invalid URL". `desktop_hosts_set` reads its config from `args.input`, so a call shaped like the read (`{hosts,defaultHostId}` at the top level) **writes an empty config instead of refusing**: it answered null and `defaultHostId` read back `null`. Passing `{input:{hosts:[],defaultHostId:"local",initialHostChoiceCompleted:true}}` restored the original read. |
+| Host probe and hosts write | `FIXED` | `desktop_host_probe` refuses `{hostId:"local"}` with "Invalid URL". `desktop_hosts_set` reads its config from `args.input`, and a call shaped like the read (`{hosts,defaultHostId}` at the top level) used to **write an empty config instead of refusing**, which erases the user's remotes. `writeDesktopHostsConfig` now requires a `hosts` array, the one thing every caller passes. Verified in the repackaged app: a top-level payload and `{input:{}}` are both refused with "Hosts config requires a hosts array" and the config reads back unchanged, while the app's own shape writes and reads back `{hosts:[],defaultHostId:"local",initialHostChoiceCompleted:true}`. |
 | Scheduled tasks | `PASS` | the toolbar's Scheduled tasks opens "Scheduled tasks — Local — ~ new task — No scheduled tasks yet." |
 | Window focus, fullscreen, title, theme | `PASS` | `desktop_focus_window` → `true` and `desktop_focus_main_window` → `{focused:true}`; `desktop_is_window_fullscreen` → `false`; `desktop_set_window_title` → null, and the "Window title" row records why the OS titlebar cannot be read from CDP; `desktop_set_window_theme` → null for `{themeMode:"dark",themeVariant:"titanium"}` and for an empty pair. |
 | Session mini-chat window, new window at a URL | `PASS` | `desktop_open_session_mini_chat_window` with a real session id produced `openchamber-ui://app/mini-chat.html?mode=session&sessionId=01a07631-…`, and `desktop_new_window_at_url` a second `index.html`. Both were closed afterwards. `desktop_new_window_for_host` refuses with "Host not found". |
@@ -198,7 +198,7 @@ the repackaged app, so these exercise the real main-process handlers.
 | Dev tunnel open and close | `BLOCKED` (validated) | `desktop_dev_tunnel_open` refuses an empty call with "baseUrl is required" and `{baseUrl:"http://127.0.0.1:9/"}` with "A valid port is required"; `dev_tunnel_close` → `{closed:false}` and `relay_dev_tunnel_close_all` → `{closed:0}` with nothing open. A real tunnel needs a provider account. |
 | Open a file in an app, clear cache | `PASS` | `desktop_open_file_in_app` opened `/tmp` in Finder; it needs `filePath`, `appId` **and** `appName`, and refuses the call without all three. `desktop_clear_cache` → null. |
 | Browser panel: favicon, colour scheme, capture | `PARTIAL` (favicon driven, the rest needs a panel) | `desktop_browser_fetch_favicon` with `https://github.com/favicon.ico` returned a real `data:image/x-icon;base64,…`, and with `https://example.com` refused as "Favicon is not an image". `browser_set_color_scheme` and `browser_capture_page` resolve their target through `resolveBrowserPanelContents`, which demands a webContents in the panel's own partition, so without a panel open they answer "webContentsId is required". |
-| Update **download and install** | `PARTIAL` | `desktop_download_and_install_update` fails in this local bundle with `ENOENT … Contents/Resources/app-update.yml`. The **shipped** artifact carries that file: reading the central directory of the published `OpenAny-0.1.3-mac-arm64.zip` (one range request for its last 256 KB) finds `app-update.yml`, so the local bundle is what lacks it, not the release. Applying it on macOS still needs the signature §G records as missing. |
+| Update **download and install** | `PARTIAL` | `desktop_download_and_install_update` failed in the stale local bundle with `ENOENT … Contents/Resources/app-update.yml`; a fresh `package` run writes that file (94 bytes, the same `owner/repo/provider` the published feed uses), and the released `OpenAny-0.1.3-mac-arm64.zip` carries it too (read from its central directory). So the gap was the old local build. Applying an update on macOS still needs the signature §G records as missing, and the download itself was not run because it pulls a 304 MB zip. |
 | Voice / TTS / dictation | `BLOCKED` | Would speak aloud on this machine; the startup log shows 176 macOS voices. The page itself is real — it renders both halves of the feature, `voice.playback` and `voice.speech-recognition`, each with per-model download/delete controls — so what was not driven is a synthesised utterance and a transcription, not the surface. |
 
 
@@ -219,11 +219,17 @@ the repackaged app, so these exercise the real main-process handlers.
 | Provider sign-in (OAuth) | `PASS` (affordance) | Settings → Providers lists "Provider sign-in — ChatGPT Plus/Pro (Codex Subscription) — Not signed in — sign in" and "Anthropic (Claude Pro/Max) — Not signed in — sign in"; the `login` route + URL/device flow exist. The flow itself was not completed (it needs the user's account). |
 | MCP server list / enable / disable | `PARTIAL` | Settings → MCP reads "Tool servers your agents can call. Open one to see its status and settings. — No MCP servers yet. Add MCP server — Local command or remote URL". The list and the add affordance render; nothing exists to enable or disable. |
 
-## J. Plan — the remaining audit (chat nâng cao + 23 Settings pages)
+## J. Method for what is still open
 
-Method per item, so each result is evidence and not an opinion. Every step runs
-against the repo server on a spare port (real `omp`) and, where the surface is
-native, the repackaged app.
+Every step here runs against the repo server on a spare port (real `omp`) and,
+where the surface is native, the repackaged app driven over CDP, so a result is
+evidence rather than an opinion.
+
+These two blocks were written as the plan for a pass that has since been driven.
+The 24 Settings pages are counted in §E, where 123 of 126 items are `PASS`; the
+chat and session items are rows in §A, §B and §C. What stays open is named in
+those rows: a `PARTIAL` row says which half was not observed, and a `BLOCKED` row
+says what this machine cannot reach.
 
 ### Chat: turn control
 | Item | How it is proven |

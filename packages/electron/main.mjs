@@ -749,12 +749,17 @@ const readDesktopHostsConfig = () => {
 };
 
 const writeDesktopHostsConfig = async (config) => {
+  // Every caller hands over a config it read first, so a payload without a
+  // `hosts` array is a mistake. Treating it as "no hosts" would erase the
+  // user's remotes on a malformed call, which is what an IPC bridge sending the
+  // settings under the wrong key used to do.
+  if (!config || !Array.isArray(config.hosts)) {
+    throw new Error('Hosts config requires a hosts array');
+  }
   await mutateSettingsRoot((root) => {
-    root.desktopHosts = Array.isArray(config?.hosts)
-      ? config.hosts
-          .map(buildStoredHostEntry)
-          .filter(Boolean)
-      : [];
+    root.desktopHosts = config.hosts
+      .map(buildStoredHostEntry)
+      .filter(Boolean);
     root.desktopDefaultHostId = typeof config?.defaultHostId === 'string' && config.defaultHostId.trim()
       ? config.defaultHostId.trim()
       : null;
