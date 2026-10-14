@@ -198,9 +198,19 @@ export class OmpRuntime {
    * session the user opens; a later call re-opens the session on demand.
    */
   async disposeIdle(maxIdleMs: number, now: number = Date.now()): Promise<string[]> {
-    const idle = [...this.lastUsedAt]
+    const candidates = [...this.lastUsedAt]
       .filter(([id, at]) => now - at >= maxIdleMs && this.sessions.has(id))
       .map(([id]) => id)
+    const idle: string[] = []
+    for (const id of candidates) {
+      // A running turn is work, not idleness: it does not fetch the handle
+      // again, so the clock alone would dispose a session in the middle of a
+      // tool call. A status that could not be read is not evidence of idleness
+      // either — leave the process alone and let the next sweep decide.
+      const status = await this.host.getSessionStatus(id).catch(() => null)
+      if (!status || status.busy) continue
+      idle.push(id)
+    }
     for (const id of idle) await this.disposeSession(id)
     return idle
   }
@@ -401,6 +411,10 @@ export class OmpRuntime {
   }
 
   private emit(sessionId: string, event: OmpEvent): void {
+    // An event is the session working. `lastUsedAt` otherwise only moves when a
+    // handle is fetched, so a turn that runs for an hour without another prompt
+    // looked idle to the sweep and had its process disposed mid-tool.
+    if (this.sessions.has(sessionId)) this.lastUsedAt.set(sessionId, Date.now())
     for (const listener of this.listeners) {
       try {
         listener(sessionId, event)

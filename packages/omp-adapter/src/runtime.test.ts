@@ -319,6 +319,31 @@ describe("OmpRuntime", () => {
     expect(handles.get("ses_a")?.disposed).toBe(false)
   })
 
+  test("keeps a session the sweep cannot call idle: it is working, or its status is unreadable", async () => {
+    const working = makeHost([info("ses_a")], { status: { ...IDLE_STATUS, busy: true } })
+    const workingRuntime = new OmpRuntime(working.host)
+    await workingRuntime.getSession("ses_a")
+
+    // Past the window, but a turn is running in it: the process stays.
+    expect(await workingRuntime.disposeIdle(1_000, Date.now() + 10_000)).toEqual([])
+    expect(working.handles.get("ses_a")?.disposed).toBe(false)
+
+    // A status that could not be read is not evidence of idleness either.
+    const unreadable = makeHost([info("ses_b")])
+    unreadable.host.getSessionStatus = async () => {
+      throw new Error("get_state failed")
+    }
+    const unreadableRuntime = new OmpRuntime(unreadable.host)
+    await unreadableRuntime.getSession("ses_b")
+    expect(await unreadableRuntime.disposeIdle(1_000, Date.now() + 10_000)).toEqual([])
+    expect(unreadable.handles.get("ses_b")?.disposed).toBe(false)
+
+    // Once it answers idle, the same window releases it.
+    unreadable.host.getSessionStatus = async () => IDLE_STATUS
+    expect(await unreadableRuntime.disposeIdle(1_000, Date.now() + 10_000)).toEqual(["ses_b"])
+    expect(unreadable.handles.get("ses_b")?.disposed).toBe(true)
+  })
+
   test("disposes every session process opened in a directory", async () => {
     const { host, handles } = makeHost([info("ses_a")])
     const runtime = new OmpRuntime(host)
