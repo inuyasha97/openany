@@ -544,7 +544,7 @@ export const assemblePromptBlocks = ({ prompt, context = [] }) => {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/prompts.test.js`
-Expected: PASS, 10 tests.
+Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Repoint scheduled tasks at the shared assembly**
 
@@ -563,7 +563,7 @@ const accepted = await promptSession(sessionID, assemblePromptBlocks({ prompt: t
 - [ ] **Step 6: Run the scheduled-task tests to verify nothing moved**
 
 Run: `bun run --cwd packages/web test -- server/lib/scheduled-tasks`
-Expected: PASS, same count as before the change.
+Expected: PASS, the same count as before the change (the scheduled-tasks suite, 62 tests).
 
 - [ ] **Step 7: Syntax check and commit**
 
@@ -951,7 +951,7 @@ export const runCommandCheck = ({ directory, run, expectExit = 0, timeoutMs = 60
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/commands.test.js`
-Expected: PASS, 5 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
@@ -1184,7 +1184,7 @@ export const verifyCheckpoint = async ({ checkpoint, directory, deps = {} }) => 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/verifiers.test.js`
-Expected: PASS, 10 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
@@ -1376,8 +1376,17 @@ describe('identifiers', () => {
   it('rejects a path escape in a project id or a run id', () => {
     expect(isValidProjectId('../etc')).toBe(false);
     expect(isValidProjectId('proj-1')).toBe(true);
+    expect(isValidProjectId('proj/1')).toBe(false);
     expect(isValidRunId('..')).toBe(false);
     expect(isValidRunId('11111111-2222-4333-8444-555555555555')).toBe(true);
+  });
+
+  it('accepts a path-derived project id, whose length follows the path', () => {
+    // `path_<base64url>` of a long directory exceeds any short cap, and the run
+    // store is where that id lands.
+    const longId = `path_${Buffer.from('/Users/someone/'.padEnd(200, 'x'), 'utf8').toString('base64url')}`;
+    expect(longId.length).toBeGreaterThan(200);
+    expect(isValidProjectId(longId)).toBe(true);
   });
 });
 
@@ -1445,7 +1454,11 @@ Expected: FAIL, `Failed to resolve import "./store.js"`.
  * serialized and go through a temporary file and a rename, so a crash leaves
  * either the old file or the new one.
  */
-const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+// A project id is `path_<base64url of the project path>` (`createProjectIdFromPath`),
+// so its length follows the path's: a 93-character path already exceeds 128
+// characters. The cap is generous on purpose, and the safety comes from the
+// character set plus the `..` refusal below, not from the length.
+const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]{1,512}$/;
 const RUN_ID_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
 
 export const isValidProjectId = (value) => typeof value === 'string' && PROJECT_ID_PATTERN.test(value) && !value.includes('..');
@@ -1532,7 +1545,7 @@ export const createWorkflowRunStore = ({ fsPromises, path, projectsDirPath, now 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/store.test.js`
-Expected: PASS, 10 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
@@ -1676,7 +1689,7 @@ export const createCheckpointWriter = ({ git, now = Date.now }) => ({
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/git-checkpoint.test.js`
-Expected: PASS, 4 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
