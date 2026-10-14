@@ -14,6 +14,7 @@
  */
 import crypto from 'node:crypto';
 import express from 'express';
+import { isValidRunId } from './store.js';
 
 const parseJsonBody = express.json({ limit: '1mb' });
 
@@ -22,7 +23,27 @@ const respondWithError = (res, error, fallback) => {
   return res.status(status).json({ error: error?.message ?? fallback });
 };
 
-const directoryOf = (req) => (typeof req.get('x-opencode-directory') === 'string' ? req.get('x-opencode-directory') : null);
+// The browser transport percent-encodes a directory hint and marks it with
+// `x-opencode-directory-encoding: uri`; only a marked value is decoded, so a
+// literal percent sequence from a direct client survives untouched. Every other
+// route family decodes it the same way (`lib/openchamber/project-directory-runtime.js`),
+// and skipping it here resolves a different project id than the caller named.
+const DIRECTORY_ENCODING_HEADER = 'x-opencode-directory-encoding';
+
+const safeDecodeMarkedURIComponent = (value, encoding) => {
+  if (encoding !== 'uri') return value;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+const directoryOf = (req) => {
+  const raw = typeof req.get('x-opencode-directory') === 'string' ? req.get('x-opencode-directory') : null;
+  if (!raw) return null;
+  return safeDecodeMarkedURIComponent(raw, req.get(DIRECTORY_ENCODING_HEADER));
+};
 
 export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
   const { definitions, store, engine, resolveProjectId, projectPathFromId } = workflowsRuntime;
@@ -44,6 +65,17 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
   };
 
   const summary = (entry) => ({ file: entry.file, id: entry.id, name: entry.name, version: entry.version, errors: entry.errors });
+
+  /**
+   * A run id the store would refuse is the caller's mistake, so it answers 400
+   * with that reason instead of letting the store's own throw become a 500.
+   */
+  const runIdOf = (req, res) => {
+    const runId = req.params.runId;
+    if (isValidRunId(runId)) return runId;
+    res.status(400).json({ error: 'the run id is not valid' });
+    return null;
+  };
 
   app.get('/api/workflows/definitions', async (req, res) => {
     try {
@@ -104,8 +136,10 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     try {
       const scope = scopeOf(req);
       if (!scope) return res.status(400).json({ error: 'x-opencode-directory is required' });
-      const run = await store.read(scope.projectId, req.params.runId);
-      if (!run) return res.status(404).json({ error: `run ${req.params.runId} was not found` });
+      const runId = runIdOf(req, res);
+      if (!runId) return undefined;
+      const run = await store.read(scope.projectId, runId);
+      if (!run) return res.status(404).json({ error: `run ${runId} was not found` });
       return res.json({ run });
     } catch (error) {
       return respondWithError(res, error, 'Failed to read the workflow run');
@@ -116,54 +150,67 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     try {
       const scope = scopeOf(req);
       if (!scope) return res.status(400).json({ error: 'x-opencode-directory is required' });
-      return res.json({ run: await handler({ ...scope, req }) });
+      const run = await handler({ ...scope, req }, res);
+      // A handler that already answered (a bad run id) must not answer twice.
+      if (run === undefined) return undefined;
+      return res.json({ run });
     } catch (error) {
       return respondWithError(res, error, 'The workflow run could not be advanced');
     }
   };
 
-  app.post('/api/workflows/runs/:runId/run', parseJsonBody, withProject(({ projectId, projectPath, req }) => (
-    engine.runUntilStop({ projectId, projectPath, runId: req.params.runId })
-  )));
+  app.post('/api/workflows/runs/:runId/run', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {
+    const runId = runIdOf(req, res);
+    return runId ? engine.runUntilStop({ projectId, projectPath, runId }) : undefined;
+  }));
 
-  app.post('/api/workflows/runs/:runId/cancel', parseJsonBody, withProject(({ projectId, req }) => (
-    engine.cancelRun({ projectId, runId: req.params.runId })
-  )));
+  app.post('/api/workflows/runs/:runId/cancel', parseJsonBody, withProject(({ projectId, req }, res) => {
+    const runId = runIdOf(req, res);
+    return runId ? engine.cancelRun({ projectId, runId }) : undefined;
+  }));
 
-  app.post('/api/workflows/runs/:runId/steps/:stepId/run', parseJsonBody, withProject(({ projectId, projectPath, req }) => (
-    engine.startStep({ projectId, projectPath, runId: req.params.runId, stepId: req.params.stepId })
-  )));
+  app.post('/api/workflows/runs/:runId/steps/:stepId/run', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {
+    const runId = runIdOf(req, res);
+    return runId ? engine.startStep({ projectId, projectPath, runId, stepId: req.params.stepId }) : undefined;
+  }));
 
-  app.post('/api/workflows/runs/:runId/steps/:stepId/verify', parseJsonBody, withProject(({ projectId, projectPath, req }) => (
-    engine.verifyStep({ projectId, projectPath, runId: req.params.runId, stepId: req.params.stepId })
-  )));
+  app.post('/api/workflows/runs/:runId/steps/:stepId/verify', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {
+    const runId = runIdOf(req, res);
+    return runId ? engine.verifyStep({ projectId, projectPath, runId, stepId: req.params.stepId }) : undefined;
+  }));
 
-  app.post('/api/workflows/runs/:runId/steps/:stepId/prompt', parseJsonBody, withProject(({ projectId, projectPath, req }) => {
+  app.post('/api/workflows/runs/:runId/steps/:stepId/prompt', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {
+    const runId = runIdOf(req, res);
+    if (!runId) return undefined;
     const text = req.body?.text;
     if (typeof text !== 'string' || !text.trim()) {
       const error = new Error('prompt text is required');
       error.status = 400;
       throw error;
     }
-    return engine.continueStep({ projectId, projectPath, runId: req.params.runId, stepId: req.params.stepId, text });
+    return engine.continueStep({ projectId, projectPath, runId, stepId: req.params.stepId, text });
   }));
 
-  app.post('/api/workflows/runs/:runId/steps/:stepId/confirm', parseJsonBody, withProject(({ projectId, req }) => {
+  app.post('/api/workflows/runs/:runId/steps/:stepId/confirm', parseJsonBody, withProject(({ projectId, req }, res) => {
+    const runId = runIdOf(req, res);
+    if (!runId) return undefined;
     const decision = req.body?.decision;
     if (!['done', 'not_done', 'skip'].includes(decision)) {
       const error = new Error('decision must be done, not_done or skip');
       error.status = 400;
       throw error;
     }
-    return engine.confirmStep({ projectId, runId: req.params.runId, stepId: req.params.stepId, decision, reason: req.body?.reason ?? null });
+    return engine.confirmStep({ projectId, runId, stepId: req.params.stepId, decision, reason: req.body?.reason ?? null });
   }));
 
   app.delete('/api/workflows/runs/:runId', async (req, res) => {
     try {
       const scope = scopeOf(req);
       if (!scope) return res.status(400).json({ error: 'x-opencode-directory is required' });
-      const removed = await store.remove(scope.projectId, req.params.runId);
-      if (!removed) return res.status(404).json({ error: `run ${req.params.runId} was not found` });
+      const runId = runIdOf(req, res);
+      if (!runId) return undefined;
+      const removed = await store.remove(scope.projectId, runId);
+      if (!removed) return res.status(404).json({ error: `run ${runId} was not found` });
       return res.json({ removed: true });
     } catch (error) {
       return respondWithError(res, error, 'Failed to delete the workflow run');

@@ -94,6 +94,7 @@ describe('workflow routes', () => {
   it('maps an engine WorkflowError to its status and its message', async () => {
     const { app } = createApp({
       engine: {
+        // This request goes to `/run`, which the routes map to `runUntilStop`.
         runUntilStop: async () => {
           const error = new Error('this run is already executing a step');
           error.code = 'busy';
@@ -105,6 +106,23 @@ describe('workflow routes', () => {
     const response = await request(app).post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/run').set(SCOPE).send({});
     expect(response.status).toBe(409);
     expect(response.body.error).toBe('this run is already executing a step');
+  });
+
+  it('decodes a marked directory header, so an encoded path names the same project', async () => {
+    const seen = [];
+    const { app } = createApp({ resolveProjectId: (directory) => { seen.push(directory); return directory === '/tmp/proj' ? 'proj-1' : ''; } });
+    const response = await request(app)
+      .get('/api/workflows/definitions')
+      .set({ 'x-opencode-directory': encodeURIComponent('/tmp/proj'), 'x-opencode-directory-encoding': 'uri' });
+    expect(response.status).toBe(200);
+    expect(seen).toEqual(['/tmp/proj']);
+  });
+
+  it('answers 400 for a run id the store would refuse', async () => {
+    const { app } = createApp();
+    const response = await request(app).get('/api/workflows/runs/abc').set(SCOPE);
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('the run id is not valid');
   });
 
   it('deletes one run and answers 404 when there is none', async () => {
