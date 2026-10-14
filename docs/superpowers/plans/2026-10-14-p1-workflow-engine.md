@@ -1228,9 +1228,9 @@ describe('waitForTurnEnd', () => {
     expect(await waitForTurnEnd({ ...deps, sessionId: 's1', timeoutMs: 4000 })).toBe('timeout');
   });
 
-  it('treats an idle runtime as started once the grace window has passed', async () => {
+  it('never reads an idle session as a finished turn', async () => {
     const { deps } = harness([{ busy: false }]);
-    expect(await waitForTurnEnd({ ...deps, sessionId: 's1', graceMs: 0 })).toBe('completed');
+    expect(await waitForTurnEnd({ ...deps, sessionId: 's1', graceMs: 0 })).toBe('never_started');
   });
 });
 ```
@@ -1273,14 +1273,16 @@ export const waitForTurnEnd = async ({
     if (status.busy === true) sawBusy = true;
     if (sawBusy && status.busy !== true) return 'completed';
     const elapsed = now() - startedAt;
-    if (!sawBusy && elapsed >= graceMs) return 'completed';
+    if (!sawBusy && elapsed >= graceMs) return 'never_started';
     if (elapsed >= timeoutMs) return 'timeout';
     await sleep(pollMs);
   }
 };
 ```
 
-Note the last branch pair: with `graceMs: 0` and an idle session the loop answers `completed`, which is what the fifth test pins. Keep that order; swapping the two checks makes the timeout test pass for the wrong reason.
+Only a busy reading followed by an idle one is a finished turn. An idle session we never saw busy is `never_started`, which the engine records as a blocked step: the runtime may have refused the prompt, or the process may have died, and neither of those is a step that ran. Do not soften this to `completed` to make a fast turn look finished. A fast turn still reports busy once, and the person's confirmation is what decides the step either way. If a turn genuinely completes so quickly that the poll never sees it, the step lands in `blocked` with that message, which the person can see and act on, rather than advancing the run on a guess.
+
+Note the branch order: the grace check comes before the timeout check, and the grace window is measured from the first poll rather than from the prompt. Both are pinned by the tests, including the `graceMs: 0` case, which shows an idle session is never read as a finished turn even with no grace at all.
 
 - [ ] **Step 4: Run test to verify it passes**
 
