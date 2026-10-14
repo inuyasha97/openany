@@ -392,13 +392,18 @@ const prepareForQuit = () => {
   return shutdownBackgroundServices();
 };
 
-const performConfirmedQuit = async ({ relaunch = false } = {}) => {
+const performConfirmedQuit = async ({ relaunch = false, reason = 'unknown' } = {}) => {
   if (state.updateInstallPending) {
     log.info('[electron] quit suppressed: update install owns the exit');
     return;
   }
   if (state.quitInProgress) return;
   state.quitInProgress = true;
+  // Quitting tears the local server down, and that disposes every open OMP
+  // session: a turn running right now dies with it, silently. Name the cause
+  // here, because no other line in this log distinguishes a user quit from a
+  // restart the app performed on its own.
+  log.info('[electron] quitting', { relaunch, reason });
 
   try {
     await prepareForQuit();
@@ -417,7 +422,7 @@ const performConfirmedQuit = async ({ relaunch = false } = {}) => {
 // reaper remains the backstop for an unhandled hard crash (SIGKILL).
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(signal, () => {
-    void performConfirmedQuit();
+    void performConfirmedQuit({ reason: `signal:${signal}` });
   });
 }
 
@@ -425,7 +430,7 @@ const requestQuitWithConfirmation = async () => {
   await refreshQuitRiskFlags();
 
   if (!shouldRequireQuitConfirmation()) {
-    performConfirmedQuit();
+    performConfirmedQuit({ reason: 'quit' });
     return;
   }
 
@@ -456,7 +461,7 @@ const requestQuitWithConfirmation = async () => {
     });
     state.quitConfirmationPending = false;
     if (result.response === 0) {
-      performConfirmedQuit();
+      performConfirmedQuit({ reason: 'quit-dialog' });
     }
   } catch (error) {
     state.quitConfirmationPending = false;
@@ -1964,7 +1969,7 @@ const openDevToolsForMenuTarget = () => {
 };
 
 const relaunchFromMenu = () => {
-  void performConfirmedQuit({ relaunch: true });
+  void performConfirmedQuit({ relaunch: true, reason: 'menu-restart' });
 };
 
 const nextWindowLabel = () => {
@@ -2085,7 +2090,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {}, 
           log.info('[electron] last window closed after the installer took over; quitting');
           app.quit();
         } else {
-          performConfirmedQuit();
+          performConfirmedQuit({ reason: 'last-window-closed' });
         }
       }
     }
@@ -4212,7 +4217,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       // Without this, relaunch can race with the renderer's pending invoke and
       // the restart appears to do nothing from the UI side.
       setImmediate(() => {
-        void performConfirmedQuit({ relaunch: true });
+        void performConfirmedQuit({ relaunch: true, reason: 'desktop-restart' });
       });
       return null;
     }
@@ -5035,7 +5040,7 @@ app.on('window-all-closed', () => {
       log.info('[electron] window-all-closed after the installer took over; quitting');
       app.quit();
     } else {
-      performConfirmedQuit();
+      performConfirmedQuit({ reason: 'window-all-closed' });
     }
   }
 });
@@ -5057,7 +5062,7 @@ app.on('before-quit', (event) => {
 
   if (!state.backgroundShutdownComplete) {
     event.preventDefault();
-    performConfirmedQuit();
+    performConfirmedQuit({ reason: 'before-quit' });
   }
 });
 
