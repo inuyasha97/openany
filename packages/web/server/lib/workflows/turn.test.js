@@ -37,8 +37,8 @@ describe('waitForTurnEnd', () => {
     expect(await waitForTurnEnd({ ...deps, sessionId: 's1', timeoutMs: 4000 })).toBe('timeout');
   });
 
-  it('treats an idle runtime as started once the grace window has passed', async () => {
+  it('never reads an idle session as a finished turn', async () => {
     const { deps } = harness([{ busy: false }]);
-    expect(await waitForTurnEnd({ ...deps, sessionId: 's1', graceMs: 0 })).toBe('completed');
+    expect(await waitForTurnEnd({ ...deps, sessionId: 's1', graceMs: 0 })).toBe('never_started');
   });
 });

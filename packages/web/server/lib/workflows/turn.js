@@ -27,9 +27,7 @@ export const waitForTurnEnd = async ({
     if (status.busy === true) sawBusy = true;
     if (sawBusy && status.busy !== true) return 'completed';
     const elapsed = now() - startedAt;
-    // An explicit zero grace window means the caller does not want the
-    // never-started distinction: idle right away counts as finished.
-    if (!sawBusy && elapsed >= graceMs) return graceMs > 0 ? 'never_started' : 'completed';
+    if (!sawBusy && elapsed >= graceMs) return 'never_started';
     if (elapsed >= timeoutMs) return 'timeout';
     await sleep(pollMs);
   }
