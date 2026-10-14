@@ -1381,6 +1381,16 @@ describe('identifiers', () => {
     expect(isValidRunId('11111111-2222-4333-8444-555555555555')).toBe(true);
   });
 
+  it('keeps the run directory name inside the file name limit for a long project id', async () => {
+    const longId = `path_${Buffer.from('/Users/someone/'.padEnd(200, 'x'), 'utf8').toString('base64url')}`;
+    const store = createWorkflowRunStore({ fsPromises: fs, path, projectsDirPath: root, now: () => 42 });
+    const created = await store.create(run({ projectId: longId }));
+    const directoryName = path.basename(path.dirname(store.directoryFor(longId)));
+    expect(directoryName.length).toBeLessThanOrEqual(200);
+    expect(directoryName).toBe(projectConfigFileStemOf(longId));
+    expect(await store.read(longId, created.runId)).toMatchObject({ runId: created.runId });
+  });
+
   it('accepts a path-derived project id, whose length follows the path', () => {
     // `path_<base64url>` of a long directory exceeds any short cap, and the run
     // store is where that id lands.
@@ -1452,7 +1462,7 @@ Expected: FAIL, `Failed to resolve import "./store.js"`.
 // packages/web/server/lib/workflows/store.js
 /**
  * Run state on disk: one JSON file per run, under
- * `<projectsDirPath>/<projectId>/workflow-runs/<runId>.json`.
+ * `<projectsDirPath>/<projectConfigFileStemOf(projectId)>/workflow-runs/<runId>.json`.
  *
  * Run state is an index, not the record. Artifacts and commits live in the
  * project; this file only says which step a run reached and which session each
@@ -1464,6 +1474,8 @@ Expected: FAIL, `Failed to resolve import "./store.js"`.
 // so its length follows the path's: a 93-character path already exceeds 128
 // characters. The cap is generous on purpose, and the safety comes from the
 // character set plus the `..` refusal below, not from the length.
+import { projectConfigFileStemOf } from '../projects/project-id.js';
+
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]{1,512}$/;
 const RUN_ID_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
 
@@ -1471,7 +1483,11 @@ export const isValidProjectId = (value) => typeof value === 'string' && PROJECT_
 export const isValidRunId = (value) => typeof value === 'string' && RUN_ID_PATTERN.test(value) && !value.includes('..');
 
 export const createWorkflowRunStore = ({ fsPromises, path, projectsDirPath, now = Date.now }) => {
-  const directoryFor = (projectId) => path.join(projectsDirPath, projectId, 'workflow-runs');
+  // The directory name is the project's config stem, not the raw id: a
+  // path-derived id (`path_<base64url>`) grows with the path and would cross the
+  // 255-byte file name limit, so `projectConfigFileStemOf` hashes the long ones
+  // exactly as the rest of the projects directory does.
+  const directoryFor = (projectId) => path.join(projectsDirPath, projectConfigFileStemOf(projectId), 'workflow-runs');
   const pathFor = (projectId, runId) => path.join(directoryFor(projectId), `${runId}.json`);
 
   const assertIds = (projectId, runId) => {
@@ -1553,7 +1569,7 @@ export const createWorkflowRunStore = ({ fsPromises, path, projectsDirPath, now 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/store.test.js`
-Expected: PASS, 9 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
