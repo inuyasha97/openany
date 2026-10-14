@@ -14,7 +14,7 @@
 
 - No new dependencies. `simple-git`, `express` and `yaml` are already dependencies of `packages/web`.
 - Server modules are ESM JavaScript. Routes follow `registerXxxRoutes(app, dependencies)` (`packages/web/server/lib/project-context/routes.js:53`). There is no global JSON body parser, so a route that reads a body attaches `express.json({ limit: '1mb' })` itself.
-- Run state dir: `<projectsDirPath>/<projectId>/workflow-runs/<runId>.json`, with `projectsDirPath` = `OPENCHAMBER_PROJECTS_CONFIG_DIR`, the value project context already uses (`packages/web/server/index.js:573-578`).
+- Run state dir: `<projectsDirPath>/<projectConfigFileStemOf(projectId)>/workflow-runs/<runId>.json`, with `projectsDirPath` = `OPENCHAMBER_PROJECTS_CONFIG_DIR`, the value project context already uses (`packages/web/server/index.js:573-578`). The stem, not the raw id, names the directory: a path-derived id grows with the path and would cross the file name limit (`packages/web/server/lib/projects/project-id.js:52-55`).
 - Definitions: `<projectDirectory>/.openchamber/workflows/<id>.yaml`.
 - Tests are vitest files next to the module (`*.test.js`), route tests end in `*.http.test.js` and mount the routes on a bare express app with supertest.
 - Focused test command: `bun run --cwd packages/web test -- server/lib/workflows/<file>.test.js`. Syntax check for a new or rewritten JS module: `node --check <file>`.

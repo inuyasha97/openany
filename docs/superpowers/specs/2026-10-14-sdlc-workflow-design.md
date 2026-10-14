@@ -106,7 +106,7 @@ Screens (packages/ui)
     routes.js
       |
     engine.js --- definitions.js   (<repo>/.openchamber/workflows/*.yaml)
-      |---- store.js               (<projectsDir>/<projectId>/workflow-runs/*.json)
+      |---- store.js               (<projectsDir>/<project stem>/workflow-runs/*.json)
       |---- verifiers.js           (artifacts, commands)
       |---- prompts.js             (prompt block assembly, shared)
       |
@@ -294,7 +294,7 @@ When the working tree is already clean the engine records the current HEAD rathe
 than creating an empty commit.
 
 Run state is an index, local to the machine, at
-`<projectsDir>/<projectId>/workflow-runs/<runId>.json`, the same projects
+`<projectsDir>/<projectConfigFileStemOf(projectId)>/workflow-runs/<runId>.json`, the same projects
 directory project context already uses (`packages/web/server/index.js:573-578`).
 Session ids mean something only on the machine that created them, so run state
 stays out of the repository.
