@@ -91,6 +91,24 @@ const refusingHost = () => ({
   setAutoAccept: async () => {},
 });
 
+// A send that rejects rather than answers `false`: the runtime is gone, the
+// socket died, the request never got an answer.
+const rejectingHost = (message) => ({
+  ...refusingHost(),
+  prompt: async () => { throw new Error(message); },
+});
+
+// The host is wired per call, so the toggle can be missing entirely; nothing
+// else about the step changes.
+const hostWithoutAutoAccept = () => ({
+  createSession: async () => ({ id: 'session-1' }),
+  prompt: async () => true,
+  getSessionStatus: async () => ({ busy: false }),
+  listSessions: async () => [],
+  renameSession: async () => {},
+  setModel: async () => {},
+});
+
 const autoDefinition = parseDefinition(`
 id: two-step
 name: Two step
@@ -98,6 +116,23 @@ version: 1
 steps:
   - id: first
     prompt: "Write out/one.md"
+    confirm: auto
+    verify:
+      artifacts: ["out/*.md"]
+  - id: second
+    prompt: "Check it"
+    session: reuse
+    confirm: human
+`, { file: 'two-step.yaml' }).definition;
+
+const autoPermissionsDefinition = parseDefinition(`
+id: two-step
+name: Two step
+version: 1
+steps:
+  - id: first
+    prompt: "Write out/one.md"
+    permissions: auto
     confirm: auto
     verify:
       artifacts: ["out/*.md"]
@@ -145,6 +180,38 @@ describe('startStep', () => {
     expect(run.steps[0].attempts[0]).toMatchObject({ status: 'blocked' });
     expect(run.steps[0].attempts[0].error.code).toBe('unavailable');
     expect(run.status).toBe('waiting');
+  });
+
+  it('settles an attempt whose send rejected instead of leaving it running', async () => {
+    const { engine, root, runId, store } = await buildEngine({ overrides: { host: rejectingHost('the runtime is down') } });
+    const run = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    expect(run.steps[0].status).toBe('blocked');
+    expect(run.steps[0].note).toBe('the runtime is down');
+    // The attempt is settled, not left claiming a live turn: the run file on disk
+    // says the same thing the answer does.
+    expect(run.steps[0].attempts[0]).toMatchObject({ status: 'blocked', endedAt: 42, error: { code: 'unavailable', message: 'the runtime is down' } });
+    expect(run.status).toBe('waiting');
+    expect((await store.read('proj-1', runId)).steps[0].attempts[0].status).toBe('blocked');
+    await expect(engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'done' }))
+      .rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('settles an attempt whose turn threw instead of leaving it running', async () => {
+    const { engine, root, runId } = await buildEngine({ overrides: { turn: async () => { throw new Error('the status call failed'); } } });
+    const run = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    expect(run.steps[0].attempts[0]).toMatchObject({ status: 'blocked', error: { code: 'unavailable', message: 'the status call failed' } });
+    expect(run.steps[0].status).toBe('blocked');
+    expect(run.status).toBe('waiting');
+  });
+
+  it('runs a step whose host carries no auto-accept toggle', async () => {
+    const { engine, root, runId } = await buildEngine({
+      overrides: { definitions: { read: async () => autoPermissionsDefinition }, host: hostWithoutAutoAccept() },
+    });
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    const run = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    expect(run.steps[0].status).toBe('done');
+    expect(run.status).toBe('running');
   });
 
   it('blocks a step whose declared input has no value', async () => {
@@ -325,6 +392,31 @@ describe('confirmStep', () => {
     const run = await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'skip', reason: 'not needed' });
     expect(run.steps[0].status).toBe('skipped');
     expect(run.cursor).toBe('second');
+    // The run still has a step to run, so it keeps running.
+    expect(run.status).toBe('running');
+  });
+
+  it('settles the run when its last open step is skipped', async () => {
+    const { engine, root, runId, store } = await buildEngine({ overrides: { stepIds: ['first'] } });
+    const run = await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'skip', reason: 'not needed' });
+    expect(run.steps[0].status).toBe('skipped');
+    expect(run.cursor).toBeNull();
+    // Nothing is open and nothing is cursored: the run is over, and it says so on
+    // disk as well, or neither `runUntilStop` nor the restart sweep can move it.
+    expect(run.status).toBe('done');
+    expect((await store.read('proj-1', runId)).status).toBe('done');
+    await expect(engine.runUntilStop({ projectId: 'proj-1', projectPath: root, runId }))
+      .rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('refuses to run a step that is already settled', async () => {
+    const { engine, root, runId, store, prompts } = await buildEngine();
+    await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'skip', reason: 'not needed' });
+    await expect(engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' }))
+      .rejects.toMatchObject({ code: 'conflict', message: 'step first is already settled' });
+    const run = await store.read('proj-1', runId);
+    expect(run.steps[0].attempts).toHaveLength(0);
+    expect(prompts).toHaveLength(0);
   });
 
   it('refuses to confirm a step that never ran', async () => {
@@ -361,6 +453,50 @@ describe('cancelRun', () => {
     expect(run.status).toBe('cancelled');
     expect(run.steps[0].status).toBe('needs_work');
   });
+
+  it('refuses every later per-step call instead of bringing the run back to life', async () => {
+    const { engine, root, runId, store, prompts } = await buildEngine();
+    await engine.cancelRun({ projectId: 'proj-1', runId });
+    const calls = {
+      startStep: () => engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' }),
+      continueStep: () => engine.continueStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first', text: 'more' }),
+      confirmStep: () => engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'done' }),
+      verifyStep: () => engine.verifyStep({ projectId: 'proj-1', runId, stepId: 'first' }),
+    };
+    for (const [name, call] of Object.entries(calls)) {
+      await expect(call(), name).rejects.toMatchObject({ code: 'conflict' });
+    }
+    // No call dispatched a turn, wrote an attempt or touched the run file's
+    // status: the run is still cancelled on disk.
+    const run = await store.read('proj-1', runId);
+    expect(run.status).toBe('cancelled');
+    expect(run.steps.every((step) => step.attempts.length === 0)).toBe(true);
+    expect(prompts).toHaveLength(0);
+  });
+});
+
+describe('runUntilStop', () => {
+  it('holds the project lock for the whole loop, so a cancel cannot land between steps', async () => {
+    let startedTurn = () => {};
+    const turnStarted = new Promise((resolve) => { startedTurn = resolve; });
+    let release = () => {};
+    const gate = new Promise((resolve) => { release = resolve; });
+    const { engine, root, runId, prompts } = await buildEngine({
+      overrides: { turn: async () => { startedTurn(); await gate; return 'completed'; } },
+    });
+    // `first` writes nothing, so its verifier fails and the loop stops there.
+    const running = engine.runUntilStop({ projectId: 'proj-1', projectPath: root, runId });
+    await turnStarted;
+    // The lock started before the first step and is not released until the whole
+    // loop is done, so nothing can cancel the run between two of its steps.
+    await expect(engine.cancelRun({ projectId: 'proj-1', runId })).rejects.toMatchObject({ code: 'busy' });
+    release();
+    const run = await running;
+    expect(prompts).toHaveLength(1);
+    expect(run.cursor).toBe('first');
+    expect(run.steps[1].attempts).toHaveLength(0);
+    expect(run.status).toBe('waiting');
+  });
 });
 
 describe('verifyStep', () => {
@@ -371,5 +507,37 @@ describe('verifyStep', () => {
     const run = await engine.verifyStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
     expect(prompts.length).toBe(before);
     expect(run.steps[0].attempts[0].verify.ok).toBe(false);
+  });
+
+  it('keeps the checkpoint note and moves a blocked step back to waiting_confirm', async () => {
+    const { engine, store, run, runId } = await buildEngine();
+    await fs.writeFile(path.join(run.directory, 'out/a.md'), 'x');
+    const note = 'checkpoint no longer matches: out/a.md (changed)';
+    await store.write({
+      ...run,
+      status: 'waiting',
+      steps: run.steps.map((step) => (step.id === 'first'
+        ? { ...step, status: 'blocked', note, attempts: [{ index: 0, sessionId: 'session-1', prompt: 'x', startedAt: 1, endedAt: 2, status: 'completed', turn: 'completed', verify: { ok: false, artifacts: [], commands: [] }, error: null }] }
+        : step)),
+    });
+    const verified = await engine.verifyStep({ projectId: 'proj-1', runId, stepId: 'first' });
+    // The fresh verdict is a pass, but the broken checkpoint is still a fact, so
+    // its note survives while the status follows the verdict.
+    expect(verified.steps[0].status).toBe('waiting_confirm');
+    expect(verified.steps[0].note).toBe(note);
+  });
+
+  it('moves a waiting step back to needs_work when the verifier fails', async () => {
+    const { engine, store, run, runId } = await buildEngine();
+    await store.write({
+      ...run,
+      status: 'waiting',
+      steps: run.steps.map((step) => (step.id === 'first'
+        ? { ...step, status: 'waiting_confirm', note: null, attempts: [{ index: 0, sessionId: 'session-1', prompt: 'x', startedAt: 1, endedAt: 2, status: 'completed', turn: 'completed', verify: { ok: true, artifacts: [], commands: [] }, error: null }] }
+        : step)),
+    });
+    const verified = await engine.verifyStep({ projectId: 'proj-1', runId, stepId: 'first' });
+    expect(verified.steps[0].status).toBe('needs_work');
+    expect(verified.steps[0].note).toBe('a verifier failed');
   });
 });

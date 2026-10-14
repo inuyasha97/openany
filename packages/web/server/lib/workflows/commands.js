@@ -10,13 +10,41 @@
  * stdout/stderr pipes, so `close` never fires and the engine would await a
  * check that cannot end; the group kill and the immediate `finish(null)`
  * together make the timeout authoritative.
+ *
+ * The output is capped: a check may print for as long as its timeout allows, and
+ * the run file stores this result, so only the first 64 KiB of each stream is
+ * kept and `truncated` says the rest was dropped.
  */
 import { spawn } from 'node:child_process';
 
+const MAX_STREAM_BYTES = 64 * 1024;
+
+/** Keeps `state.text` at or under the cap and flags the stream when it drops data. */
+const appendChunk = (state, chunk) => {
+  if (state.bytes >= MAX_STREAM_BYTES) {
+    state.truncated = true;
+    return;
+  }
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+  const room = MAX_STREAM_BYTES - state.bytes;
+  // The cap counts bytes of what the run file will hold, so the tail is cut on
+  // the buffer. A character cut at the boundary decodes as U+FFFD, which is
+  // wider than the byte it replaced, so the tail is dropped until it fits.
+  let text = buffer.subarray(0, room).toString('utf8');
+  let bytes = Buffer.byteLength(text);
+  while (bytes > room && text.length > 0) {
+    text = text.slice(0, -1);
+    bytes = Buffer.byteLength(text);
+  }
+  state.text += text;
+  state.bytes += bytes;
+  if (buffer.length > room) state.truncated = true;
+};
+
 export const runCommandCheck = ({ directory, run, expectExit = 0, timeoutMs = 600_000 }) => new Promise((resolve) => {
   const startedAt = Date.now();
-  let stdout = '';
-  let stderr = '';
+  const stdout = { text: '', bytes: 0, truncated: false };
+  const stderr = { text: '', bytes: 0, truncated: false };
   let timedOut = false;
   let settled = false;
   const child = spawn(run, { cwd: directory, shell: true, detached: true });
@@ -39,18 +67,19 @@ export const runCommandCheck = ({ directory, run, expectExit = 0, timeoutMs = 60
       run,
       expectExit,
       exitCode,
-      stdout,
-      stderr,
+      stdout: stdout.text,
+      stderr: stderr.text,
+      truncated: stdout.truncated || stderr.truncated,
       timedOut,
       durationMs: Date.now() - startedAt,
       ok: !timedOut && exitCode === expectExit,
     });
   };
 
-  child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
-  child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
+  child.stdout?.on('data', (chunk) => { appendChunk(stdout, chunk); });
+  child.stderr?.on('data', (chunk) => { appendChunk(stderr, chunk); });
   child.on('error', (error) => {
-    stderr += `${stderr ? '\n' : ''}${error.message}`;
+    appendChunk(stderr, `${stderr.text ? '\n' : ''}${error.message}`);
     finish(null);
   });
   child.on('close', (code) => finish(code));

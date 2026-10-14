@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { reconcileRuns } from './resume.js';
+import { createWorkflowEngine } from './engine.js';
 import { createWorkflowRunStore } from './store.js';
 
 let root;
@@ -114,5 +115,70 @@ describe('reconcileRuns', () => {
     const run = await store.read('proj-1', baseRun().runId);
     expect(summary).toMatchObject({ runs: 0, interrupted: 0 });
     expect(run.steps[1].status).toBe('running');
+  });
+});
+
+describe('reconcileRuns and the session of an interrupted step', () => {
+  it('settles the attempt of a step whose turn ended before the restart', async () => {
+    await store.create(baseRun());
+    const summary = await reconcileRuns(deps({ now: () => 42 }));
+    const run = await store.read('proj-1', baseRun().runId);
+    expect(summary.interrupted).toBe(1);
+    // The session is idle, so the turn finished; the attempt is closed from that
+    // evidence while the step still waits for a person.
+    expect(run.steps[1].status).toBe('interrupted');
+    expect(run.steps[1].attempts[0]).toMatchObject({ status: 'completed', endedAt: 42, turn: { outcome: 'unknown-after-restart' } });
+    expect(run.status).toBe('waiting');
+  });
+
+  it('leaves the attempt running when the session is still busy', async () => {
+    await store.create(baseRun());
+    const summary = await reconcileRuns(deps({ host: { getSessionStatus: async () => ({ busy: true }), listSessions: async () => [{ id: 'session-9' }] } }));
+    const run = await store.read('proj-1', baseRun().runId);
+    expect(summary.interrupted).toBe(1);
+    expect(run.steps[1].status).toBe('interrupted');
+    expect(run.steps[1].attempts[0].status).toBe('running');
+    expect(run.steps[1].attempts[0].endedAt).toBeUndefined();
+    expect(run.steps[1].note).toMatch(/still running/);
+  });
+
+  it('always settles the attempt when the status call throws', async () => {
+    await store.create(baseRun());
+    await reconcileRuns(deps({ host: { getSessionStatus: async () => { throw new Error('the runtime is gone'); }, listSessions: async () => [{ id: 'session-9' }] } }));
+    const run = await store.read('proj-1', baseRun().runId);
+    expect(run.steps[1].attempts[0].status).toBe('completed');
+  });
+
+  it('does not touch a session a finished step already recorded', async () => {
+    // `first` is done, so its session no longer matters: probing it (or letting
+    // the settled-step rules skip it) must not disturb its record.
+    await store.create(baseRun());
+    const asked = [];
+    await reconcileRuns(deps({ host: { getSessionStatus: async (id) => { asked.push(id); return { busy: false }; }, listSessions: async () => [{ id: 'session-1' }, { id: 'session-9' }] } }));
+    expect(asked).toEqual(['session-9']);
+  });
+
+  it('lets a step whose turn ended before the restart be confirmed', async () => {
+    await store.create(baseRun());
+    await reconcileRuns(deps({ now: () => 42 }));
+    const engine = createWorkflowEngine({
+      store,
+      definitions: { read: async () => ({ id: 'two-step', version: 1, steps: [{ id: 'first', prompt: 'x' }, { id: 'second', prompt: 'y' }] }) },
+      host: { createSession: async () => ({ id: 'session-1' }), prompt: async () => true, getSessionStatus: async () => ({ busy: false }), listSessions: async () => [{ id: 'session-9' }], renameSession: async () => {}, setModel: async () => {}, setAutoAccept: async () => {} },
+      checkpoints: { write: async ({ artifacts }) => ({ at: 42, commit: 'c'.repeat(40), clean: false, artifacts }) },
+      runChecks: async () => ({ ok: true, artifacts: [], commands: [] }),
+      now: () => 42,
+      broadcast: () => {},
+      logger: { warn: () => {}, error: () => {} },
+    });
+    // The step is interrupted, not finished; a fresh verdict is what reopens it,
+    // and the attempt that already settled is what makes a confirmation possible
+    // at all — before this fix `confirmStep` answered 409 forever.
+    const verified = await engine.verifyStep({ projectId: 'proj-1', runId: baseRun().runId, stepId: 'second' });
+    expect(verified.steps[1].status).toBe('waiting_confirm');
+    const confirmed = await engine.confirmStep({ projectId: 'proj-1', runId: baseRun().runId, stepId: 'second', decision: 'done' });
+    expect(confirmed.steps[1].status).toBe('done');
+    expect(confirmed.steps[1].checkpoint).toMatchObject({ commit: 'c'.repeat(40) });
+    expect(confirmed.status).toBe('done');
   });
 });

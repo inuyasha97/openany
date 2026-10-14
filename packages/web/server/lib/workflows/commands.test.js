@@ -70,4 +70,31 @@ describe('runCommandCheck', () => {
     const result = await runCommandCheck({ directory: root, run: 'node -e "console.log(process.cwd())"', expectExit: 0, timeoutMs: 20000 });
     expect(result.stdout.trim()).toBe(await fs.realpath(root));
   });
+
+  it('caps each stream at 64 KiB and says the rest was dropped', async () => {
+    const run = 'node -e "process.stdout.write(\'o\'.repeat(300000)); process.stderr.write(\'e\'.repeat(300000))"';
+    const result = await runCommandCheck({ directory: root, run, expectExit: 0, timeoutMs: 20000 });
+    expect(result.exitCode).toBe(0);
+    expect(result.truncated).toBe(true);
+    // The run file holds this result, so the bound is what the record costs.
+    expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(64 * 1024);
+    expect(Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(64 * 1024);
+    expect(result.stdout).toBe('o'.repeat(64 * 1024));
+    expect(result.stderr).toBe('e'.repeat(64 * 1024));
+  });
+
+  it('does not flag a small output as truncated', async () => {
+    const result = await runCommandCheck({ directory: root, run: 'node -e "console.log(\'hi\')"', expectExit: 0, timeoutMs: 20000 });
+    expect(result.truncated).toBe(false);
+    expect(result.stdout).toContain('hi');
+  });
+
+  it('keeps a multi-byte character at the cap boundary within the cap', async () => {
+    // Three bytes per character, so the cap cannot fall on a character boundary:
+    // the tail is cut on the bytes and the record stays inside the cap.
+    const run = 'node -e "process.stdout.write(\'€\'.repeat(40000))"';
+    const result = await runCommandCheck({ directory: root, run, expectExit: 0, timeoutMs: 20000 });
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(64 * 1024);
+  });
 });

@@ -58,4 +58,47 @@ describe('createWorkflowRuntime', () => {
       stepId: 'first',
     })).rejects.toThrow(/not available/);
   });
+
+  it('runs a step when no auto-accept toggle is wired', async () => {
+    let polls = 0;
+    const runtime = await createRuntime({
+      setSessionAutoAccept: undefined,
+      getOmpRuntimeHost: async () => ({
+        createSession: async () => ({ id: 'session-1' }),
+        prompt: async () => true,
+        // Busy once, then idle: `waitForTurnEnd` accepts idle only after it has
+        // seen a busy reading, and this keeps the wait to one poll interval.
+        getSessionStatus: async () => ({ busy: (polls += 1) === 1 }),
+        listSessions: async () => [],
+        renameSession: async () => {},
+        setModel: async () => {},
+      }),
+    });
+    const projectPath = runtime.projectPathFromId('proj-1');
+    await fs.mkdir(path.join(projectPath, '.openchamber/workflows'), { recursive: true });
+    await fs.writeFile(
+      path.join(projectPath, '.openchamber/workflows/a.yaml'),
+      'id: a\nname: A\nversion: 1\nsteps:\n  - id: first\n    prompt: "do it"\n    permissions: auto\n',
+    );
+    const runId = '22222222-2222-4333-8444-555555555555';
+    await runtime.store.create({
+      runId,
+      projectId: 'proj-1',
+      directory: projectPath,
+      workflowId: 'a',
+      workflowVersion: 1,
+      workflowHash: 'h',
+      inputs: {},
+      status: 'idle',
+      cursor: 'first',
+      sandbox: 'working-tree',
+      createdAt: 1,
+      steps: [{ id: 'first', status: 'pending', attempts: [], checkpoint: null, note: null }],
+    });
+    // `permissions: auto` reaches for the toggle on the way in; a runtime with no
+    // toggle must still run the step rather than throw on the missing call.
+    const run = await runtime.engine.startStep({ projectId: 'proj-1', projectPath, runId, stepId: 'first' });
+    expect(run.steps[0].status).toBe('waiting_confirm');
+    expect(run.steps[0].attempts[0]).toMatchObject({ status: 'completed', verify: { ok: true } });
+  });
 });

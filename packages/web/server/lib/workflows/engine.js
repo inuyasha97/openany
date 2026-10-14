@@ -26,6 +26,12 @@ export class WorkflowError extends Error {
 const TERMINAL_RUN_STATUSES = new Set(['done', 'failed', 'cancelled']);
 const STOPS = new Set(['waiting_confirm', 'needs_work', 'blocked', 'failed', 'interrupted']);
 
+/** Step statuses a fresh verdict moves, in the direction that verdict points. */
+const VERIFIER_PASS_STATUSES = new Set(['needs_work', 'blocked', 'interrupted']);
+const VERIFIER_FAIL_STATUSES = new Set(['waiting_confirm', 'interrupted', 'blocked']);
+/** A note the checkpoint check wrote; a verifier has no say over it. */
+const CHECKPOINT_NOTE_PREFIX = 'checkpoint no longer matches';
+
 /**
  * The session a `session: reuse` step continues: the nearest preceding attempt
  * that has one, starting from this step's own last attempt. Walking the steps
@@ -98,12 +104,36 @@ export const createWorkflowEngine = ({
     return step;
   };
 
+  /**
+   * A run that has stopped for good has no step left to run. Without this,
+   * `cancelRun` followed by any per-step call would start a fresh attempt, set
+   * the run back to `running` and spend tokens on a run the person called off.
+   */
+  const assertRunIsOpen = (run) => {
+    if (TERMINAL_RUN_STATUSES.has(run.status)) {
+      throw new WorkflowError('conflict', `run ${run.runId} is ${run.status}`, 409);
+    }
+    return run;
+  };
+
+  /**
+   * A step whose record is already written down does not run again in this run:
+   * a checkpoint stands for a finished step's work, and a skipped step is a
+   * decision the person made.
+   */
+  const assertStepIsOpen = (step) => {
+    if (step.status === 'done' || step.status === 'skipped') {
+      throw new WorkflowError('conflict', `step ${step.id} is already settled`, 409);
+    }
+    return step;
+  };
+
   const attemptStep = async ({ projectId, projectPath, runId, stepId }) => {
-    const run = await loadRun(projectId, runId);
+    const run = assertRunIsOpen(await loadRun(projectId, runId));
     const definition = await loadStepDefinition(projectId, run);
     const declared = definition.steps.find((entry) => entry.id === stepId);
     if (!declared) throw new WorkflowError('not-found', `step ${stepId} is not declared by ${run.workflowId}`, 404);
-    const step = findStep(run, stepId);
+    const step = assertStepIsOpen(findStep(run, stepId));
 
     const { text, missing } = substituteInputs(declared.prompt, run.inputs ?? {});
     if (missing.length > 0) {
@@ -148,7 +178,14 @@ export const createWorkflowEngine = ({
   const runPromptInSession = async ({ run, step, declared, sessionId, text, projectPath }) => {
     const bus = requireHost();
     if (declared.permissions === 'auto') {
-      await bus.setAutoAccept?.(sessionId, true, projectPath).catch(() => undefined);
+      // The host is wired per call and may not carry a toggle at all, so the
+      // optional call is awaited directly: chaining `.catch` onto `undefined`
+      // throws before the attempt has even been sent.
+      try {
+        await bus.setAutoAccept?.(sessionId, true, projectPath);
+      } catch (error) {
+        logger.warn?.('[workflows] could not enable permission auto-accept', error?.message ?? error);
+      }
     }
     const attempt = { index: step.attempts.length, sessionId, prompt: text, startedAt: now(), endedAt: null, status: 'running', turn: null, verify: null, error: null };
     step.attempts.push(attempt);
@@ -158,11 +195,41 @@ export const createWorkflowEngine = ({
     // The request that starts the attempt answers only when the turn is over, so
     // this frame is the only way a screen learns the step is running.
     emit(started);
-    const accepted = await bus.prompt(sessionId, text);
-    if (accepted !== true) {
+    // Everything from the send to the settle lives inside this `try`: a
+    // rejection here — the prompt, the turn's status call, a checkpoint write or
+    // the run file itself — would otherwise leave the attempt `running` and the
+    // run file claiming a live turn for the rest of the process's life.
+    try {
+      const accepted = await bus.prompt(sessionId, text);
+      if (accepted !== true) {
+        attempt.status = 'blocked';
+        attempt.endedAt = now();
+        attempt.error = { code: 'unavailable', message: 'the OMP runtime did not take the prompt' };
+        step.status = 'blocked';
+        step.note = attempt.error.message;
+        run.status = 'waiting';
+        const saved = await store.write(run);
+        emit(saved);
+        return saved;
+      }
+      const outcome = await turn({ host: bus, sessionId });
+      attempt.turn = outcome;
+      attempt.endedAt = now();
+      if (outcome !== 'completed') {
+        attempt.status = 'blocked';
+        attempt.error = { code: 'unavailable', message: outcome === 'timeout' ? 'the turn did not finish before the timeout' : 'the runtime never reported the turn as running' };
+        step.status = 'blocked';
+        step.note = attempt.error.message;
+        run.status = 'waiting';
+        const saved = await store.write(run);
+        emit(saved);
+        return saved;
+      }
+      return await settleAttempt({ run, step, declared, attempt });
+    } catch (error) {
       attempt.status = 'blocked';
       attempt.endedAt = now();
-      attempt.error = { code: 'unavailable', message: 'the OMP runtime did not take the prompt' };
+      attempt.error = { code: 'unavailable', message: error?.message ?? 'the attempt failed' };
       step.status = 'blocked';
       step.note = attempt.error.message;
       run.status = 'waiting';
@@ -170,20 +237,6 @@ export const createWorkflowEngine = ({
       emit(saved);
       return saved;
     }
-    const outcome = await turn({ host: bus, sessionId });
-    attempt.turn = outcome;
-    attempt.endedAt = now();
-    if (outcome !== 'completed') {
-      attempt.status = 'blocked';
-      attempt.error = { code: 'unavailable', message: outcome === 'timeout' ? 'the turn did not finish before the timeout' : 'the runtime never reported the turn as running' };
-      step.status = 'blocked';
-      step.note = attempt.error.message;
-      run.status = 'waiting';
-      const saved = await store.write(run);
-      emit(saved);
-      return saved;
-    }
-    return settleAttempt({ run, step, declared, attempt });
   };
 
   /** Run the verifiers and record the outcome of one completed attempt. */
@@ -234,9 +287,12 @@ export const createWorkflowEngine = ({
 
   return {
     startStep: ({ projectId, projectPath, runId, stepId }) => withLock(projectId, () => attemptStep({ projectId, projectPath, runId, stepId })),
-    runUntilStop: async ({ projectId, projectPath, runId }) => {
-      const start = await loadRun(projectId, runId);
-      if (TERMINAL_RUN_STATUSES.has(start.status)) throw new WorkflowError('conflict', `run ${runId} is ${start.status}`, 409);
+    // One lock for the whole loop, not one per step: with a lock per step the
+    // project is unheld between two iterations, and a `cancelRun` or a second
+    // `run` landing in that gap would be written back over by the loop's next
+    // write.
+    runUntilStop: ({ projectId, projectPath, runId }) => withLock(projectId, async () => {
+      const start = assertRunIsOpen(await loadRun(projectId, runId));
       const firstStepId = start.cursor ?? start.steps.find((step) => step.status === 'pending')?.id;
       if (!firstStepId) throw new WorkflowError('conflict', `run ${runId} has no step left to run`, 409);
       // A run already stopped for a person is returned as it stands: running
@@ -244,17 +300,17 @@ export const createWorkflowEngine = ({
       // answered yet.
       const cursorStep = start.steps.find((step) => step.id === firstStepId);
       if (cursorStep && STOPS.has(cursorStep.status)) return start;
-      let run = await withLock(projectId, () => attemptStep({ projectId, projectPath, runId, stepId: firstStepId }));
+      let run = await attemptStep({ projectId, projectPath, runId, stepId: firstStepId });
       while (run.cursor && !STOPS.has(run.steps.find((step) => step.id === run.cursor)?.status ?? 'pending')) {
         const next = run.cursor;
-        run = await withLock(projectId, () => attemptStep({ projectId, projectPath, runId, stepId: next }));
+        run = await attemptStep({ projectId, projectPath, runId, stepId: next });
       }
       return run;
-    },
+    }),
 
     confirmStep: async ({ projectId, runId, stepId, decision, reason = null }) => {
       if (inFlight.has(projectId)) throw new WorkflowError('busy', 'this project already has a run executing a step', 409);
-      const run = await loadRun(projectId, runId);
+      const run = assertRunIsOpen(await loadRun(projectId, runId));
       const step = findStep(run, stepId);
       if (!['done', 'not_done', 'skip'].includes(decision)) throw new WorkflowError('invalid', `unknown decision "${decision}"`);
       if (decision === 'done') {
@@ -274,6 +330,10 @@ export const createWorkflowEngine = ({
         step.status = 'skipped';
         step.note = reason;
         advance(run, stepId);
+        // A skipped step still settles the run: without this the run keeps
+        // reading `running` with no step left to run, and neither `runUntilStop`
+        // nor the restart sweep can move it again.
+        run.status = run.cursor ? 'running' : hasOpenWork(run) ? 'waiting' : 'done';
       } else {
         step.status = 'needs_work';
         step.note = reason ?? 'the person answered that the step is not done';
@@ -288,7 +348,7 @@ export const createWorkflowEngine = ({
       const trimmed = typeof text === 'string' ? text.trim() : '';
       if (!trimmed) throw new WorkflowError('invalid', 'a continue prompt needs text');
       return withLock(projectId, async () => {
-        const run = await loadRun(projectId, runId);
+        const run = assertRunIsOpen(await loadRun(projectId, runId));
         const definition = await loadStepDefinition(projectId, run);
         const declared = definition.steps.find((entry) => entry.id === stepId);
         const step = findStep(run, stepId);
@@ -300,14 +360,22 @@ export const createWorkflowEngine = ({
 
     verifyStep: async ({ projectId, runId, stepId }) => {
       if (inFlight.has(projectId)) throw new WorkflowError('busy', 'this project already has a run executing a step', 409);
-      const run = await loadRun(projectId, runId);
+      const run = assertRunIsOpen(await loadRun(projectId, runId));
       const definition = await loadStepDefinition(projectId, run);
       const declared = definition.steps.find((entry) => entry.id === stepId);
       const step = findStep(run, stepId);
       const attempt = step.attempts.at(-1);
       if (!declared || !attempt) throw new WorkflowError('conflict', `step ${stepId} has not run yet`, 409);
       attempt.verify = await runChecks({ step: declared, directory: run.directory });
-      step.note = attempt.verify.ok ? null : 'a verifier failed';
+      // A fresh verdict is also a fresh status: a step waiting on a check that
+      // now fails reads `needs_work`, and one whose check passes goes back to
+      // waiting for the person. A note the checkpoint check wrote stays, because
+      // the checkpoint is still broken whatever this verifier says.
+      if (attempt.verify.ok && VERIFIER_PASS_STATUSES.has(step.status)) step.status = 'waiting_confirm';
+      if (!attempt.verify.ok && VERIFIER_FAIL_STATUSES.has(step.status)) step.status = 'needs_work';
+      if (!(typeof step.note === 'string' && step.note.startsWith(CHECKPOINT_NOTE_PREFIX))) {
+        step.note = attempt.verify.ok ? null : 'a verifier failed';
+      }
       const saved = await store.write(run);
       emit(saved);
       return saved;
@@ -333,6 +401,7 @@ export const createWorkflowEngine = ({
       // A project with a step executing right now must not be written from a
       // snapshot taken before that attempt started.
       isProjectBusy: (projectId) => inFlight.has(projectId),
+      now,
       logger,
     }),
   };

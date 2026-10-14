@@ -48,7 +48,11 @@ export const createWorkflowRuntime = ({
     listSessions: async () => (await requireHost()).listSessions(),
     renameSession: async (sessionId, title) => (await requireHost()).renameSession(sessionId, title),
     setModel: async (sessionId, provider, modelId) => (await requireHost()).setModel(sessionId, provider, modelId),
-    setAutoAccept: async (sessionId, enabled, directory) => setSessionAutoAccept?.(sessionId, enabled, directory),
+    // `async` and an `await` on purpose: the toggle may not be wired, and a call
+    // that returns `undefined` breaks every caller that chains `.catch` onto it.
+    setAutoAccept: async (sessionId, enabled, directory) => {
+      await setSessionAutoAccept?.(sessionId, enabled, directory);
+    },
   };
 
   const engine = createWorkflowEngine({

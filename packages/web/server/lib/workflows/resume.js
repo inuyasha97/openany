@@ -5,7 +5,10 @@
  * belong to the project, and commits belong to git. Every one of them is
  * re-checked here, and anything uncertain is reported instead of assumed. A
  * step that was running when the server stopped becomes `interrupted`, because
- * the engine cannot tell a finished turn from a turn that never returned.
+ * the engine cannot tell a finished turn from a turn that never returned — but
+ * the session can: a session that is idle settled its turn before the kill, so
+ * the attempt is closed on the evidence and the person can still answer the
+ * step, while a busy session keeps its attempt running and says so.
  *
  * The sweep is deliberately forgiving: one project or one run that cannot be
  * read must not cost the others their reconciliation, and a project with a step
@@ -22,6 +25,7 @@ export const reconcileRuns = async ({
   verifyCheckpoint,
   listProjectIds,
   isProjectBusy = () => false,
+  now = Date.now,
   logger = console,
 }) => {
   const summary = { runs: 0, interrupted: 0, blocked: 0, waiting: 0 };
@@ -41,7 +45,7 @@ export const reconcileRuns = async ({
     for (const run of runs) {
       if (!ACTIVE.has(run.status)) continue;
       try {
-        const outcome = await reconcileRun({ run, store, verifyCheckpoint, sessions, logger });
+        const outcome = await reconcileRun({ run, store, host, verifyCheckpoint, sessions, now, logger });
         summary.runs += outcome.changed ? 1 : 0;
         summary.interrupted += outcome.interrupted;
         summary.blocked += outcome.blocked ? 1 : 0;
@@ -58,7 +62,7 @@ export const reconcileRuns = async ({
  * One run, rebuilt from what is on disk. It answers what the run counted as, so
  * the summary counts runs and never steps.
  */
-const reconcileRun = async ({ run, store, verifyCheckpoint, sessions, logger }) => {
+const reconcileRun = async ({ run, store, host, verifyCheckpoint, sessions, now, logger }) => {
   const knownSessions = sessions === null ? null : new Set(sessions.map((entry) => entry.id));
   let interrupted = 0;
   let blocked = false;
@@ -68,10 +72,15 @@ const reconcileRun = async ({ run, store, verifyCheckpoint, sessions, logger }) 
   let blockedStepId = null;
 
   for (const step of run.steps) {
+    // Only a step this pass interrupted is probed: a step an earlier sweep
+    // already reattached carries the note the person has to read, and asking
+    // again would overwrite it.
+    let interruptedNow = false;
     if (step.status === 'running') {
       step.status = 'interrupted';
       step.note = 'the server stopped while this step was running';
       interrupted += 1;
+      interruptedNow = true;
       changed = true;
     }
 
@@ -100,6 +109,25 @@ const reconcileRun = async ({ run, store, verifyCheckpoint, sessions, logger }) 
       blocked = true;
       blockedStepId = blockedStepId ?? step.id;
       changed = true;
+    } else if (interruptedNow && step.status === 'interrupted' && attempt?.sessionId) {
+      // The turn may have finished before the server stopped, and an attempt left
+      // `running` with no `endedAt` can never be confirmed: `confirmStep` only
+      // accepts a settled attempt. A session that reports idle is that evidence,
+      // so the attempt is closed and the step stays interrupted for the person; a
+      // busy session keeps its attempt running and the step says what to do.
+      let status = null;
+      try {
+        status = await host.getSessionStatus(attempt.sessionId);
+      } catch (error) {
+        logger.warn?.(`[workflows] could not read the status of session ${attempt.sessionId}: ${error?.message ?? error}`);
+      }
+      if (status?.busy === true) {
+        step.note = 'the turn is still running; stop it before answering this step';
+      } else {
+        attempt.status = 'completed';
+        attempt.endedAt = now();
+        attempt.turn = { outcome: 'unknown-after-restart' };
+      }
     }
   }
 
