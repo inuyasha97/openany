@@ -39,6 +39,7 @@ Fork-owned. Free to grow. Add a directory here when you create one:
 - `docs/agent-host/`
 - `packages/ui/src/lib/agent/`
 - `packages/web/server/lib/agents/`
+- `packages/web/server/lib/workflows/`
 
 ## Fork-only code depends on seams, not internals
 
