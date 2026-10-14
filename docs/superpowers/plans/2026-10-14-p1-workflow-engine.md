@@ -1342,6 +1342,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkflowRunStore, isValidRunId, isValidProjectId } from './store.js';
+import { projectConfigFileStemOf } from '../projects/project-id.js';
 
 let root;
 let store;
