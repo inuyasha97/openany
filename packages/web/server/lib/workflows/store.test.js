@@ -37,8 +37,17 @@ describe('identifiers', () => {
   it('rejects a path escape in a project id or a run id', () => {
     expect(isValidProjectId('../etc')).toBe(false);
     expect(isValidProjectId('proj-1')).toBe(true);
+    expect(isValidProjectId('proj/1')).toBe(false);
     expect(isValidRunId('..')).toBe(false);
     expect(isValidRunId('11111111-2222-4333-8444-555555555555')).toBe(true);
+  });
+
+  it('accepts a path-derived project id, whose length follows the path', () => {
+    // `path_<base64url>` of a long directory exceeds any short cap, and the run
+    // store is where that id lands.
+    const longId = `path_${Buffer.from('/Users/someone/'.padEnd(200, 'x'), 'utf8').toString('base64url')}`;
+    expect(longId.length).toBeGreaterThan(200);
+    expect(isValidProjectId(longId)).toBe(true);
   });
 });
 

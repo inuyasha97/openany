@@ -8,7 +8,11 @@
  * serialized and go through a temporary file and a rename, so a crash leaves
  * either the old file or the new one.
  */
-const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+// A project id is `path_<base64url of the project path>` (`createProjectIdFromPath`),
+// so its length follows the path's: a 93-character path already exceeds 128
+// characters. The cap is generous on purpose, and the safety comes from the
+// character set plus the `..` refusal below, not from the length.
+const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]{1,512}$/;
 const RUN_ID_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
 
 export const isValidProjectId = (value) => typeof value === 'string' && PROJECT_ID_PATTERN.test(value) && !value.includes('..');
