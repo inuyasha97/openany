@@ -2983,6 +2983,11 @@ describe('createWorkflowRuntime', () => {
   it('answers unavailable when the runtime is not mounted, instead of prompting nothing', async () => {
     const runtime = await createRuntime();
     const projectPath = runtime.projectPathFromId('proj-1');
+    // The engine loads the definition before it reaches the host, so the run
+    // needs a definition that parses; without it the failure would be
+    // `workflow a is missing or invalid` and the host branch would stay untested.
+    await fs.mkdir(path.join(projectPath, '.openchamber/workflows'), { recursive: true });
+    await fs.writeFile(path.join(projectPath, '.openchamber/workflows/a.yaml'), 'id: a\nname: A\nversion: 1\nsteps:\n  - id: first\n    prompt: "one"\n    confirm: human\n');
     await runtime.store.create({
       runId: '11111111-2222-4333-8444-555555555555',
       projectId: 'proj-1',
