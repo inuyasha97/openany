@@ -82,20 +82,15 @@ export const matchArtifacts = async ({ directory, pattern }) => {
 };
 
 export const hashFile = async (absolutePath) => {
-  const before = await fs.stat(absolutePath);
+  // Size and digest come from the same read, so the pair always describes the
+  // same bytes. Comparing them later is what tells a checkpoint whether the file
+  // still holds what it held when a person confirmed it.
   const digest = crypto.createHash('sha256');
-  await pipeline(createReadStream(absolutePath), digest);
-  const after = await fs.stat(absolutePath);
-  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
-    // The file changed while it was being read, so that digest describes no
-    // real state and a checkpoint holding it would later report a change that
-    // never happened. Read it once more.
-    const retry = crypto.createHash('sha256');
-    await pipeline(createReadStream(absolutePath), retry);
-    const settled = await fs.stat(absolutePath);
-    return { size: settled.size, sha256: retry.digest('hex') };
-  }
-  return { size: after.size, sha256: digest.digest('hex') };
+  let size = 0;
+  const source = createReadStream(absolutePath);
+  source.on('data', (chunk) => { size += chunk.length; });
+  await pipeline(source, digest);
+  return { size, sha256: digest.digest('hex') };
 };
 
 export const inspectArtifacts = async ({ directory, patterns }) => {
