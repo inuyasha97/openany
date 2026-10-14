@@ -57,7 +57,7 @@ describe('parseDefinition', () => {
   });
 
   it('rejects confirm: auto with nothing to verify', () => {
-    const result = parseDefinition(valid.replace('confirm: auto', 'confirm: auto').replace('    verify:\n      commands:\n        - run: "bun run type-check:web"\n', ''), { file: 'a.yaml' });
+    const result = parseDefinition(valid.replace('    verify:\n      commands:\n        - run: "bun run type-check:web"\n', ''), { file: 'a.yaml' });
     expect(result.ok).toBe(false);
     expect(result.errors[0].field).toBe('steps[1]');
     expect(result.errors[0].message).toMatch(/confirm: auto needs a verifier/);
@@ -103,5 +103,21 @@ describe('createWorkflowDefinitions', () => {
     const local = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId: () => root });
     expect(await local.list('proj-1')).toEqual([]);
     expect(await local.list('unknown-project')).toEqual([]);
+  });
+
+  it('reports an unreadable entry without breaking the listing', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-defs-unreadable-'));
+    await fs.mkdir(path.join(root, '.openchamber/workflows/odd.yaml'), { recursive: true });
+    await fs.writeFile(path.join(root, '.openchamber/workflows/two-step.yaml'), valid);
+    const local = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId: () => root });
+
+    const listed = await local.list('proj-1');
+    const odd = listed.find((entry) => entry.file === 'odd.yaml');
+    const good = listed.find((entry) => entry.file === 'two-step.yaml');
+    expect(listed.map((entry) => entry.file)).toEqual(['odd.yaml', 'two-step.yaml']);
+    expect(odd.definition).toBeNull();
+    expect(odd.errors.length).toBeGreaterThan(0);
+    expect(good.id).toBe('sdlc-feature');
+    expect((await local.read('proj-1', 'sdlc-feature')).steps.map((step) => step.id)).toEqual(['spec', 'verify']);
   });
 });

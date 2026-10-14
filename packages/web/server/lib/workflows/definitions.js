@@ -128,8 +128,10 @@ export const parseDefinition = (rawText, { file = 'unknown.yaml' } = {}) => {
       if (!STEP_FIELDS.has(key)) errors.push({ field, message: `unknown field "${key}"` });
     }
     if (!isName(step.id)) errors.push({ field: `${field}.id`, message: 'must be lowercase words or dashes' });
-    if (stepIds.has(step.id)) errors.push({ field: `${field}.id`, message: `duplicate step id "${step.id}"` });
-    stepIds.add(step.id);
+    if (isName(step.id)) {
+      if (stepIds.has(step.id)) errors.push({ field: `${field}.id`, message: `duplicate step id "${step.id}"` });
+      stepIds.add(step.id);
+    }
     if (step.title !== undefined && typeof step.title !== 'string') errors.push({ field: `${field}.title`, message: 'must be a string' });
     if (!isText(step.prompt)) errors.push({ field: `${field}.prompt`, message: 'is required' });
     if (step.session !== undefined && !['new', 'reuse'].includes(step.session)) {
@@ -200,8 +202,14 @@ export const createWorkflowDefinitions = ({ fsPromises, path, projectPathFromId 
       .sort();
     const results = [];
     for (const name of entries) {
-      const raw = await fsPromises.readFile(path.join(directory, name), 'utf8');
-      const parsed = parseDefinition(raw, { file: name });
+      let parsed;
+      try {
+        const raw = await fsPromises.readFile(path.join(directory, name), 'utf8');
+        parsed = parseDefinition(raw, { file: name });
+      } catch (error) {
+        results.push({ file: name, id: null, name: null, version: null, errors: [{ field: '$', message: error?.message ?? 'unreadable' }], definition: null });
+        continue;
+      }
       results.push(parsed.ok
         ? { file: name, id: parsed.definition.id, name: parsed.definition.name, version: parsed.definition.version, errors: [], definition: parsed.definition }
         : { file: name, id: null, name: null, version: null, errors: parsed.errors, definition: null });
