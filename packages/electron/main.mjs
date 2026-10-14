@@ -247,7 +247,6 @@ const state = {
   pendingUpdate: null,
   unreachableHosts: new Set(),
   windowCounter: 1,
-  focusedWindowIds: new Set(),
   windowGeometryRevisions: new Map(),
   windowGeometryTimers: new Map(),
   miniChatWindowsBySession: new Map(),
@@ -779,6 +778,9 @@ const writeDesktopHostsConfig = async (config) => {
 
 const writeWindowState = async (browserWindow) => {
   if (!browserWindow || browserWindow.isDestroyed()) return;
+  // Geometry is persisted for the main window only, by design: additional
+  // windows are transient (createAdditionalWindow passes restoreGeometry:false),
+  // and a mini chat window opens at the fixed MINI_CHAT_WINDOW_* default size.
   if (!state.mainWindow || browserWindow.id !== state.mainWindow.id) return;
 
   const bounds = browserWindow.getBounds();
@@ -1970,13 +1972,6 @@ const nextWindowLabel = () => {
   return value === 1 ? 'main' : `main-${value}`;
 };
 
-const canUseTitleBarOverlay = (browserWindow) => (
-  process.platform === 'win32' &&
-  Boolean(browserWindow?.__ocTitleBarOverlayEnabled) &&
-  typeof browserWindow.setTitleBarOverlay === 'function' &&
-  !browserWindow.isDestroyed()
-);
-
 // `adopt` hands over the window the entry module created before this module
 // loaded; it is already on the splash and shows itself on ready-to-show.
 const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {}, adopt = null }) => {
@@ -1988,7 +1983,6 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {}, 
   const desktopApiBaseUrl = rendererRuntimeConfig.apiBaseUrl;
   const desktopClientToken = rendererRuntimeConfig.clientToken;
   const desktopRequestHeaders = rendererRuntimeConfig.requestHeaders || {};
-  const titleBarOverlayEnabled = false;
 
   const browserWindow = adopt?.browserWindow ?? new BrowserWindow(buildMainWindowOptions({
     bounds,
@@ -2006,7 +2000,6 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {}, 
   browserWindow.__ocLabel = label || nextWindowLabel();
   browserWindow.__ocRuntimeConfig = { apiBaseUrl: desktopApiBaseUrl, clientToken: desktopClientToken, requestHeaders: desktopRequestHeaders };
   browserWindow.__ocInitScript = buildInitScript(desktopLocalOrigin, state.bootOutcome, desktopApiBaseUrl, desktopClientToken, desktopRequestHeaders);
-  browserWindow.__ocTitleBarOverlayEnabled = titleBarOverlayEnabled;
   browserWindow.on('app-command', (event, command) => {
     if (command === 'browser-backward') event.preventDefault();
   });
@@ -2014,13 +2007,6 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {}, 
   if (!adopt && maximized) {
     browserWindow.maximize();
   }
-
-  browserWindow.on('focus', () => {
-    state.focusedWindowIds.add(browserWindow.id);
-  });
-  browserWindow.on('blur', () => {
-    state.focusedWindowIds.delete(browserWindow.id);
-  });
 
   // Traffic lights disappear during dock-restore animation when using
   // titleBarStyle:'hidden' + custom trafficLightPosition. macOS caches a
@@ -2088,7 +2074,6 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {}, 
     debounceWindowStatePersist(browserWindow, true);
   });
   browserWindow.on('closed', () => {
-    state.focusedWindowIds.delete(browserWindow.id);
     if (state.mainWindow && browserWindow.id === state.mainWindow.id) {
       state.mainWindow = null;
     }
@@ -2486,6 +2471,9 @@ const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', proj
     void shell.openExternal(url).catch(() => {});
     return { action: 'deny' };
   });
+  // Deliberately narrower than the main window's isAllowedNavigationUrl: a mini
+  // chat window loads the packaged UI or the local server origin only, so a link
+  // to a configured host opens in the default browser instead of navigating here.
   browserWindow.webContents.on('will-navigate', (event, url) => {
     try {
       const target = new URL(url);
@@ -2517,6 +2505,8 @@ const setMiniChatPinned = (browserWindow, pinned) => {
   const nextPinned = pinned === true;
   browserWindow.__ocPinned = nextPinned;
   if (nextPinned) {
+    // Pinned means always-on-top, not visible on every Space: by design a mini
+    // chat window stays on the Space it is shown on, so no setVisibleOnAllWorkspaces.
     browserWindow.setAlwaysOnTop(true, 'floating');
   } else {
     browserWindow.setAlwaysOnTop(false);
@@ -4107,14 +4097,6 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
         nativeTheme.themeSource = 'dark';
       } else {
         nativeTheme.themeSource = 'system';
-      }
-      if (canUseTitleBarOverlay(browserWindow)) {
-        const useDark = nativeTheme.shouldUseDarkColors;
-        browserWindow.setTitleBarOverlay({
-          color: useDark ? '#151313' : '#f5f5f4',
-          symbolColor: useDark ? '#fafaf9' : '#1c1917',
-          height: 48,
-        });
       }
       return null;
     }
