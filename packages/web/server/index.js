@@ -63,6 +63,8 @@ import { createSettingsHelpers } from './lib/openchamber/settings-helpers.js';
 import { readConfigFile, writeConfig } from './lib/openchamber/agent-config-files.js';
 import { createThemeRuntime } from './lib/openchamber/theme-runtime.js';
 import { createFeatureRoutesRuntime } from './lib/openchamber/feature-routes-runtime.js';
+import { createWorkflowRuntime } from './lib/workflows/runtime.js';
+import { createProjectIdFromPath, projectPathFromId } from './lib/projects/project-id.js';
 // Fork-owned OMP agent runtime; the only runtime in this fork.
 import { installOmpAgentRuntime } from './lib/agents/index.js';
 import { configureOmpRuntimeHost, listPermissions, readSessions } from './lib/agents/omp-host-access.js';
@@ -963,6 +965,18 @@ const clientPairingRuntime = createClientPairingRuntime({
   storePath: CLIENT_PAIRING_SESSIONS_FILE_PATH,
   remoteClientAuthRuntime,
 });
+const workflowRuntime = createWorkflowRuntime({
+  projectsDirPath: OPENCHAMBER_PROJECTS_CONFIG_DIR,
+  projectPathFromId,
+  resolveProjectId: createProjectIdFromPath,
+  getOmpRuntimeHost: async () => {
+    const host = ompAgentRuntime?.getHost?.();
+    return host ? await host : null;
+  },
+  setSessionAutoAccept: (sessionId, enabled, directory) => permissionAutoAcceptRuntime.setSessionPolicy(sessionId, enabled, directory),
+  broadcast: broadcastOpenChamberUiEvent,
+  logger: console,
+});
 const featureRoutesRuntime = createFeatureRoutesRuntime({
   clientReloadDelayMs: CLIENT_RELOAD_DELAY_MS,
 });
@@ -1793,6 +1807,7 @@ async function main(options = {}) {
     isAgentMemoryEnabled,
     sessionKnowledgeRuntime,
     scheduledTasksRuntime,
+    workflowRuntime,
     scheduledTaskService,
     openChamberSessionService,
     openChamberControlService,

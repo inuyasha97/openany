@@ -27,6 +27,7 @@ import { registerConfigSnippetRoutes } from '../openchamber/config-snippet-route
 import { registerConfigSkillRoutes } from '../openchamber/config-skill-routes.js';
 import { registerConfigEntityRoutes } from '../openchamber/config-entity-routes.js';
 import { registerScheduledTaskRoutes } from '../scheduled-tasks/routes.js';
+import { registerWorkflowRoutes } from '../workflows/routes.js';
 import { registerOpenChamberSessionRoutes } from '../openchamber-sessions/routes.js';
 import { registerOpenChamberControlRoutes } from '../openchamber-control/routes.js';
 import { registerMarkdownImageGrantRoutes } from '../markdown-image-grants/routes.js';
@@ -127,6 +128,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       isAgentMemoryEnabled,
       sessionKnowledgeRuntime,
       scheduledTasksRuntime,
+      workflowRuntime,
       scheduledTaskService,
       openChamberSessionService,
       openChamberControlService,
@@ -205,6 +207,8 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       getOpenChamberEventClients,
       writeSseEvent,
     });
+
+    registerWorkflowRoutes(app, { workflowsRuntime: workflowRuntime });
 
     registerOpenChamberSessionRoutes(app, {
       readSettingsFromDiskMigrated,
