@@ -14,6 +14,12 @@ afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+// Spawns a grandchild that outlives the shell it was started from and writes
+// `marker` 1200 ms later. Passing the marker as an argument (rather than
+// inlining it) keeps the same quoting shape in both tests below: one asserts
+// the timeout kill removes the writer, the other proves the writer works.
+const markerCommand = (marker) => `node -e "require('child_process').spawn('node',['-e','setTimeout(()=>require(\\"fs\\").writeFileSync(process.argv[1],\\"alive\\"),1200)',process.argv[1]],{stdio:'inherit'})" '${marker}'`;
+
 describe('runCommandCheck', () => {
   it('passes on the expected exit code and keeps the output', async () => {
     const result = await runCommandCheck({ directory: root, run: 'node -e "console.log(\'hello\')"', expectExit: 0, timeoutMs: 20000 });
@@ -46,11 +52,18 @@ describe('runCommandCheck', () => {
 
   it('does not leave descendants of the killed command running', async () => {
     const marker = path.join(root, 'alive.marker');
-    const run = `node -e "require('child_process').spawn('node',['-e','setTimeout(()=>require(\\"fs\\").writeFileSync(process.argv[1],\\"alive\\"),1200)',process.argv[1]],{stdio:'inherit'})" '${marker}'`;
-    const result = await runCommandCheck({ directory: root, run, expectExit: 0, timeoutMs: 500 });
+    const result = await runCommandCheck({ directory: root, run: markerCommand(marker), expectExit: 0, timeoutMs: 500 });
     expect(result).toMatchObject({ timedOut: true, ok: false });
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 4000));
     expect(await fs.stat(marker).catch(() => null)).toBeNull();
+  });
+
+  it('writes the marker when the same command is left to finish', async () => {
+    const marker = path.join(root, 'alive-control.marker');
+    const result = await runCommandCheck({ directory: root, run: markerCommand(marker), expectExit: 0, timeoutMs: 20000 });
+    expect(result.timedOut).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    expect(await fs.stat(marker).catch(() => null)).not.toBeNull();
   });
 
   it('runs in the given directory', async () => {
