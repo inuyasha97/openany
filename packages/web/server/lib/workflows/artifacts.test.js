@@ -43,6 +43,24 @@ describe('matchArtifacts', () => {
 
   it('does not escape the directory', async () => {
     expect(await matchArtifacts({ directory: root, pattern: '../*.md' })).toEqual([]);
+    expect(await matchArtifacts({ directory: root, pattern: 'docs/../*.md' })).toEqual([]);
+  });
+
+  it('refuses an absolute pattern instead of reading it as relative', async () => {
+    expect(await matchArtifacts({ directory: root, pattern: '/etc/hosts' })).toEqual([]);
+    expect(await matchArtifacts({ directory: root, pattern: path.join(root, 'docs/specs/a-design.md') })).toEqual([]);
+  });
+
+  it('treats a double star as zero or more segments', async () => {
+    await fs.writeFile(path.join(root, 'docs/top.md'), 't');
+    await fs.mkdir(path.join(root, 'docs/specs/deep'), { recursive: true });
+    await fs.writeFile(path.join(root, 'docs/specs/deep/nested.md'), 'n');
+    expect(await matchArtifacts({ directory: root, pattern: 'docs/**/*.md' }))
+      .toEqual(['docs/specs/a-design.md', 'docs/specs/b-design.md', 'docs/specs/deep/nested.md', 'docs/top.md']);
+    expect(await matchArtifacts({ directory: root, pattern: 'docs/**' }))
+      .toEqual(['docs/specs/a-design.md', 'docs/specs/b-design.md', 'docs/specs/deep/nested.md', 'docs/specs/notes.txt', 'docs/top.md']);
+    expect(await matchArtifacts({ directory: root, pattern: '**/*.md' }))
+      .toEqual(['docs/specs/a-design.md', 'docs/specs/b-design.md', 'docs/specs/deep/nested.md', 'docs/top.md']);
   });
 });
 
@@ -65,5 +83,12 @@ describe('inspectArtifacts', () => {
   it('reports one entry per match of a multi-match pattern', async () => {
     const results = await inspectArtifacts({ directory: root, patterns: [{ glob: 'docs/specs/*.md', hash: false }] });
     expect(results.map((entry) => entry.path)).toEqual(['docs/specs/a-design.md', 'docs/specs/b-design.md']);
+  });
+
+  it('hashes the bytes, so the digest is the file and not a placeholder', async () => {
+    const [entry] = await inspectArtifacts({ directory: root, patterns: [{ glob: 'docs/specs/a-design.md', hash: true }] });
+    expect(entry.size).toBe(1);
+    // sha256 of the single byte "a"
+    expect(entry.sha256).toBe('ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb');
   });
 });

@@ -7,8 +7,10 @@
  * `**`. Patterns are relative to the run's directory and can never escape it.
  */
 import crypto from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 const toSegments = (pattern) => String(pattern)
   .replace(/\\/g, '/')
@@ -30,16 +32,32 @@ const walk = async (directory, segments) => {
     if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR' || error?.code === 'EACCES') return [];
     throw error;
   }
+
   const matches = [];
+  if (head === '**') {
+    // `**` is zero or more segments. A trailing `**` means every file at or
+    // below this directory; otherwise the rest of the pattern is tried in this
+    // same directory (the zero case) and once more per directory below it. The
+    // zero case is the one that is easy to lose: without it `docs/**/*.md`
+    // misses a file sitting directly in `docs/`, and `docs/**` matches nothing,
+    // so a pattern a person wrote correctly reads as a failed check.
+    if (rest.length === 0) {
+      for (const entry of entries) {
+        const absolute = path.join(directory, entry.name);
+        if (entry.isFile()) matches.push(absolute);
+        else if (entry.isDirectory()) matches.push(...await walk(absolute, segments));
+      }
+      return matches;
+    }
+    matches.push(...await walk(directory, rest));
+    for (const entry of entries) {
+      if (entry.isDirectory()) matches.push(...await walk(path.join(directory, entry.name), segments));
+    }
+    return matches;
+  }
+
   for (const entry of entries) {
     const absolute = path.join(directory, entry.name);
-    if (head === '**') {
-      if (entry.isDirectory()) {
-        matches.push(...await walk(absolute, segments));
-      }
-      matches.push(...await walk(absolute, rest));
-      continue;
-    }
     if (!segmentMatches(head, entry.name)) continue;
     if (rest.length === 0) {
       if (entry.isFile()) matches.push(absolute);
@@ -51,7 +69,11 @@ const walk = async (directory, segments) => {
 };
 
 export const matchArtifacts = async ({ directory, pattern }) => {
-  const segments = toSegments(pattern);
+  const raw = String(pattern);
+  // An absolute pattern is a mistake in a definition, and silently treating it
+  // as relative would look at the wrong tree.
+  if (raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)) return [];
+  const segments = toSegments(raw);
   if (segments.length === 0 || segments.includes('..')) return [];
   const matched = await walk(directory, segments);
   return [...new Set(matched)]
@@ -60,8 +82,20 @@ export const matchArtifacts = async ({ directory, pattern }) => {
 };
 
 export const hashFile = async (absolutePath) => {
-  const buffer = await fs.readFile(absolutePath);
-  return { size: buffer.byteLength, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
+  const before = await fs.stat(absolutePath);
+  const digest = crypto.createHash('sha256');
+  await pipeline(createReadStream(absolutePath), digest);
+  const after = await fs.stat(absolutePath);
+  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
+    // The file changed while it was being read, so that digest describes no
+    // real state and a checkpoint holding it would later report a change that
+    // never happened. Read it once more.
+    const retry = crypto.createHash('sha256');
+    await pipeline(createReadStream(absolutePath), retry);
+    const settled = await fs.stat(absolutePath);
+    return { size: settled.size, sha256: retry.digest('hex') };
+  }
+  return { size: after.size, sha256: digest.digest('hex') };
 };
 
 export const inspectArtifacts = async ({ directory, patterns }) => {
