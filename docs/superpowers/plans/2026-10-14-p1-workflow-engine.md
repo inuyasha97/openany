@@ -433,7 +433,7 @@ export const createWorkflowDefinitions = ({ fsPromises, path, projectPathFromId 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/definitions.test.js`
-Expected: PASS, 8 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
@@ -544,7 +544,7 @@ export const assemblePromptBlocks = ({ prompt, context = [] }) => {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/prompts.test.js`
-Expected: PASS, 6 tests.
+Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Repoint scheduled tasks at the shared assembly**
 
@@ -637,6 +637,24 @@ describe('matchArtifacts', () => {
 
   it('does not escape the directory', async () => {
     expect(await matchArtifacts({ directory: root, pattern: '../*.md' })).toEqual([]);
+    expect(await matchArtifacts({ directory: root, pattern: 'docs/../*.md' })).toEqual([]);
+  });
+
+  it('refuses an absolute pattern instead of reading it as relative', async () => {
+    expect(await matchArtifacts({ directory: root, pattern: '/etc/hosts' })).toEqual([]);
+    expect(await matchArtifacts({ directory: root, pattern: path.join(root, 'docs/specs/a-design.md') })).toEqual([]);
+  });
+
+  it('treats a double star as zero or more segments', async () => {
+    await fs.writeFile(path.join(root, 'docs/top.md'), 't');
+    await fs.mkdir(path.join(root, 'docs/specs/deep'), { recursive: true });
+    await fs.writeFile(path.join(root, 'docs/specs/deep/nested.md'), 'n');
+    expect(await matchArtifacts({ directory: root, pattern: 'docs/**/*.md' }))
+      .toEqual(['docs/specs/a-design.md', 'docs/specs/b-design.md', 'docs/specs/deep/nested.md', 'docs/top.md']);
+    expect(await matchArtifacts({ directory: root, pattern: 'docs/**' }))
+      .toEqual(['docs/specs/a-design.md', 'docs/specs/b-design.md', 'docs/specs/deep/nested.md', 'docs/specs/notes.txt', 'docs/top.md']);
+    expect(await matchArtifacts({ directory: root, pattern: '**/*.md' }))
+      .toEqual(['docs/specs/a-design.md', 'docs/specs/b-design.md', 'docs/specs/deep/nested.md', 'docs/top.md']);
   });
 });
 
@@ -660,6 +678,13 @@ describe('inspectArtifacts', () => {
     const results = await inspectArtifacts({ directory: root, patterns: [{ glob: 'docs/specs/*.md', hash: false }] });
     expect(results.map((entry) => entry.path)).toEqual(['docs/specs/a-design.md', 'docs/specs/b-design.md']);
   });
+
+  it('hashes the bytes, so the digest is the file and not a placeholder', async () => {
+    const [entry] = await inspectArtifacts({ directory: root, patterns: [{ glob: 'docs/specs/a-design.md', hash: true }] });
+    expect(entry.size).toBe(1);
+    // sha256 of the single byte "a"
+    expect(entry.sha256).toBe('ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb');
+  });
 });
 ```
 
@@ -680,8 +705,10 @@ Expected: FAIL, `Failed to resolve import "./artifacts.js"`.
  * `**`. Patterns are relative to the run's directory and can never escape it.
  */
 import crypto from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 const toSegments = (pattern) => String(pattern)
   .replace(/\\/g, '/')
@@ -703,16 +730,32 @@ const walk = async (directory, segments) => {
     if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR' || error?.code === 'EACCES') return [];
     throw error;
   }
+
   const matches = [];
+  if (head === '**') {
+    // `**` is zero or more segments. A trailing `**` means every file at or
+    // below this directory; otherwise the rest of the pattern is tried in this
+    // same directory (the zero case) and once more per directory below it. The
+    // zero case is the one that is easy to lose: without it `docs/**/*.md`
+    // misses a file sitting directly in `docs/`, and `docs/**` matches nothing,
+    // so a pattern a person wrote correctly reads as a failed check.
+    if (rest.length === 0) {
+      for (const entry of entries) {
+        const absolute = path.join(directory, entry.name);
+        if (entry.isFile()) matches.push(absolute);
+        else if (entry.isDirectory()) matches.push(...await walk(absolute, segments));
+      }
+      return matches;
+    }
+    matches.push(...await walk(directory, rest));
+    for (const entry of entries) {
+      if (entry.isDirectory()) matches.push(...await walk(path.join(directory, entry.name), segments));
+    }
+    return matches;
+  }
+
   for (const entry of entries) {
     const absolute = path.join(directory, entry.name);
-    if (head === '**') {
-      if (entry.isDirectory()) {
-        matches.push(...await walk(absolute, segments));
-      }
-      matches.push(...await walk(absolute, rest));
-      continue;
-    }
     if (!segmentMatches(head, entry.name)) continue;
     if (rest.length === 0) {
       if (entry.isFile()) matches.push(absolute);
@@ -724,7 +767,11 @@ const walk = async (directory, segments) => {
 };
 
 export const matchArtifacts = async ({ directory, pattern }) => {
-  const segments = toSegments(pattern);
+  const raw = String(pattern);
+  // An absolute pattern is a mistake in a definition, and silently treating it
+  // as relative would look at the wrong tree.
+  if (raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)) return [];
+  const segments = toSegments(raw);
   if (segments.length === 0 || segments.includes('..')) return [];
   const matched = await walk(directory, segments);
   return [...new Set(matched)]
@@ -733,8 +780,20 @@ export const matchArtifacts = async ({ directory, pattern }) => {
 };
 
 export const hashFile = async (absolutePath) => {
-  const buffer = await fs.readFile(absolutePath);
-  return { size: buffer.byteLength, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
+  const before = await fs.stat(absolutePath);
+  const digest = crypto.createHash('sha256');
+  await pipeline(createReadStream(absolutePath), digest);
+  const after = await fs.stat(absolutePath);
+  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
+    // The file changed while it was being read, so that digest describes no
+    // real state and a checkpoint holding it would later report a change that
+    // never happened. Read it once more.
+    const retry = crypto.createHash('sha256');
+    await pipeline(createReadStream(absolutePath), retry);
+    const settled = await fs.stat(absolutePath);
+    return { size: settled.size, sha256: retry.digest('hex') };
+  }
+  return { size: after.size, sha256: digest.digest('hex') };
 };
 
 export const inspectArtifacts = async ({ directory, patterns }) => {
@@ -759,10 +818,14 @@ export const inspectArtifacts = async ({ directory, patterns }) => {
 };
 ```
 
+`createReadStream` and `pipeline` are additional imports (`node:fs`, `node:stream/promises`). A file that vanishes between the walk and the read makes this throw; the rule that a thrown verification is a failed check, not a crashed run, is owned by `verifiers.js` (Task 5), which catches it and records the pattern as unmatched.
+
+Note the matcher's `*` matches dotfiles, unlike minimatch's default. That is stated here on purpose: an artifact glob is written by the person who wants the file, so matching more is the safer direction.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/artifacts.test.js`
-Expected: PASS, 7 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
@@ -979,6 +1042,18 @@ describe('runVerifiers', () => {
     expect(result.commands[0]).toMatchObject({ exitCode: null, ok: false });
     expect(result.commands[0].stderr).toContain('spawn failed');
   });
+
+  it('fails when the artifact inspection throws, instead of letting it escape', async () => {
+    const inspectArtifacts = vi.fn(async () => { throw new Error('EACCES: permission denied'); });
+    const result = await runVerifiers({
+      step: step({ artifacts: [{ glob: 'docs/*.md', hash: true }], commands: [] }),
+      directory: root,
+      deps: { inspectArtifacts },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('EACCES');
+    expect(result.artifacts).toEqual([{ glob: 'docs/*.md', path: null, exists: false, size: null, sha256: null }]);
+  });
 });
 
 describe('verifyCheckpoint', () => {
@@ -1026,7 +1101,18 @@ export const runVerifiers = async ({ step, directory, deps = {} }) => {
   const patterns = step?.verify?.artifacts ?? [];
   const commands = step?.verify?.commands ?? [];
 
-  const artifacts = patterns.length > 0 ? await inspect({ directory, patterns }) : [];
+  let artifacts = [];
+  let inspectionError = null;
+  if (patterns.length > 0) {
+    try {
+      artifacts = await inspect({ directory, patterns });
+    } catch (error) {
+      // A verification that could not run is a failed check, never a crashed
+      // run: the person sees which pattern could not be read, and why.
+      inspectionError = error?.message ?? 'the artifacts could not be inspected';
+      artifacts = patterns.map((pattern) => ({ glob: pattern.glob, path: null, exists: false, size: null, sha256: null }));
+    }
+  }
   const commandResults = [];
   for (const command of commands) {
     try {
@@ -1050,8 +1136,10 @@ export const runVerifiers = async ({ step, directory, deps = {} }) => {
     }
   }
 
-  const ok = artifacts.every((entry) => entry.exists) && commandResults.every((entry) => entry.ok);
-  return { ok, artifacts, commands: commandResults };
+  const ok = artifacts.every((entry) => entry.exists) && commandResults.every((entry) => entry.ok) && inspectionError === null;
+  return inspectionError === null
+    ? { ok, artifacts, commands: commandResults }
+    : { ok, artifacts, commands: commandResults, error: inspectionError };
 };
 
 export const verifyCheckpoint = async ({ checkpoint, directory, deps = {} }) => {
@@ -1079,7 +1167,7 @@ export const verifyCheckpoint = async ({ checkpoint, directory, deps = {} }) => 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/verifiers.test.js`
-Expected: PASS, 6 tests.
+Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
