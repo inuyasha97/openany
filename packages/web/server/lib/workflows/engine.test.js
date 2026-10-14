@@ -163,11 +163,63 @@ describe('startStep', () => {
   });
 
   it('refuses a second start while the first is still running', async () => {
-    const { engine, root, runId } = await buildEngine({ overrides: { turn: () => new Promise(() => {}) } });
+    // The turn waits on a gate the test opens at the end, so nothing outlives the
+    // test and the temp directory is not removed under a live attempt.
+    let release = () => {};
+    const gate = new Promise((resolve) => { release = resolve; });
+    const { engine, root, runId } = await buildEngine({ overrides: { turn: async () => { await gate; return 'completed'; } } });
     const first = engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
     await expect(engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' }))
       .rejects.toMatchObject({ code: 'busy' });
-    void first.catch(() => {});
+    release();
+    await first;
+  });
+
+  it('broadcasts the running step, because the request answers only after the turn', async () => {
+    const frames = [];
+    let release = () => {};
+    const gate = new Promise((resolve) => { release = resolve; });
+    let sawFrame = () => {};
+    const anyFrame = new Promise((resolve) => { sawFrame = resolve; });
+    const { engine, root, runId } = await buildEngine({
+      overrides: {
+        broadcast: (frame) => { frames.push(frame); sawFrame(); },
+        turn: async () => { await gate; return 'completed'; },
+      },
+    });
+    const first = engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    // The turn stays gated until `release`, so a frame showing the step running
+    // can only exist if the engine broadcast it before waiting on the turn. The
+    // wait is a race rather than one macrotask because `store.write` is async.
+    await Promise.race([anyFrame, new Promise((resolve) => setTimeout(resolve, 1000))]);
+    expect(frames.some((frame) => frame.properties.steps.some((step) => step.id === 'first' && step.status === 'running'))).toBe(true);
+    release();
+    await first;
+  });
+
+  it('refuses to cancel a run while a step is executing', async () => {
+    let release = () => {};
+    const gate = new Promise((resolve) => { release = resolve; });
+    const { engine, root, runId } = await buildEngine({ overrides: { turn: async () => { await gate; return 'completed'; } } });
+    const first = engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    await expect(engine.cancelRun({ projectId: 'proj-1', runId }))
+      .rejects.toMatchObject({ code: 'busy' });
+    release();
+    await first;
+  });
+
+  it('refuses to confirm a step whose attempt never finished', async () => {
+    const { engine, store, run, runId } = await buildEngine();
+    await store.write({
+      ...run,
+      steps: run.steps.map((step) => (step.id === 'first'
+        ? { ...step, status: 'blocked', attempts: [{ index: 0, sessionId: 'session-1', prompt: 'x', startedAt: 1, endedAt: null, status: 'blocked', turn: null, verify: { ok: true, artifacts: [], commands: [] }, error: { code: 'unavailable', message: 'no' } }] }
+        : step)),
+    });
+    // The verdict is deliberately a pass, so a passing verifier cannot be the
+    // reason the answer is refused: the unfinished attempt itself must be.
+    await expect(engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'done' }))
+      .rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('answers not-found for a step the definition does not declare', async () => {

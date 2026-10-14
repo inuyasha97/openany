@@ -148,7 +148,10 @@ export const createWorkflowEngine = ({
     step.attempts.push(attempt);
     step.status = 'running';
     run.status = 'running';
-    await store.write(run);
+    const started = await store.write(run);
+    // The request that starts the attempt answers only when the turn is over, so
+    // this frame is the only way a screen learns the step is running.
+    emit(started);
     const accepted = await bus.prompt(sessionId, text);
     if (accepted !== true) {
       attempt.status = 'blocked';
@@ -244,14 +247,17 @@ export const createWorkflowEngine = ({
     },
 
     confirmStep: async ({ projectId, runId, stepId, decision, reason = null }) => {
+      if (inFlight.has(projectId)) throw new WorkflowError('busy', 'this project already has a run executing a step', 409);
       const run = await loadRun(projectId, runId);
       const step = findStep(run, stepId);
       if (!['done', 'not_done', 'skip'].includes(decision)) throw new WorkflowError('invalid', `unknown decision "${decision}"`);
       if (decision === 'done') {
         const attempt = step.attempts.at(-1);
-        if (!attempt) throw new WorkflowError('conflict', `step ${stepId} has not run yet`, 409);
-        const verify = attempt.verify ?? await runChecks({ step: (await loadStepDefinition(projectId, run)).steps.find((entry) => entry.id === stepId), directory: run.directory });
-        attempt.verify = verify;
+        // Only a turn that finished can be confirmed: confirming an attempt that
+        // is still in flight would write a checkpoint for a half-written artifact
+        // set and then be overwritten when that turn settles.
+        if (!attempt || attempt.status !== 'completed') throw new WorkflowError('conflict', `step ${stepId} has no finished attempt to confirm`, 409);
+        const verify = attempt.verify ?? { ok: false, artifacts: [], commands: [] };
         if (!verify.ok) throw new WorkflowError('conflict', 'a verifier is failing; answer not_done and prompt again, or skip the step', 409);
         step.checkpoint = await writeCheckpointFor({ run, step, attempt, verify });
         step.status = 'done';
@@ -287,6 +293,7 @@ export const createWorkflowEngine = ({
     },
 
     verifyStep: async ({ projectId, runId, stepId }) => {
+      if (inFlight.has(projectId)) throw new WorkflowError('busy', 'this project already has a run executing a step', 409);
       const run = await loadRun(projectId, runId);
       const definition = await loadStepDefinition(projectId, run);
       const declared = definition.steps.find((entry) => entry.id === stepId);
@@ -301,6 +308,10 @@ export const createWorkflowEngine = ({
     },
 
     cancelRun: async ({ projectId, runId }) => {
+      // Cancelling writes the whole run, so it cannot run beside an attempt: that
+      // attempt holds an older snapshot and would write it back over `cancelled`.
+      // Stopping a turn that is in flight is the session's abort, not the run's.
+      if (inFlight.has(projectId)) throw new WorkflowError('busy', 'a step is executing; stop its turn instead of the run', 409);
       const run = await loadRun(projectId, runId);
       run.status = 'cancelled';
       const saved = await store.write(run);
