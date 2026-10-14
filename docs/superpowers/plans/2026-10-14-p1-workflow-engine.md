@@ -1709,7 +1709,7 @@ git commit -m "feat(workflows): write a git checkpoint per confirmed step"
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createWorkflowEngine } from './engine.js';
 import { createWorkflowRunStore } from './store.js';
 import { parseDefinition } from './definitions.js';
@@ -1735,8 +1735,17 @@ steps:
 
 const definition = parseDefinition(definitionText, { file: 'two-step.yaml' }).definition;
 
+// One engine per test, each with its own project directory; the suite removes
+// them afterwards so a run never leaves `wf-engine-*` directories behind.
+const roots = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
+});
+
 const buildEngine = async ({ overrides = {} } = {}) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-engine-'));
+  roots.push(root);
   const run = {
     runId: '11111111-2222-4333-8444-555555555555',
     projectId: 'proj-1',
@@ -1749,18 +1758,16 @@ const buildEngine = async ({ overrides = {} } = {}) => {
     cursor: 'first',
     createdAt: 1,
     sandbox: 'working-tree',
-    steps: [
-      { id: 'first', status: 'pending', attempts: [], checkpoint: null, note: null },
-      { id: 'second', status: 'pending', attempts: [], checkpoint: null, note: null },
-    ],
+    steps: (overrides.stepIds ?? ['first', 'second']).map((id) => ({ id, status: 'pending', attempts: [], checkpoint: null, note: null })),
   };
   await fs.mkdir(path.join(root, 'out'), { recursive: true });
   const store = createWorkflowRunStore({ fsPromises: fs, path, projectsDirPath: root, now: () => 42 });
   await store.create(run);
 
   const prompts = [];
+  let created = 0;
   const host = {
-    createSession: async () => ({ id: 'session-1' }),
+    createSession: async () => ({ id: `session-${created += 1}` }),
     prompt: async (sessionId, text) => { prompts.push({ sessionId, text }); return true; },
     getSessionStatus: async () => ({ busy: false }),
     listSessions: async () => [{ id: 'session-1', cwd: root }],
@@ -1882,6 +1889,69 @@ describe('startStep', () => {
     await expect(engine.startStep({ projectId: 'proj-1', projectPath: root, runId: '99999999-2222-4333-8444-555555555555', stepId: 'first' }))
       .rejects.toMatchObject({ code: 'not-found' });
   });
+
+  it('continues the nearest preceding session, not the first one the run opened', async () => {
+    const threeSteps = parseDefinition(`
+id: two-step
+name: Two step
+version: 1
+steps:
+  - id: first
+    prompt: "one"
+    confirm: human
+  - id: second
+    prompt: "two"
+    session: new
+    confirm: human
+  - id: third
+    prompt: "three"
+    session: reuse
+    confirm: human
+`, { file: 'two-step.yaml' }).definition;
+    const { engine, root, runId, prompts } = await buildEngine({
+      overrides: { definitions: { read: async () => threeSteps }, stepIds: ['first', 'second', 'third'] },
+    });
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'second' });
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'third' });
+    expect(prompts.map((entry) => entry.sessionId)).toEqual(['session-1', 'session-2', 'session-2']);
+  });
+
+  it('does not call a run done while a step behind the cursor still owes work', async () => {
+    const autoLast = parseDefinition(`
+id: two-step
+name: Two step
+version: 1
+steps:
+  - id: first
+    prompt: "one"
+    confirm: human
+  - id: second
+    prompt: "two"
+    confirm: auto
+    verify:
+      artifacts: ["out/*.md"]
+`, { file: 'two-step.yaml' }).definition;
+    const { engine, root, runId } = await buildEngine({ overrides: { definitions: { read: async () => autoLast } } });
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    const run = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'second' });
+    expect(run.steps[1].status).toBe('done');
+    expect(run.cursor).toBeNull();
+    // `first` never ran, so the run is waiting on it, not finished.
+    expect(run.status).toBe('waiting');
+  });
+
+  it('returns a run that is already stopped instead of prompting its step again', async () => {
+    const { engine, root, runId, prompts } = await buildEngine();
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    const before = prompts.length;
+    const run = await engine.runUntilStop({ projectId: 'proj-1', projectPath: root, runId });
+    expect(prompts.length).toBe(before);
+    expect(run.steps[0].status).toBe('waiting_confirm');
+    expect(run.steps[0].attempts).toHaveLength(1);
+    expect(run.status).toBe('waiting');
+  });
 });
 ```
 
@@ -1904,7 +1974,7 @@ Expected: FAIL, `Failed to resolve import "./engine.js"`.
  * engine records comes from the runtime, from disk, or from git; a step never
  * advances because a model said it was done.
  *
- * Two writers are impossible by construction: an in-flight map holds the run
+ * Two writers are impossible by construction: an in-flight map holds the project
  * ids currently executing, and `runUntilStop` stops at the first stop, so a
  * second click answers `busy` instead of starting a second attempt.
  */
@@ -1923,15 +1993,28 @@ export class WorkflowError extends Error {
 const TERMINAL_RUN_STATUSES = new Set(['done', 'failed', 'cancelled']);
 const STOPS = new Set(['waiting_confirm', 'needs_work', 'blocked', 'failed', 'interrupted']);
 
+/**
+ * The session a `session: reuse` step continues: the nearest preceding attempt
+ * that has one, starting from this step's own last attempt. Walking the steps
+ * from the front would hand a later step the first session the run ever opened,
+ * which is not "the previous attempt".
+ */
 const previousSessionId = (run, stepId) => {
-  for (const step of run.steps) {
-    for (let index = step.attempts.length - 1; index >= 0; index -= 1) {
-      if (step.attempts[index].sessionId) return step.attempts[index].sessionId;
+  const index = run.steps.findIndex((step) => step.id === stepId);
+  if (index < 0) return null;
+  for (let position = index; position >= 0; position -= 1) {
+    const attempts = run.steps[position].attempts;
+    for (let attempt = attempts.length - 1; attempt >= 0; attempt -= 1) {
+      if (attempts[attempt].sessionId) return attempts[attempt].sessionId;
     }
-    if (step.id === stepId) break;
   }
   return null;
 };
+
+/** Step statuses that still owe the run something before it can be called done. */
+const OPEN_STEP_STATUSES = new Set(['pending', 'running', 'waiting_confirm', 'needs_work', 'blocked', 'interrupted']);
+
+const hasOpenWork = (run) => run.steps.some((step) => OPEN_STEP_STATUSES.has(step.status));
 
 export const createWorkflowEngine = ({
   store,
@@ -2043,8 +2126,8 @@ export const createWorkflowEngine = ({
     const outcome = await turn({ host: bus, sessionId });
     attempt.turn = outcome;
     attempt.endedAt = now();
-    if (outcome === 'unavailable' || outcome === 'never_started' || outcome === 'timeout') {
-      attempt.status = outcome === 'timeout' ? 'blocked' : 'blocked';
+    if (outcome !== 'completed') {
+      attempt.status = 'blocked';
       attempt.error = { code: 'unavailable', message: outcome === 'timeout' ? 'the turn did not finish before the timeout' : 'the runtime never reported the turn as running' };
       step.status = 'blocked';
       step.note = attempt.error.message;
@@ -2063,7 +2146,10 @@ export const createWorkflowEngine = ({
       step.status = 'done';
       step.checkpoint = await writeCheckpointFor({ run, step, attempt, verify });
       advance(run, stepId);
-      run.status = run.cursor ? 'running' : 'done';
+      // `done` means the run owes nobody anything, not merely that the cursor
+      // reached the end: a step left blocked or waiting behind the cursor keeps
+      // the run waiting.
+      run.status = run.cursor ? 'running' : hasOpenWork(run) ? 'waiting' : 'done';
     } else if (verify.ok) {
       step.status = 'waiting_confirm';
       run.status = 'waiting';
@@ -2109,6 +2195,11 @@ export const createWorkflowEngine = ({
       if (TERMINAL_RUN_STATUSES.has(start.status)) throw new WorkflowError('conflict', `run ${runId} is ${start.status}`, 409);
       const firstStepId = start.cursor ?? start.steps.find((step) => step.status === 'pending')?.id;
       if (!firstStepId) throw new WorkflowError('conflict', `run ${runId} has no step left to run`, 409);
+      // A run already stopped for a person is returned as it stands: running
+      // until the next stop must not start a fresh turn on a step nobody has
+      // answered yet.
+      const cursorStep = start.steps.find((step) => step.id === firstStepId);
+      if (cursorStep && STOPS.has(cursorStep.status)) return start;
       let run = await withLock(projectId, () => attemptStep({ projectId, projectPath, runId, stepId: firstStepId }));
       while (run.cursor && !STOPS.has(run.steps.find((step) => step.id === run.cursor)?.status ?? 'pending')) {
         const next = run.cursor;
@@ -2125,7 +2216,7 @@ Task 10 adds the four decision methods to this object, and Task 13 adds `reconci
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/engine.test.js`
-Expected: PASS, 9 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
@@ -2253,7 +2344,7 @@ Add the four decision methods to the object `engine.js` already returns, and use
         step.status = 'done';
         step.note = null;
         advance(run, stepId);
-        run.status = run.cursor ? 'running' : 'done';
+        run.status = run.cursor ? 'running' : hasOpenWork(run) ? 'waiting' : 'done';
       } else if (decision === 'skip') {
         step.status = 'skipped';
         step.note = reason;
@@ -2317,7 +2408,7 @@ Factor the shared "prompt, wait, verify, decide" body out of `attemptStep` so `r
       step.status = 'done';
       step.checkpoint = await writeCheckpointFor({ run, step, attempt, verify });
       advance(run, step.id);
-      run.status = run.cursor ? 'running' : 'done';
+      run.status = run.cursor ? 'running' : hasOpenWork(run) ? 'waiting' : 'done';
     } else {
       step.status = verify.ok ? 'waiting_confirm' : 'needs_work';
       run.status = 'waiting';
