@@ -2651,7 +2651,8 @@ describe('workflow routes', () => {
   it('maps an engine WorkflowError to its status and its message', async () => {
     const { app } = createApp({
       engine: {
-        startStep: async () => {
+        // This request goes to `/run`, which the routes map to `runUntilStop`.
+        runUntilStop: async () => {
           const error = new Error('this run is already executing a step');
           error.code = 'busy';
           error.status = 409;
