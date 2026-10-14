@@ -6,7 +6,7 @@
  * engine records comes from the runtime, from disk, or from git; a step never
  * advances because a model said it was done.
  *
- * Two writers are impossible by construction: an in-flight map holds the run
+ * Two writers are impossible by construction: an in-flight map holds the project
  * ids currently executing, and `runUntilStop` stops at the first stop, so a
  * second click answers `busy` instead of starting a second attempt.
  */
@@ -25,15 +25,28 @@ export class WorkflowError extends Error {
 const TERMINAL_RUN_STATUSES = new Set(['done', 'failed', 'cancelled']);
 const STOPS = new Set(['waiting_confirm', 'needs_work', 'blocked', 'failed', 'interrupted']);
 
+/**
+ * The session a `session: reuse` step continues: the nearest preceding attempt
+ * that has one, starting from this step's own last attempt. Walking the steps
+ * from the front would hand a later step the first session the run ever opened,
+ * which is not "the previous attempt".
+ */
 const previousSessionId = (run, stepId) => {
-  for (const step of run.steps) {
-    for (let index = step.attempts.length - 1; index >= 0; index -= 1) {
-      if (step.attempts[index].sessionId) return step.attempts[index].sessionId;
+  const index = run.steps.findIndex((step) => step.id === stepId);
+  if (index < 0) return null;
+  for (let position = index; position >= 0; position -= 1) {
+    const attempts = run.steps[position].attempts;
+    for (let attempt = attempts.length - 1; attempt >= 0; attempt -= 1) {
+      if (attempts[attempt].sessionId) return attempts[attempt].sessionId;
     }
-    if (step.id === stepId) break;
   }
   return null;
 };
+
+/** Step statuses that still owe the run something before it can be called done. */
+const OPEN_STEP_STATUSES = new Set(['pending', 'running', 'waiting_confirm', 'needs_work', 'blocked', 'interrupted']);
+
+const hasOpenWork = (run) => run.steps.some((step) => OPEN_STEP_STATUSES.has(step.status));
 
 export const createWorkflowEngine = ({
   store,
@@ -143,8 +156,8 @@ export const createWorkflowEngine = ({
     const outcome = await turn({ host: bus, sessionId });
     attempt.turn = outcome;
     attempt.endedAt = now();
-    if (outcome === 'unavailable' || outcome === 'never_started' || outcome === 'timeout') {
-      attempt.status = outcome === 'timeout' ? 'blocked' : 'blocked';
+    if (outcome !== 'completed') {
+      attempt.status = 'blocked';
       attempt.error = { code: 'unavailable', message: outcome === 'timeout' ? 'the turn did not finish before the timeout' : 'the runtime never reported the turn as running' };
       step.status = 'blocked';
       step.note = attempt.error.message;
@@ -163,7 +176,7 @@ export const createWorkflowEngine = ({
       step.status = 'done';
       step.checkpoint = await writeCheckpointFor({ run, step, attempt, verify });
       advance(run, stepId);
-      run.status = run.cursor ? 'running' : 'done';
+      run.status = run.cursor ? 'running' : hasOpenWork(run) ? 'waiting' : 'done';
     } else if (verify.ok) {
       step.status = 'waiting_confirm';
       run.status = 'waiting';
@@ -209,6 +222,11 @@ export const createWorkflowEngine = ({
       if (TERMINAL_RUN_STATUSES.has(start.status)) throw new WorkflowError('conflict', `run ${runId} is ${start.status}`, 409);
       const firstStepId = start.cursor ?? start.steps.find((step) => step.status === 'pending')?.id;
       if (!firstStepId) throw new WorkflowError('conflict', `run ${runId} has no step left to run`, 409);
+      // A run already stopped for a person is returned as it stands: running
+      // until the next stop must not start a fresh turn on a step nobody has
+      // answered yet.
+      const cursorStep = start.steps.find((step) => step.id === firstStepId);
+      if (cursorStep && STOPS.has(cursorStep.status)) return start;
       let run = await withLock(projectId, () => attemptStep({ projectId, projectPath, runId, stepId: firstStepId }));
       while (run.cursor && !STOPS.has(run.steps.find((step) => step.id === run.cursor)?.status ?? 'pending')) {
         const next = run.cursor;
