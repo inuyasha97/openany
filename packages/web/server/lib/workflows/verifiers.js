@@ -61,17 +61,25 @@ export const verifyCheckpoint = async ({ checkpoint, directory, deps = {} }) => 
   const mismatches = [];
   for (const artifact of checkpoint?.artifacts ?? []) {
     const absolute = path.join(directory, artifact.path);
+    let current;
     try {
-      const { size, sha256 } = await hash(absolute);
-      if (size !== artifact.size || sha256 !== artifact.sha256) {
-        mismatches.push({ path: artifact.path, reason: 'changed' });
-      }
+      current = await hash(absolute);
     } catch (error) {
       if (error?.code === 'ENOENT') {
         mismatches.push({ path: artifact.path, reason: 'missing' });
         continue;
       }
       throw error;
+    }
+    // A checkpoint carries a digest only for an artifact the definition marks
+    // `hash: true`. For every other artifact the contract is that the file is
+    // still there, so a file that changed is not a mismatch: comparing a real
+    // digest against the recorded `null` would report every unhashed step as
+    // broken the first time the server restarted.
+    if (artifact.sha256 !== null && artifact.sha256 !== undefined) {
+      if (current.size !== artifact.size || current.sha256 !== artifact.sha256) {
+        mismatches.push({ path: artifact.path, reason: 'changed' });
+      }
     }
   }
   return { ok: mismatches.length === 0, mismatches };

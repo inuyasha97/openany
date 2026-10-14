@@ -85,4 +85,18 @@ describe('verifyCheckpoint', () => {
       { path: 'docs/gone.md', reason: 'missing' },
     ]);
   });
+
+  it('checks existence only for an artifact the checkpoint recorded without a digest', async () => {
+    // A plain-string pattern in the definition means `hash: false`, so the
+    // checkpoint holds `sha256: null`. Comparing a real digest against that
+    // null would report the step broken on every restart.
+    const checkpoint = { artifacts: [{ path: 'docs/design.md', size: 1, sha256: null }] };
+    expect(await verifyCheckpoint({ checkpoint, directory: root })).toEqual({ ok: true, mismatches: [] });
+
+    await fs.writeFile(path.join(root, 'docs/design.md'), 'a much longer body');
+    expect(await verifyCheckpoint({ checkpoint, directory: root })).toEqual({ ok: true, mismatches: [] });
+
+    await fs.rm(path.join(root, 'docs/design.md'));
+    expect(await verifyCheckpoint({ checkpoint, directory: root })).toEqual({ ok: false, mismatches: [{ path: 'docs/design.md', reason: 'missing' }] });
+  });
 });
