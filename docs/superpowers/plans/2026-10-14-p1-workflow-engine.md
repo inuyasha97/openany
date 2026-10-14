@@ -1871,11 +1871,53 @@ describe('startStep', () => {
   });
 
   it('refuses a second start while the first is still running', async () => {
-    const { engine, root, runId } = await buildEngine({ overrides: { turn: () => new Promise(() => {}) } });
+    // The turn waits on a gate the test opens at the end, so nothing outlives the
+    // test and the temp directory is not removed under a live attempt.
+    let release = () => {};
+    const gate = new Promise((resolve) => { release = resolve; });
+    const { engine, root, runId } = await buildEngine({ overrides: { turn: async () => { await gate; return 'completed'; } } });
     const first = engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
     await expect(engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' }))
       .rejects.toMatchObject({ code: 'busy' });
-    void first.catch(() => {});
+    release();
+    await first;
+  });
+
+  it('broadcasts the running step, because the request answers only after the turn', async () => {
+    const frames = [];
+    let release = () => {};
+    const gate = new Promise((resolve) => { release = resolve; });
+    const { engine, root, runId } = await buildEngine({
+      overrides: { broadcast: (frame) => frames.push(frame), turn: async () => { await gate; return 'completed'; } },
+    });
+    const first = engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(frames.some((frame) => frame.properties.steps.some((step) => step.id === 'first' && step.status === 'running'))).toBe(true);
+    release();
+    await first;
+  });
+
+  it('refuses to cancel a run while a step is executing', async () => {
+    let release = () => {};
+    const gate = new Promise((resolve) => { release = resolve; });
+    const { engine, root, runId } = await buildEngine({ overrides: { turn: async () => { await gate; return 'completed'; } } });
+    const first = engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    await expect(engine.cancelRun({ projectId: 'proj-1', runId }))
+      .rejects.toMatchObject({ code: 'busy' });
+    release();
+    await first;
+  });
+
+  it('refuses to confirm a step whose attempt never finished', async () => {
+    const { engine, store, run, runId } = await buildEngine();
+    await store.write({
+      ...run,
+      steps: run.steps.map((step) => (step.id === 'first'
+        ? { ...step, status: 'blocked', attempts: [{ index: 0, sessionId: 'session-1', prompt: 'x', startedAt: 1, endedAt: null, status: 'blocked', turn: null, verify: null, error: { code: 'unavailable', message: 'no' } }] }
+        : step)),
+    });
+    await expect(engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'done' }))
+      .rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('answers not-found for a step the definition does not declare', async () => {
@@ -2331,14 +2373,17 @@ Add the four decision methods to the object `engine.js` already returns, and use
 
 ```js
     confirmStep: async ({ projectId, runId, stepId, decision, reason = null }) => {
+      if (inFlight.has(projectId)) throw new WorkflowError('busy', 'this project already has a run executing a step', 409);
       const run = await loadRun(projectId, runId);
       const step = findStep(run, stepId);
       if (!['done', 'not_done', 'skip'].includes(decision)) throw new WorkflowError('invalid', `unknown decision "${decision}"`);
       if (decision === 'done') {
         const attempt = step.attempts.at(-1);
-        if (!attempt) throw new WorkflowError('conflict', `step ${stepId} has not run yet`, 409);
-        const verify = attempt.verify ?? await runChecks({ step: (await loadStepDefinition(projectId, run)).steps.find((entry) => entry.id === stepId), directory: run.directory });
-        attempt.verify = verify;
+        // Only a turn that finished can be confirmed: confirming an attempt that
+        // is still in flight would write a checkpoint for a half-written artifact
+        // set and then be overwritten when that turn settles.
+        if (!attempt || attempt.status !== 'completed') throw new WorkflowError('conflict', `step ${stepId} has no finished attempt to confirm`, 409);
+        const verify = attempt.verify ?? { ok: false, artifacts: [], commands: [] };
         if (!verify.ok) throw new WorkflowError('conflict', 'a verifier is failing; answer not_done and prompt again, or skip the step', 409);
         step.checkpoint = await writeCheckpointFor({ run, step, attempt, verify });
         step.status = 'done';
@@ -2374,6 +2419,7 @@ Add the four decision methods to the object `engine.js` already returns, and use
     },
 
     verifyStep: async ({ projectId, runId, stepId }) => {
+      if (inFlight.has(projectId)) throw new WorkflowError('busy', 'this project already has a run executing a step', 409);
       const run = await loadRun(projectId, runId);
       const definition = await loadStepDefinition(projectId, run);
       const declared = definition.steps.find((entry) => entry.id === stepId);
@@ -2388,6 +2434,10 @@ Add the four decision methods to the object `engine.js` already returns, and use
     },
 
     cancelRun: async ({ projectId, runId }) => {
+      // Cancelling writes the whole run, so it cannot run beside an attempt: that
+      // attempt holds an older snapshot and would write it back over `cancelled`.
+      // Stopping a turn that is in flight is the session's abort, not the run's.
+      if (inFlight.has(projectId)) throw new WorkflowError('busy', 'a step is executing; stop its turn instead of the run', 409);
       const run = await loadRun(projectId, runId);
       run.status = 'cancelled';
       const saved = await store.write(run);
@@ -2431,7 +2481,10 @@ Factor the shared "prompt, wait, verify, decide" body out of `attemptStep` so `r
     step.attempts.push(attempt);
     step.status = 'running';
     run.status = 'running';
-    await store.write(run);
+    const started = await store.write(run);
+    // The request that starts the attempt answers only when the turn is over, so
+    // this frame is the only way a screen learns the step is running.
+    emit(started);
     const accepted = await bus.prompt(sessionId, text);
     if (accepted !== true) {
       attempt.status = 'blocked';
@@ -2466,7 +2519,7 @@ Use `runPromptInSession` from `attemptStep` too, so the refused-prompt and never
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/engine.test.js`
-Expected: PASS, 17 tests.
+Expected: PASS, 23 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
