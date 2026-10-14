@@ -27,6 +27,6 @@ export const assemblePromptBlocks = ({ prompt, context = [] }) => {
     .filter((block) => typeof block === 'string' && block.trim().length > 0);
   if (blocks.length === 0) return text;
   return text.trimStart().startsWith('/')
-    ? [text.trimEnd(), ...blocks].join('\n\n')
-    : [...blocks, text.trimStart()].join('\n\n');
+    ? [text, ...blocks].join('\n\n')
+    : [...blocks, text].join('\n\n');
 };

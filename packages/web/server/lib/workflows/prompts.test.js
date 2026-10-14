@@ -31,4 +31,10 @@ describe('assemblePromptBlocks', () => {
   it('treats a leading space before the slash as leading', () => {
     expect(assemblePromptBlocks({ prompt: '   /plan-feature x', context: ['CTX'] })).toBe('   /plan-feature x\n\nCTX');
   });
+
+  it('keeps the prompt text exactly as authored', () => {
+    expect(assemblePromptBlocks({ prompt: 'Do the work  ', context: ['CTX'] })).toBe('CTX\n\nDo the work  ');
+    // The authored trailing newline survives, so the join adds two more.
+    expect(assemblePromptBlocks({ prompt: '/cmd x\n', context: ['CTX'] })).toBe('/cmd x\n\n\nCTX');
+  });
 });
