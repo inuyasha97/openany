@@ -19,7 +19,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { OmpBranchCutError, resolveBranchEntry, type OmpBranchEntry } from "./branch-entry"
 import { toOmpModelInfo } from "./mapping"
-import { OmpRpcClient, OmpRpcError, type OmpRpcChild, type OmpRpcFrame, type OmpRpcSpawn } from "./rpc-client"
+import { OmpRpcClient, OmpRpcError, type OmpRpcChild, type OmpRpcFrame, type OmpProcessExit, type OmpRpcSpawn } from "./rpc-client"
 import { createSessionStore, parseSessionMessageEntries, type OmpSessionMessageEntry, type OmpSessionStore } from "./session-store"
 import type { OmpMessage, OmpModelInfo, OmpThinkingLevel } from "./model"
 import type {
@@ -41,6 +41,8 @@ export type OmpHostOptions = {
   readFile?: (file: string) => string
   /** OMP's stderr, forwarded from every session process. */
   onStderr?: (text: string) => void
+  /** How each session process ended, forwarded from every session process. */
+  onExit?: (exit: OmpProcessExit) => void
 }
 
 /** The `get_state` payload fields the host reads. */
@@ -203,7 +205,7 @@ export const createOmpHost = (options: OmpHostOptions = {}): OmpHost => {
     // '<command>'`, which blames the binary. Name the real cause instead of
     // letting that reach the caller.
     if (cwd !== undefined && !isExistingDirectory(cwd)) throw new OmpSessionDirectoryMissingError(cwd)
-    return new OmpRpcClient({ command, args, cwd, env: options.env, spawn, onStderr: options.onStderr })
+    return new OmpRpcClient({ command, args, cwd, env: options.env, spawn, onStderr: options.onStderr, onExit: options.onExit })
   }
 
   const withProcessClient = async <T>(run: (client: OmpRpcClient) => Promise<T>, cwd?: string): Promise<T> => {

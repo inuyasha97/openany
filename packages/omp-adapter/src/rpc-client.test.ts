@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { OmpRpcClient, OmpRpcError, type OmpRpcChild } from "./rpc-client"
+import { OmpRpcClient, OmpRpcError, type OmpProcessExit, type OmpRpcChild } from "./rpc-client"
 
 const createFakeChild = () => {
   const stdoutListeners: Array<(chunk: string | Uint8Array) => void> = []
@@ -30,6 +30,34 @@ const client = (fake: ReturnType<typeof createFakeChild>) =>
   new OmpRpcClient({ command: "omp", spawn: () => fake.child })
 
 describe("OmpRpcClient", () => {
+  test("hands the sink how the process ended, and whether anything asked it to", async () => {
+    const exits: OmpProcessExit[] = []
+    const fake = createFakeChild()
+    const rpc = new OmpRpcClient({
+      command: "omp",
+      cwd: "/repo",
+      spawn: () => fake.child,
+      onExit: (exit) => exits.push(exit),
+    })
+    fake.child.pid = 4242
+    const started = rpc.start()
+    fake.emit(JSON.stringify({ type: "ready", protocolVersion: 1 }))
+    await started
+
+    // A hard kill: no exit code, a signal, and nothing asked it to stop.
+    fake.child.exitCode = null
+    fake.child.signalCode = "SIGKILL"
+    fake.exit(null)
+    expect(exits.at(-1)).toEqual({ code: null, signal: "SIGKILL", expected: false, pid: 4242, cwd: "/repo" })
+
+    // A disposal ends the process too, and says so.
+    await rpc.dispose()
+    fake.child.exitCode = 0
+    fake.child.signalCode = null
+    fake.exit(0)
+    expect(exits.at(-1)).toEqual({ code: 0, signal: null, expected: true, pid: 4242, cwd: "/repo" })
+  })
+
   test("starts when the ready frame arrives", async () => {
     const fake = createFakeChild()
     const rpc = client(fake)

@@ -42,6 +42,13 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
         if (trimmed) console.info('[omp]', trimmed);
       }
     },
+    // A session process that dies without a disposal leaves no `session_exit`
+    // record in its session file, so this line is the only account of why a turn
+    // stopped. An end something asked for (dispose, a worktree release) is quiet.
+    onExit: (exit) => {
+      if (exit.expected) return;
+      console.warn('[omp] session process ended unexpectedly:', exit);
+    },
   }));
   const config = createOmpConfig();
   const projectors = new Map();

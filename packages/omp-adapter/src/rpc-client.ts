@@ -17,6 +17,24 @@ export type OmpRpcChild = {
   stdin: { write: (chunk: string) => unknown; end?: () => void }
   on: (event: "exit" | "error", listener: (value: unknown) => void) => unknown
   kill: (signal?: string) => unknown
+  /** Set by the child process once it ends; optional so a fake needs no process. */
+  pid?: number
+  exitCode?: number | null
+  /** The signal that ended it — `SIGKILL` for a hard kill, `null` on a normal exit. */
+  signalCode?: string | null
+}
+
+/**
+ * How a session process ended. `expected` is false when nothing asked it to
+ * stop, which is the case a hard kill leaves behind: the session's file gets no
+ * `session_exit` record, so this is the only account of the death.
+ */
+export type OmpProcessExit = {
+  code: number | null
+  signal: string | null
+  expected: boolean
+  pid: number | null
+  cwd: string
 }
 
 export type OmpRpcSpawn = (
@@ -40,6 +58,12 @@ export type OmpRpcOptions = {
    * voice that knows why.
    */
   onStderr?: (text: string) => void
+  /**
+   * How the process ended, every time it ends. A caller that logs the
+   * unexpected ones learns what a hard kill was, which the session file cannot
+   * say: nothing wrote an exit record.
+   */
+  onExit?: (exit: OmpProcessExit) => void
 }
 
 /** One stderr chunk can be a whole log; keep the loudest part. */
@@ -124,6 +148,13 @@ export class OmpRpcClient {
         this.fail(error instanceof Error ? error : new Error(String(error)))
       })
       child.on("exit", (code) => {
+        this.options.onExit?.({
+          code: child.exitCode ?? null,
+          signal: child.signalCode ?? null,
+          expected: this.closed,
+          pid: child.pid ?? null,
+          cwd: this.options.cwd ?? "",
+        })
         if (!this.closed) this.fail(new Error(`omp rpc exited with code ${String(code)}`))
       })
     }
