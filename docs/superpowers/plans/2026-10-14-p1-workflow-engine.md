@@ -3273,7 +3273,7 @@ git commit -m "feat(workflows): wire the workflow runtime into the server"
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { reconcileRuns } from './resume.js';
 import { createWorkflowRunStore } from './store.js';
 
@@ -3302,6 +3302,10 @@ const baseRun = (overrides = {}) => ({
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-resume-'));
   store = createWorkflowRunStore({ fsPromises: fs, path, projectsDirPath: root, now: () => 42 });
+});
+
+afterEach(async () => {
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 const deps = (overrides = {}) => ({
@@ -3349,6 +3353,40 @@ describe('reconcileRuns', () => {
     const summary = await reconcileRuns(deps());
     expect(summary).toMatchObject({ runs: 0, interrupted: 0, blocked: 0 });
   });
+
+  it('keeps the first blocked step as the cursor, not the last', async () => {
+    await store.create(baseRun({
+      steps: [
+        { id: 'first', status: 'done', attempts: [], checkpoint: { at: 1, commit: 'a'.repeat(40), clean: false, artifacts: [{ path: 'a.md', size: 1, sha256: 'x' }] }, note: null },
+        { id: 'second', status: 'done', attempts: [], checkpoint: { at: 2, commit: 'b'.repeat(40), clean: false, artifacts: [{ path: 'b.md', size: 1, sha256: 'y' }] }, note: null },
+      ],
+    }));
+    const summary = await reconcileRuns(deps({ verifyCheckpoint: async () => ({ ok: false, mismatches: [{ path: 'x.md', reason: 'changed' }] }) }));
+    const run = await store.read('proj-1', baseRun().runId);
+    // Both steps fail their check; the run's cursor has to point at the first of
+    // them, or the earlier block is invisible and the run can later read `done`.
+    expect(summary).toMatchObject({ runs: 1, blocked: 1 });
+    expect(run.cursor).toBe('first');
+    expect(run.status).toBe('waiting');
+  });
+
+  it('does not let one unreadable project cost the others their sweep', async () => {
+    await store.create(baseRun());
+    const summary = await reconcileRuns(deps({
+      listProjectIds: async () => ['bad/project', 'proj-1'],
+      logger: { warn: () => {} },
+    }));
+    expect(summary.interrupted).toBe(1);
+    expect((await store.read('proj-1', baseRun().runId)).steps[1].status).toBe('interrupted');
+  });
+
+  it('skips a project whose run is executing right now', async () => {
+    await store.create(baseRun());
+    const summary = await reconcileRuns(deps({ isProjectBusy: (projectId) => projectId === 'proj-1' }));
+    const run = await store.read('proj-1', baseRun().runId);
+    expect(summary).toMatchObject({ runs: 0, interrupted: 0 });
+    expect(run.steps[1].status).toBe('running');
+  });
 });
 ```
 
@@ -3369,72 +3407,117 @@ Expected: FAIL, `Failed to resolve import "./resume.js"`.
  * re-checked here, and anything uncertain is reported instead of assumed. A
  * step that was running when the server stopped becomes `interrupted`, because
  * the engine cannot tell a finished turn from a turn that never returned.
+ *
+ * The sweep is deliberately forgiving: one project or one run that cannot be
+ * read must not cost the others their reconciliation, and a project with a step
+ * executing right now is skipped rather than written from a stale snapshot.
  */
 const ACTIVE = new Set(['running', 'waiting']);
 
 /** Steps whose record is already written down; their session no longer matters. */
 const SETTLED_STEP_STATUSES = new Set(['done', 'skipped']);
 
-export const reconcileRuns = async ({ store, host, verifyCheckpoint, listProjectIds, logger = console }) => {
+export const reconcileRuns = async ({
+  store,
+  host,
+  verifyCheckpoint,
+  listProjectIds,
+  isProjectBusy = () => false,
+  logger = console,
+}) => {
   const summary = { runs: 0, interrupted: 0, blocked: 0, waiting: 0 };
   const projectIds = await listProjectIds();
   const sessions = await host.listSessions().catch(() => null);
 
   for (const projectId of projectIds) {
-    const runs = await store.list(projectId);
+    if (isProjectBusy(projectId)) continue;
+    let runs = [];
+    try {
+      runs = await store.list(projectId);
+    } catch (error) {
+      logger.warn?.(`[workflows] could not list runs for ${projectId}: ${error?.message ?? error}`);
+      continue;
+    }
+
     for (const run of runs) {
       if (!ACTIVE.has(run.status)) continue;
-      summary.runs += 1;
-      let changed = false;
-      const knownSessions = sessions === null ? null : new Set(sessions.map((entry) => entry.id));
-
-      for (const step of run.steps) {
-        if (step.status === 'running') {
-          step.status = 'interrupted';
-          step.note = 'the server stopped while this step was running';
-          summary.interrupted += 1;
-          changed = true;
-        }
-        if (step.checkpoint) {
-          const check = await verifyCheckpoint({ checkpoint: step.checkpoint, directory: run.directory });
-          if (!check.ok) {
-            const details = check.mismatches.map((entry) => `${entry.path} (${entry.reason})`).join(', ');
-            step.note = `checkpoint no longer matches: ${details}`;
-            run.status = 'waiting';
-            run.cursor = step.id;
-            summary.blocked += 1;
-            changed = true;
-            logger.warn?.(`[workflows] run ${run.runId}: ${step.note}`);
-          }
-        }
-        const attempt = step.attempts.at(-1);
-        // Only a step that still owes the run something cares whether its session
-        // survives: a finished step's record is its checkpoint, and re-flagging it
-        // would double-count the run as blocked and overwrite a checkpoint note
-        // that says something more useful.
-        if (!SETTLED_STEP_STATUSES.has(step.status) && attempt?.sessionId && knownSessions && !knownSessions.has(attempt.sessionId)) {
-          attempt.status = 'blocked';
-          attempt.error = { code: 'unavailable', message: `session ${attempt.sessionId} is no longer known` };
-          if (step.status === 'running' || step.status === 'interrupted') step.status = 'interrupted';
-          step.note = `session ${attempt.sessionId} is no longer known`;
-          run.status = 'waiting';
-          run.cursor = step.id;
-          summary.blocked += 1;
-          changed = true;
-        }
-      }
-
-      if (changed) {
-        if (run.status === 'running') {
-          run.status = 'waiting';
-          run.cursor = run.cursor ?? run.steps.find((step) => step.status !== 'done' && step.status !== 'skipped')?.id ?? null;
-          summary.waiting += 1;
-        }
-        await store.write(run);
+      try {
+        const outcome = await reconcileRun({ run, store, verifyCheckpoint, sessions, logger });
+        summary.runs += outcome.changed ? 1 : 0;
+        summary.interrupted += outcome.interrupted;
+        summary.blocked += outcome.blocked ? 1 : 0;
+        summary.waiting += outcome.waiting ? 1 : 0;
+      } catch (error) {
+        logger.warn?.(`[workflows] could not reconcile run ${run.runId}: ${error?.message ?? error}`);
       }
     }
   }
   return summary;
+};
+
+/**
+ * One run, rebuilt from what is on disk. It answers what the run counted as, so
+ * the summary counts runs and never steps.
+ */
+const reconcileRun = async ({ run, store, verifyCheckpoint, sessions, logger }) => {
+  const knownSessions = sessions === null ? null : new Set(sessions.map((entry) => entry.id));
+  let interrupted = 0;
+  let blocked = false;
+  let changed = false;
+  // The first step this pass blocked keeps the cursor. Taking the last one would
+  // hide every earlier block behind it.
+  let blockedStepId = null;
+
+  for (const step of run.steps) {
+    if (step.status === 'running') {
+      step.status = 'interrupted';
+      step.note = 'the server stopped while this step was running';
+      interrupted += 1;
+      changed = true;
+    }
+
+    if (step.checkpoint) {
+      const check = await verifyCheckpoint({ checkpoint: step.checkpoint, directory: run.directory });
+      if (!check.ok) {
+        const details = check.mismatches.map((entry) => `${entry.path} (${entry.reason})`).join(', ');
+        step.note = `checkpoint no longer matches: ${details}`;
+        blocked = true;
+        blockedStepId = blockedStepId ?? step.id;
+        changed = true;
+        logger.warn?.(`[workflows] run ${run.runId}: ${step.note}`);
+      }
+    }
+
+    const attempt = step.attempts.at(-1);
+    // Only a step that still owes the run something cares whether its session
+    // survives: a finished step's record is its checkpoint, and re-flagging it
+    // would double-count the run as blocked and overwrite a note that says
+    // something more useful.
+    if (!SETTLED_STEP_STATUSES.has(step.status) && attempt?.sessionId && knownSessions && !knownSessions.has(attempt.sessionId)) {
+      attempt.status = 'blocked';
+      attempt.error = { code: 'unavailable', message: `session ${attempt.sessionId} is no longer known` };
+      if (step.status === 'running' || step.status === 'interrupted') step.status = 'interrupted';
+      step.note = `session ${attempt.sessionId} is no longer known`;
+      blocked = true;
+      blockedStepId = blockedStepId ?? step.id;
+      changed = true;
+    }
+  }
+
+  let waiting = false;
+  if (changed) {
+    if (run.status === 'running') {
+      run.status = 'waiting';
+      run.cursor = blockedStepId
+        ?? run.cursor
+        ?? run.steps.find((step) => step.status !== 'done' && step.status !== 'skipped')?.id
+        ?? null;
+      waiting = true;
+    }
+    await store.write(run);
+  }
+
+  return { changed, interrupted, blocked, waiting };
 };
 ```
 
@@ -3456,6 +3539,9 @@ import { runVerifiers as defaultRunChecks, verifyCheckpoint as defaultVerifyChec
       host: requireHost(),
       verifyCheckpoint,
       listProjectIds,
+      // A project with a step executing right now must not be written from a
+      // snapshot taken before that attempt started.
+      isProjectBusy: (projectId) => inFlight.has(projectId),
       logger,
     }),
   };
@@ -3466,7 +3552,7 @@ import { runVerifiers as defaultRunChecks, verifyCheckpoint as defaultVerifyChec
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/resume.test.js server/lib/workflows/engine.test.js`
-Expected: PASS.
+Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Wire the reconciliation and run it at boot**
 
@@ -3489,7 +3575,7 @@ const workflowRuntime = createWorkflowRuntime({
   ...,
   listProjectIds: async () => {
     const settings = await readSettingsFromDiskMigrated();
-    return sanitizeProjects(settings?.projects || []).map((project) => project.projectId).filter(Boolean);
+    return sanitizeProjects(settings?.projects || []).map((project) => project.id).filter(Boolean);
   },
 });
 
