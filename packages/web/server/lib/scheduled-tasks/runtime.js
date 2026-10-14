@@ -3,6 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import { getOmpRuntimeHost, promptSession } from '../agents/omp-host-access.js';
 import { expandSnippets } from '../openchamber/snippets.js';
 import { buildGoalIntroText, createSessionGoal } from '../session-goal/create.js';
+import { assemblePromptBlocks } from '../workflows/prompts.js';
 import { discoverLoops } from './loops.js';
 
 const DEFAULT_GLOBAL_CONCURRENCY = 4;
@@ -497,27 +498,18 @@ export const createScheduledTasksRuntime = (deps) => {
     // OMP sends one authored text per turn and has no synthetic message, so the
     // standing project context and the goal briefing ride in front of the task
     // prompt instead of being parked ahead of it as separate messages: the model
-    // still reads the prompt against them, and no extra turn starts.
-    const blocks = [];
-    // A prompt that starts with `/name args` is expanded by OMP itself, so it has
-    // to lead the text: context placed in front of it would hide the slash and
-    // the task would be sent as literal text.
+    // still reads the prompt against them, and no extra turn starts. The
+    // assembly also keeps a `/name args` prompt leading so OMP still expands it.
     const taskPrompt = expandSnippets(task.execution.prompt, projectPath);
-    const leads = taskPrompt.trimStart().startsWith('/');
-    if (leads) {
-      blocks.push(taskPrompt);
-    }
+    const context = [];
     if (knowledge.text) {
-      blocks.push(knowledge.text);
+      context.push(knowledge.text);
     }
     if (task.execution.goalEnabled) {
-      blocks.push(buildGoalIntroText(task.execution.goalTokenBudget));
-    }
-    if (!leads) {
-      blocks.push(taskPrompt);
+      context.push(buildGoalIntroText(task.execution.goalTokenBudget));
     }
 
-    const accepted = await promptSession(sessionID, blocks.join('\n\n'));
+    const accepted = await promptSession(sessionID, assemblePromptBlocks({ prompt: taskPrompt, context }));
     if (accepted !== true) {
       // The runtime answered that it did not take the prompt, so nothing was
       // dispatched: the run must not be recorded as delivered, and the context
