@@ -3372,6 +3372,9 @@ Expected: FAIL, `Failed to resolve import "./resume.js"`.
  */
 const ACTIVE = new Set(['running', 'waiting']);
 
+/** Steps whose record is already written down; their session no longer matters. */
+const SETTLED_STEP_STATUSES = new Set(['done', 'skipped']);
+
 export const reconcileRuns = async ({ store, host, verifyCheckpoint, listProjectIds, logger = console }) => {
   const summary = { runs: 0, interrupted: 0, blocked: 0, waiting: 0 };
   const projectIds = await listProjectIds();
@@ -3405,7 +3408,11 @@ export const reconcileRuns = async ({ store, host, verifyCheckpoint, listProject
           }
         }
         const attempt = step.attempts.at(-1);
-        if (attempt?.sessionId && knownSessions && !knownSessions.has(attempt.sessionId)) {
+        // Only a step that still owes the run something cares whether its session
+        // survives: a finished step's record is its checkpoint, and re-flagging it
+        // would double-count the run as blocked and overwrite a checkpoint note
+        // that says something more useful.
+        if (!SETTLED_STEP_STATUSES.has(step.status) && attempt?.sessionId && knownSessions && !knownSessions.has(attempt.sessionId)) {
           attempt.status = 'blocked';
           attempt.error = { code: 'unavailable', message: `session ${attempt.sessionId} is no longer known` };
           if (step.status === 'running' || step.status === 'interrupted') step.status = 'interrupted';
