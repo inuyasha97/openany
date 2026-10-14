@@ -101,7 +101,14 @@ const forgetAnswered = (pending: Map<string, OmpPendingRequest>, frame: OmpRpcFr
 const LOGIN_TIMEOUT_MS = 600_000
 
 const defaultSpawn: OmpRpcSpawn = (command, args, options) => {
-  const child = nodeSpawn(command, args, { cwd: options.cwd, env: { ...process.env, ...options.env }, stdio: ["pipe", "pipe", "pipe"] })
+  const child = nodeSpawn(command, args, {
+    cwd: options.cwd,
+    env: { ...process.env, ...options.env },
+    stdio: ["pipe", "pipe", "pipe"],
+    // The option exists so a background child never flashes a console on
+    // Windows; defaulting it here keeps that true for a caller that omits it.
+    windowsHide: options.windowsHide ?? true,
+  })
   // SAFETY: `ChildProcess` structurally provides every `OmpRpcChild` member
   // (stdout/stderr streams, stdin write/end, `on`, `kill`); the narrower seam
   // only drops the members the client does not use.
