@@ -73,6 +73,19 @@ describe('write', () => {
     expect(names).toContain('đặc tả.txt');
   });
 
+  it('stages literal paths that begin with a colon or hold glob characters', async () => {
+    await fs.appendFile(path.join(root, 'seed.txt'), 'dirty');
+    await fs.writeFile(path.join(root, ':colon.txt'), 'colon');
+    await fs.writeFile(path.join(root, '[bracket].txt'), 'bracket');
+    await fs.writeFile(path.join(root, 'đặc tả.txt'), 'unicode');
+    const checkpoint = await writer().write({ directory: root, runId: 'run-1', stepId: 'spec', attemptIndex: 0 });
+    expect(checkpoint.clean).toBe(false);
+    expect(checkpoint.commit).toMatch(/^[0-9a-f]{40}$/);
+    const names = execFileSync('git', ['-c', 'core.quotePath=false', 'show', '--pretty=format:', '--name-only'], { cwd: root })
+      .toString().split('\n').filter(Boolean).sort();
+    expect(names).toEqual([':colon.txt', '[bracket].txt', 'seed.txt', 'đặc tả.txt'].sort());
+  });
+
   it('falls back to HEAD when the commit result carries no hash', async () => {
     const head = 'a'.repeat(40);
     const fakeGit = {

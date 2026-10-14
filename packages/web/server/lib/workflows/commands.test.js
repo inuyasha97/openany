@@ -44,6 +44,15 @@ describe('runCommandCheck', () => {
     expect(result).toMatchObject({ timedOut: true, ok: false, exitCode: null });
   });
 
+  it('does not leave descendants of the killed command running', async () => {
+    const marker = path.join(root, 'alive.marker');
+    const run = `node -e "require('child_process').spawn('node',['-e','setTimeout(()=>require(\\"fs\\").writeFileSync(process.argv[1],\\"alive\\"),1200)',process.argv[1]],{stdio:'inherit'})" '${marker}'`;
+    const result = await runCommandCheck({ directory: root, run, expectExit: 0, timeoutMs: 500 });
+    expect(result).toMatchObject({ timedOut: true, ok: false });
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    expect(await fs.stat(marker).catch(() => null)).toBeNull();
+  });
+
   it('runs in the given directory', async () => {
     const result = await runCommandCheck({ directory: root, run: 'node -e "console.log(process.cwd())"', expectExit: 0, timeoutMs: 20000 });
     expect(result.stdout.trim()).toBe(await fs.realpath(root));

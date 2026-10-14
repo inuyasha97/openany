@@ -9,15 +9,18 @@
  *
  * `status` names paths relative to the repository root, but `add` resolves a
  * pathspec against the process working directory; the project can be registered
- * as a subdirectory of a monorepo, so `add` uses the `:/` root-relative magic
- * pathspec and works from anywhere inside the repository.
+ * as a subdirectory of a monorepo, so `add` prefixes each path with
+ * `:(top,literal)`. It is top-relative so it works from anywhere inside the
+ * repository, and literal so a name that begins with `:` or holds glob
+ * characters (`[`, `*`, `?`) is staged as the file it is rather than parsed as
+ * pathspec syntax.
  */
 import simpleGit from 'simple-git';
 
 export const createGitDriver = () => ({
   status: (directory) => simpleGit(directory).status(),
   revparseHead: (directory) => simpleGit(directory).revparse(['HEAD']),
-  add: (directory, files) => simpleGit(directory).add(files.map((file) => `:/${file}`)),
+  add: (directory, files) => simpleGit(directory).add(files.map((file) => `:(top,literal)${file}`)),
   commit: (directory, message) => simpleGit(directory).commit(message),
 });
 
