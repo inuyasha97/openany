@@ -1410,6 +1410,12 @@ describe('run store', () => {
     expect(await store.list('missing-project')).toEqual([]);
   });
 
+  it('ignores a file in the runs directory that is not a run', async () => {
+    const created = await store.create(run());
+    await fs.writeFile(path.join(store.directoryFor('proj-1'), 'notes.json'), '{"note":true}');
+    expect((await store.list('proj-1')).map((entry) => entry.runId)).toEqual([created.runId]);
+  });
+
   it('serializes concurrent writes to one run', async () => {
     const created = await store.create(run());
     await Promise.all([
@@ -1511,7 +1517,9 @@ export const createWorkflowRunStore = ({ fsPromises, path, projectsDirPath, now 
       throw error;
     }
     const runs = [];
-    for (const name of names.filter((entry) => entry.endsWith('.json'))) {
+    // Only names that are run ids are read: `read` refuses anything else, and one
+    // stray file (`notes.json`, a backup) must not fail the whole listing.
+    for (const name of names.filter((entry) => entry.endsWith('.json') && isValidRunId(entry.slice(0, -'.json'.length)))) {
       const parsed = await read(projectId, name.slice(0, -'.json'.length));
       if (parsed) runs.push(parsed);
     }
@@ -1545,7 +1553,7 @@ export const createWorkflowRunStore = ({ fsPromises, path, projectsDirPath, now 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/store.test.js`
-Expected: PASS, 8 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
