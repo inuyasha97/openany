@@ -544,7 +544,7 @@ export const assemblePromptBlocks = ({ prompt, context = [] }) => {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/prompts.test.js`
-Expected: PASS, 7 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Repoint scheduled tasks at the shared assembly**
 
@@ -1067,6 +1067,20 @@ describe('verifyCheckpoint', () => {
       { path: 'docs/gone.md', reason: 'missing' },
     ]);
   });
+
+  it('checks existence only for an artifact the checkpoint recorded without a digest', async () => {
+    // A plain-string pattern in the definition means `hash: false`, so the
+    // checkpoint holds `sha256: null`. Comparing a real digest against that
+    // null would report the step broken on every restart.
+    const checkpoint = { artifacts: [{ path: 'docs/design.md', size: 1, sha256: null }] };
+    expect(await verifyCheckpoint({ checkpoint, directory: root })).toEqual({ ok: true, mismatches: [] });
+
+    await fs.writeFile(path.join(root, 'docs/design.md'), 'a much longer body');
+    expect(await verifyCheckpoint({ checkpoint, directory: root })).toEqual({ ok: true, mismatches: [] });
+
+    await fs.rm(path.join(root, 'docs/design.md'));
+    expect(await verifyCheckpoint({ checkpoint, directory: root })).toEqual({ ok: false, mismatches: [{ path: 'docs/design.md', reason: 'missing' }] });
+  });
 });
 ```
 
@@ -1142,17 +1156,25 @@ export const verifyCheckpoint = async ({ checkpoint, directory, deps = {} }) => 
   const mismatches = [];
   for (const artifact of checkpoint?.artifacts ?? []) {
     const absolute = path.join(directory, artifact.path);
+    let current;
     try {
-      const { size, sha256 } = await hash(absolute);
-      if (size !== artifact.size || sha256 !== artifact.sha256) {
-        mismatches.push({ path: artifact.path, reason: 'changed' });
-      }
+      current = await hash(absolute);
     } catch (error) {
       if (error?.code === 'ENOENT') {
         mismatches.push({ path: artifact.path, reason: 'missing' });
         continue;
       }
       throw error;
+    }
+    // A checkpoint carries a digest only for an artifact the definition marks
+    // `hash: true`. For every other artifact the contract is that the file is
+    // still there, so a file that changed is not a mismatch: comparing a real
+    // digest against the recorded `null` would report every unhashed step as
+    // broken the first time the server restarted.
+    if (artifact.sha256 !== null && artifact.sha256 !== undefined) {
+      if (current.size !== artifact.size || current.sha256 !== artifact.sha256) {
+        mismatches.push({ path: artifact.path, reason: 'changed' });
+      }
     }
   }
   return { ok: mismatches.length === 0, mismatches };
@@ -1162,7 +1184,7 @@ export const verifyCheckpoint = async ({ checkpoint, directory, deps = {} }) => 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/verifiers.test.js`
-Expected: PASS, 7 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
@@ -1510,7 +1532,7 @@ export const createWorkflowRunStore = ({ fsPromises, path, projectsDirPath, now 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun run --cwd packages/web test -- server/lib/workflows/store.test.js`
-Expected: PASS, 7 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Syntax check and commit**
 
