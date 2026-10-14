@@ -1909,6 +1909,7 @@ Expected: FAIL, `Failed to resolve import "./engine.js"`.
  * second click answers `busy` instead of starting a second attempt.
  */
 import { substituteInputs } from './prompts.js';
+import { runVerifiers } from './verifiers.js';
 
 export class WorkflowError extends Error {
   constructor(code, message, status) {
@@ -1937,7 +1938,7 @@ export const createWorkflowEngine = ({
   definitions,
   host,
   checkpoints,
-  runChecks,
+  runChecks = runVerifiers,
   turn,
   now = Date.now,
   broadcast = () => {},
@@ -1987,6 +1988,9 @@ export const createWorkflowEngine = ({
     if (missing.length > 0) {
       step.status = 'blocked';
       step.note = `missing input: ${missing.join(', ')}`;
+      // A blocked step waits on a person, so the run is waiting, never running:
+      // the screens and the resume path both read that status.
+      run.status = 'waiting';
       const saved = await store.write(run);
       emit(saved);
       return saved;
@@ -2030,6 +2034,7 @@ export const createWorkflowEngine = ({
       };
       step.status = 'blocked';
       step.note = attempt.error.message;
+      run.status = 'waiting';
       const saved = await store.write(run);
       emit(saved);
       return saved;
@@ -2043,6 +2048,7 @@ export const createWorkflowEngine = ({
       attempt.error = { code: 'unavailable', message: outcome === 'timeout' ? 'the turn did not finish before the timeout' : 'the runtime never reported the turn as running' };
       step.status = 'blocked';
       step.note = attempt.error.message;
+      run.status = 'waiting';
       const saved = await store.write(run);
       emit(saved);
       return saved;
@@ -2342,6 +2348,7 @@ Factor the shared "prompt, wait, verify, decide" body out of `attemptStep` so `r
       attempt.error = { code: 'unavailable', message: 'the OMP runtime did not take the prompt' };
       step.status = 'blocked';
       step.note = attempt.error.message;
+      run.status = 'waiting';
       const saved = await store.write(run);
       emit(saved);
       return saved;
@@ -2354,6 +2361,7 @@ Factor the shared "prompt, wait, verify, decide" body out of `attemptStep` so `r
       attempt.error = { code: 'unavailable', message: outcome === 'timeout' ? 'the turn did not finish before the timeout' : 'the runtime never reported the turn as running' };
       step.status = 'blocked';
       step.note = attempt.error.message;
+      run.status = 'waiting';
       const saved = await store.write(run);
       emit(saved);
       return saved;
