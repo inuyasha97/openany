@@ -330,6 +330,9 @@ export const createWorkflowEngine = ({
       host: requireHost(),
       verifyCheckpoint,
       listProjectIds,
+      // A project with a step executing right now must not be written from a
+      // snapshot taken before that attempt started.
+      isProjectBusy: (projectId) => inFlight.has(projectId),
       logger,
     }),
   };

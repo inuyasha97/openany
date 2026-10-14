@@ -975,13 +975,11 @@ const workflowRuntime = createWorkflowRuntime({
   },
   setSessionAutoAccept: (sessionId, enabled, directory) => permissionAutoAcceptRuntime.setSessionPolicy(sessionId, enabled, directory),
   // The projects the restart sweep walks: read the same way every other feature
-  // reads them. `sanitizeProjects` returns the canonical `id` the projects
-  // directory is keyed by; fall back to deriving it from the path when absent.
+  // reads them. `sanitizeProjects` drops any entry without a non-empty canonical
+  // `id`, so the id is all the sweep needs.
   listProjectIds: async () => {
-    const settings = await readSettingsFromDiskMigrated().catch(() => null);
-    return sanitizeProjects(settings?.projects || [])
-      .map((project) => project.id ?? createProjectIdFromPath(project.path))
-      .filter(Boolean);
+    const settings = await readSettingsFromDiskMigrated();
+    return sanitizeProjects(settings?.projects || []).map((project) => project.id).filter(Boolean);
   },
   broadcast: broadcastOpenChamberUiEvent,
   logger: console,

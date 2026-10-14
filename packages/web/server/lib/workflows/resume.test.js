@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { reconcileRuns } from './resume.js';
 import { createWorkflowRunStore } from './store.js';
 
@@ -30,6 +30,10 @@ const baseRun = (overrides = {}) => ({
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-resume-'));
   store = createWorkflowRunStore({ fsPromises: fs, path, projectsDirPath: root, now: () => 42 });
+});
+
+afterEach(async () => {
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 const deps = (overrides = {}) => ({
@@ -76,5 +80,39 @@ describe('reconcileRuns', () => {
     await store.create(baseRun({ status: 'done', steps: [{ id: 'first', status: 'done', attempts: [], checkpoint: null, note: null }, { id: 'second', status: 'done', attempts: [], checkpoint: null, note: null }] }));
     const summary = await reconcileRuns(deps());
     expect(summary).toMatchObject({ runs: 0, interrupted: 0, blocked: 0 });
+  });
+
+  it('keeps the first blocked step as the cursor, not the last', async () => {
+    await store.create(baseRun({
+      steps: [
+        { id: 'first', status: 'done', attempts: [], checkpoint: { at: 1, commit: 'a'.repeat(40), clean: false, artifacts: [{ path: 'a.md', size: 1, sha256: 'x' }] }, note: null },
+        { id: 'second', status: 'done', attempts: [], checkpoint: { at: 2, commit: 'b'.repeat(40), clean: false, artifacts: [{ path: 'b.md', size: 1, sha256: 'y' }] }, note: null },
+      ],
+    }));
+    const summary = await reconcileRuns(deps({ verifyCheckpoint: async () => ({ ok: false, mismatches: [{ path: 'x.md', reason: 'changed' }] }) }));
+    const run = await store.read('proj-1', baseRun().runId);
+    // Both steps fail their check; the run's cursor has to point at the first of
+    // them, or the earlier block is invisible and the run can later read `done`.
+    expect(summary).toMatchObject({ runs: 1, blocked: 1 });
+    expect(run.cursor).toBe('first');
+    expect(run.status).toBe('waiting');
+  });
+
+  it('does not let one unreadable project cost the others their sweep', async () => {
+    await store.create(baseRun());
+    const summary = await reconcileRuns(deps({
+      listProjectIds: async () => ['bad/project', 'proj-1'],
+      logger: { warn: () => {} },
+    }));
+    expect(summary.interrupted).toBe(1);
+    expect((await store.read('proj-1', baseRun().runId)).steps[1].status).toBe('interrupted');
+  });
+
+  it('skips a project whose run is executing right now', async () => {
+    await store.create(baseRun());
+    const summary = await reconcileRuns(deps({ isProjectBusy: (projectId) => projectId === 'proj-1' }));
+    const run = await store.read('proj-1', baseRun().runId);
+    expect(summary).toMatchObject({ runs: 0, interrupted: 0 });
+    expect(run.steps[1].status).toBe('running');
   });
 });
