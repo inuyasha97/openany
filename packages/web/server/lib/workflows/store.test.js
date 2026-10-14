@@ -57,6 +57,13 @@ describe('run store', () => {
     expect(listed.map((entry) => entry.runId)).toEqual(['bbbbbbbb-2222-4333-8444-555555555555', 'aaaaaaaa-2222-4333-8444-555555555555']);
   });
 
+  it('ignores a file in the runs directory that is not a run', async () => {
+    await store.create(run({ runId: 'eeeeeeee-2222-4333-8444-555555555555' }));
+    await fs.writeFile(path.join(store.directoryFor('proj-1'), 'notes.json'), '{"note":"backup"}');
+    const listed = await store.list('proj-1');
+    expect(listed.map((entry) => entry.runId)).toEqual(['eeeeeeee-2222-4333-8444-555555555555']);
+  });
+
   it('reads null for a run that is not there, rather than an empty run', async () => {
     expect(await store.read('proj-1', 'dddddddd-2222-4333-8444-555555555555')).toBeNull();
     expect(await store.list('missing-project')).toEqual([]);

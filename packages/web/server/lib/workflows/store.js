@@ -61,7 +61,7 @@ export const createWorkflowRunStore = ({ fsPromises, path, projectsDirPath, now 
       throw error;
     }
     const runs = [];
-    for (const name of names.filter((entry) => entry.endsWith('.json'))) {
+    for (const name of names.filter((entry) => entry.endsWith('.json') && isValidRunId(entry.slice(0, -'.json'.length)))) {
       const parsed = await read(projectId, name.slice(0, -'.json'.length));
       if (parsed) runs.push(parsed);
     }

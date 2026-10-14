@@ -4,6 +4,12 @@
  * `shell: true` so a definition can write `bun run type-check:web` the way a
  * person would type it in the project. The child is killed at the timeout and
  * the result says `timedOut`, so a hung check never reads as a passed one.
+ *
+ * `detached: true` puts the shell and everything it spawns in one process
+ * group. Killing only the shell leaves its descendants alive holding the
+ * stdout/stderr pipes, so `close` never fires and the engine would await a
+ * check that cannot end; the group kill and the immediate `finish(null)`
+ * together make the timeout authoritative.
  */
 import { spawn } from 'node:child_process';
 
@@ -13,11 +19,16 @@ export const runCommandCheck = ({ directory, run, expectExit = 0, timeoutMs = 60
   let stderr = '';
   let timedOut = false;
   let settled = false;
-  const child = spawn(run, { cwd: directory, shell: true });
+  const child = spawn(run, { cwd: directory, shell: true, detached: true });
 
   const timer = setTimeout(() => {
     timedOut = true;
-    child.kill('SIGKILL');
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+    } catch {
+      child.kill('SIGKILL');
+    }
+    finish(null);
   }, timeoutMs);
 
   const finish = (exitCode) => {

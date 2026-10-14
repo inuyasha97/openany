@@ -36,6 +36,14 @@ describe('runCommandCheck', () => {
     expect(result).toMatchObject({ timedOut: true, ok: false });
   });
 
+  it('resolves when a grandchild outlives the shell and holds the output pipes', async () => {
+    const run = `node -e "require('child_process').spawn('node',['-e','setTimeout(()=>{},30000)'],{stdio:'inherit'})"`;
+    const startedAt = Date.now();
+    const result = await runCommandCheck({ directory: root, run, expectExit: 0, timeoutMs: 500 });
+    expect(Date.now() - startedAt).toBeLessThan(3000);
+    expect(result).toMatchObject({ timedOut: true, ok: false, exitCode: null });
+  });
+
   it('runs in the given directory', async () => {
     const result = await runCommandCheck({ directory: root, run: 'node -e "console.log(process.cwd())"', expectExit: 0, timeoutMs: 20000 });
     expect(result.stdout.trim()).toBe(await fs.realpath(root));

@@ -6,13 +6,18 @@
  * thing that makes a confirmed step undoable. The message carries the run and
  * the step, which makes git history the checkpoint chain. A repository that
  * cannot answer is an error, never a checkpoint.
+ *
+ * `status` names paths relative to the repository root, but `add` resolves a
+ * pathspec against the process working directory; the project can be registered
+ * as a subdirectory of a monorepo, so `add` uses the `:/` root-relative magic
+ * pathspec and works from anywhere inside the repository.
  */
 import simpleGit from 'simple-git';
 
 export const createGitDriver = () => ({
   status: (directory) => simpleGit(directory).status(),
   revparseHead: (directory) => simpleGit(directory).revparse(['HEAD']),
-  add: (directory, files) => simpleGit(directory).add(files),
+  add: (directory, files) => simpleGit(directory).add(files.map((file) => `:/${file}`)),
   commit: (directory, message) => simpleGit(directory).commit(message),
 });
 
@@ -32,7 +37,7 @@ export const createCheckpointWriter = ({ git, now = Date.now }) => ({
     }
     await git.add(directory, changed);
     const result = await git.commit(directory, message);
-    const commit = result?.commit ?? (await git.revparseHead(directory)).trim();
+    const commit = result?.commit || (await git.revparseHead(directory)).trim();
     return { at: now(), commit, clean: false, artifacts };
   },
 });
