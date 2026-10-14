@@ -11,7 +11,8 @@
  * second click answers `busy` instead of starting a second attempt.
  */
 import { substituteInputs } from './prompts.js';
-import { runVerifiers } from './verifiers.js';
+import { reconcileRuns as defaultReconcile } from './resume.js';
+import { runVerifiers as defaultRunChecks, verifyCheckpoint as defaultVerifyCheckpoint } from './verifiers.js';
 
 export class WorkflowError extends Error {
   constructor(code, message, status) {
@@ -53,7 +54,12 @@ export const createWorkflowEngine = ({
   definitions,
   host,
   checkpoints,
-  runChecks = runVerifiers,
+  runChecks = defaultRunChecks,
+  verifyCheckpoint = defaultVerifyCheckpoint,
+  reconcileRuns = defaultReconcile,
+  // No default: the sweep's project list is a fact about this installation, and
+  // a guessed one would walk every directory under the projects root.
+  listProjectIds,
   turn,
   now = Date.now,
   broadcast = () => {},
@@ -318,5 +324,13 @@ export const createWorkflowEngine = ({
       emit(saved);
       return saved;
     },
+
+    reconcile: () => reconcileRuns({
+      store,
+      host: requireHost(),
+      verifyCheckpoint,
+      listProjectIds,
+      logger,
+    }),
   };
 };

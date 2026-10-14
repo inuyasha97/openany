@@ -974,6 +974,15 @@ const workflowRuntime = createWorkflowRuntime({
     return host ? await host : null;
   },
   setSessionAutoAccept: (sessionId, enabled, directory) => permissionAutoAcceptRuntime.setSessionPolicy(sessionId, enabled, directory),
+  // The projects the restart sweep walks: read the same way every other feature
+  // reads them. `sanitizeProjects` returns the canonical `id` the projects
+  // directory is keyed by; fall back to deriving it from the path when absent.
+  listProjectIds: async () => {
+    const settings = await readSettingsFromDiskMigrated().catch(() => null);
+    return sanitizeProjects(settings?.projects || [])
+      .map((project) => project.id ?? createProjectIdFromPath(project.path))
+      .filter(Boolean);
+  },
   broadcast: broadcastOpenChamberUiEvent,
   logger: console,
 });
@@ -1898,6 +1907,17 @@ async function main(options = {}) {
   // Reconcile the relay lifecycle from demand on startup: run it if any relay
   // device/session exists, stop it (and clear a stale enabled flag) otherwise.
   void relayService.reconcile();
+
+  // Run state on disk is an index, not the record: sessions, artifacts and
+  // commits are re-checked against reality once the server is up, so a restart
+  // resumes what it can and refuses to assume the rest. It runs after listen and
+  // after the OMP runtime is mounted, and it must never keep the server from
+  // starting: a failure here is logged, not thrown.
+  void workflowRuntime.engine.reconcile()
+    .then((summary) => {
+      if (summary.runs > 0) console.log('[workflows] reconciled runs', summary);
+    })
+    .catch((error) => console.warn('[workflows] reconciliation failed:', error?.message ?? error));
 
   // Relay demand can change outside our routes: `openchamber connect-url
   // --relay` writes a pending relay session straight to the on-disk store, and

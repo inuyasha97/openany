@@ -21,6 +21,11 @@ export const createWorkflowRuntime = ({
   resolveProjectId,
   getOmpRuntimeHost,
   setSessionAutoAccept,
+  // The projects the restart sweep walks, supplied by the server from the same
+  // settings it reads everywhere else. No default: guessing would read every
+  // directory under the projects root.
+  listProjectIds,
+  reconcileRuns,
   broadcast = () => {},
   logger = console,
   git = createGitDriver(),
@@ -51,6 +56,8 @@ export const createWorkflowRuntime = ({
     definitions,
     host,
     checkpoints,
+    listProjectIds,
+    reconcileRuns,
     runChecks: ({ step, directory }) => runVerifiers({ step, directory }),
     turn: ({ host: sessionHost, sessionId }) => waitForTurnEnd({ host: sessionHost, sessionId }),
     now,
