@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkflowRunStore, isValidRunId, isValidProjectId } from './store.js';
+import { projectConfigFileStemOf } from '../projects/project-id.js';
 
 let root;
 let store;
@@ -48,6 +49,16 @@ describe('identifiers', () => {
     const longId = `path_${Buffer.from('/Users/someone/'.padEnd(200, 'x'), 'utf8').toString('base64url')}`;
     expect(longId.length).toBeGreaterThan(200);
     expect(isValidProjectId(longId)).toBe(true);
+  });
+
+  it('keeps the run directory name inside the file name limit for a long project id', async () => {
+    const longId = `path_${Buffer.from('/Users/someone/'.padEnd(200, 'x'), 'utf8').toString('base64url')}`;
+    const store = createWorkflowRunStore({ fsPromises: fs, path, projectsDirPath: root, now: () => 42 });
+    const created = await store.create(run({ projectId: longId }));
+    const directoryName = path.basename(path.dirname(store.directoryFor(longId)));
+    expect(directoryName.length).toBeLessThanOrEqual(200);
+    expect(directoryName).toBe(projectConfigFileStemOf(longId));
+    expect(await store.read(longId, created.runId)).toMatchObject({ runId: created.runId });
   });
 });
 

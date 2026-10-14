@@ -1,6 +1,6 @@
 /**
  * Run state on disk: one JSON file per run, under
- * `<projectsDirPath>/<projectId>/workflow-runs/<runId>.json`.
+ * `<projectsDirPath>/<projectConfigFileStemOf(projectId)>/workflow-runs/<runId>.json`.
  *
  * Run state is an index, not the record. Artifacts and commits live in the
  * project; this file only says which step a run reached and which session each
@@ -12,6 +12,8 @@
 // so its length follows the path's: a 93-character path already exceeds 128
 // characters. The cap is generous on purpose, and the safety comes from the
 // character set plus the `..` refusal below, not from the length.
+import { projectConfigFileStemOf } from '../projects/project-id.js';
+
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]{1,512}$/;
 const RUN_ID_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
 
@@ -19,7 +21,11 @@ export const isValidProjectId = (value) => typeof value === 'string' && PROJECT_
 export const isValidRunId = (value) => typeof value === 'string' && RUN_ID_PATTERN.test(value) && !value.includes('..');
 
 export const createWorkflowRunStore = ({ fsPromises, path, projectsDirPath, now = Date.now }) => {
-  const directoryFor = (projectId) => path.join(projectsDirPath, projectId, 'workflow-runs');
+  // The directory name is the project's config stem, not the raw id: a
+  // path-derived id (`path_<base64url>`) grows with the path and would cross the
+  // 255-byte file name limit, so `projectConfigFileStemOf` hashes the long ones
+  // exactly as the rest of the projects directory does.
+  const directoryFor = (projectId) => path.join(projectsDirPath, projectConfigFileStemOf(projectId), 'workflow-runs');
   const pathFor = (projectId, runId) => path.join(directoryFor(projectId), `${runId}.json`);
 
   const assertIds = (projectId, runId) => {
