@@ -245,3 +245,79 @@ steps:
     expect(run.status).toBe('waiting');
   });
 });
+
+describe('confirmStep', () => {
+  it('writes the checkpoint and advances on done', async () => {
+    const { engine, root, runId } = await buildEngine();
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    const run = await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'done' });
+    expect(run.steps[0].status).toBe('done');
+    expect(run.steps[0].checkpoint).toMatchObject({ commit: 'c'.repeat(40) });
+    expect(run.cursor).toBe('second');
+    expect(run.status).toBe('running');
+  });
+
+  it('keeps the step waiting when the answer is not_done', async () => {
+    const { engine, root, runId } = await buildEngine();
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    const run = await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'not_done', reason: 'the spec is thin' });
+    expect(run.steps[0].status).toBe('needs_work');
+    expect(run.steps[0].note).toBe('the spec is thin');
+    expect(run.cursor).toBe('first');
+  });
+
+  it('skips a step and moves the cursor past it', async () => {
+    const { engine, root, runId } = await buildEngine();
+    const run = await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'skip', reason: 'not needed' });
+    expect(run.steps[0].status).toBe('skipped');
+    expect(run.cursor).toBe('second');
+  });
+
+  it('refuses to confirm a step that never ran', async () => {
+    const { engine, runId } = await buildEngine();
+    await expect(engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'second', decision: 'done' }))
+      .rejects.toMatchObject({ code: 'conflict' });
+  });
+});
+
+describe('continueStep', () => {
+  it('sends another prompt in the same session and counts a new attempt', async () => {
+    const { engine, root, runId, prompts } = await buildEngine();
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    const run = await engine.continueStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first', text: 'tighten it' });
+    expect(prompts.at(-1)).toEqual({ sessionId: 'session-1', text: 'tighten it' });
+    expect(run.steps[0].attempts).toHaveLength(2);
+    expect(run.steps[0].status).toBe('waiting_confirm');
+  });
+
+  it('refuses an empty prompt', async () => {
+    const { engine, root, runId } = await buildEngine();
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    await expect(engine.continueStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first', text: '   ' }))
+      .rejects.toMatchObject({ code: 'invalid' });
+  });
+});
+
+describe('cancelRun', () => {
+  it('marks the run cancelled and keeps the steps as they were', async () => {
+    const { engine, root, runId } = await buildEngine();
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    const run = await engine.cancelRun({ projectId: 'proj-1', runId });
+    expect(run.status).toBe('cancelled');
+    expect(run.steps[0].status).toBe('needs_work');
+  });
+});
+
+describe('verifyStep', () => {
+  it('re-runs the verifiers without prompting', async () => {
+    const { engine, root, runId, prompts } = await buildEngine();
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    const before = prompts.length;
+    const run = await engine.verifyStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    expect(prompts.length).toBe(before);
+    expect(run.steps[0].attempts[0].verify.ok).toBe(false);
+  });
+});

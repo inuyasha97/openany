@@ -129,22 +129,31 @@ export const createWorkflowEngine = ({
       }
     }
 
+    run.cursor = stepId;
+    return runPromptInSession({ run, step, declared, sessionId, text, projectPath });
+  };
+
+  /**
+   * The "prompt, wait, verify, decide" body: a first attempt and a person's
+   * continue prompt both send text into the recorded session, wait for the turn
+   * to finish, run the verifiers, then stop for a person or advance. The
+   * refused-prompt and never-started paths live here so they exist once.
+   */
+  const runPromptInSession = async ({ run, step, declared, sessionId, text, projectPath }) => {
+    const bus = requireHost();
+    if (declared.permissions === 'auto') {
+      await bus.setAutoAccept?.(sessionId, true, projectPath).catch(() => undefined);
+    }
     const attempt = { index: step.attempts.length, sessionId, prompt: text, startedAt: now(), endedAt: null, status: 'running', turn: null, verify: null, error: null };
     step.attempts.push(attempt);
     step.status = 'running';
     run.status = 'running';
-    run.cursor = stepId;
     await store.write(run);
-    emit(run);
-
     const accepted = await bus.prompt(sessionId, text);
     if (accepted !== true) {
       attempt.status = 'blocked';
       attempt.endedAt = now();
-      attempt.error = {
-        code: 'unavailable',
-        message: accepted === null ? 'the OMP runtime went away before it could take the prompt' : 'the OMP runtime did not take the prompt',
-      };
+      attempt.error = { code: 'unavailable', message: 'the OMP runtime did not take the prompt' };
       step.status = 'blocked';
       step.note = attempt.error.message;
       run.status = 'waiting';
@@ -152,7 +161,6 @@ export const createWorkflowEngine = ({
       emit(saved);
       return saved;
     }
-
     const outcome = await turn({ host: bus, sessionId });
     attempt.turn = outcome;
     attempt.endedAt = now();
@@ -166,22 +174,22 @@ export const createWorkflowEngine = ({
       emit(saved);
       return saved;
     }
+    return settleAttempt({ run, step, declared, attempt });
+  };
 
+  /** Run the verifiers and record the outcome of one completed attempt. */
+  const settleAttempt = async ({ run, step, declared, attempt }) => {
     const verify = await runChecks({ step: declared, directory: run.directory });
     attempt.verify = verify;
     attempt.status = 'completed';
     step.note = verify.ok ? null : 'a verifier failed';
-
     if (declared.confirm === 'auto' && verify.ok) {
       step.status = 'done';
       step.checkpoint = await writeCheckpointFor({ run, step, attempt, verify });
-      advance(run, stepId);
+      advance(run, step.id);
       run.status = run.cursor ? 'running' : hasOpenWork(run) ? 'waiting' : 'done';
-    } else if (verify.ok) {
-      step.status = 'waiting_confirm';
-      run.status = 'waiting';
     } else {
-      step.status = 'needs_work';
+      step.status = verify.ok ? 'waiting_confirm' : 'needs_work';
       run.status = 'waiting';
     }
     const saved = await store.write(run);
@@ -233,6 +241,71 @@ export const createWorkflowEngine = ({
         run = await withLock(projectId, () => attemptStep({ projectId, projectPath, runId, stepId: next }));
       }
       return run;
+    },
+
+    confirmStep: async ({ projectId, runId, stepId, decision, reason = null }) => {
+      const run = await loadRun(projectId, runId);
+      const step = findStep(run, stepId);
+      if (!['done', 'not_done', 'skip'].includes(decision)) throw new WorkflowError('invalid', `unknown decision "${decision}"`);
+      if (decision === 'done') {
+        const attempt = step.attempts.at(-1);
+        if (!attempt) throw new WorkflowError('conflict', `step ${stepId} has not run yet`, 409);
+        const verify = attempt.verify ?? await runChecks({ step: (await loadStepDefinition(projectId, run)).steps.find((entry) => entry.id === stepId), directory: run.directory });
+        attempt.verify = verify;
+        if (!verify.ok) throw new WorkflowError('conflict', 'a verifier is failing; answer not_done and prompt again, or skip the step', 409);
+        step.checkpoint = await writeCheckpointFor({ run, step, attempt, verify });
+        step.status = 'done';
+        step.note = null;
+        advance(run, stepId);
+        run.status = run.cursor ? 'running' : hasOpenWork(run) ? 'waiting' : 'done';
+      } else if (decision === 'skip') {
+        step.status = 'skipped';
+        step.note = reason;
+        advance(run, stepId);
+      } else {
+        step.status = 'needs_work';
+        step.note = reason ?? 'the person answered that the step is not done';
+        run.status = 'waiting';
+      }
+      const saved = await store.write(run);
+      emit(saved);
+      return saved;
+    },
+
+    continueStep: async ({ projectId, projectPath, runId, stepId, text }) => {
+      const trimmed = typeof text === 'string' ? text.trim() : '';
+      if (!trimmed) throw new WorkflowError('invalid', 'a continue prompt needs text');
+      return withLock(projectId, async () => {
+        const run = await loadRun(projectId, runId);
+        const definition = await loadStepDefinition(projectId, run);
+        const declared = definition.steps.find((entry) => entry.id === stepId);
+        const step = findStep(run, stepId);
+        const sessionId = step.attempts.at(-1)?.sessionId;
+        if (!declared || !sessionId) throw new WorkflowError('conflict', `step ${stepId} has no session to continue`, 409);
+        return runPromptInSession({ run, step, declared, sessionId, text: trimmed, projectPath });
+      });
+    },
+
+    verifyStep: async ({ projectId, runId, stepId }) => {
+      const run = await loadRun(projectId, runId);
+      const definition = await loadStepDefinition(projectId, run);
+      const declared = definition.steps.find((entry) => entry.id === stepId);
+      const step = findStep(run, stepId);
+      const attempt = step.attempts.at(-1);
+      if (!declared || !attempt) throw new WorkflowError('conflict', `step ${stepId} has not run yet`, 409);
+      attempt.verify = await runChecks({ step: declared, directory: run.directory });
+      step.note = attempt.verify.ok ? null : 'a verifier failed';
+      const saved = await store.write(run);
+      emit(saved);
+      return saved;
+    },
+
+    cancelRun: async ({ projectId, runId }) => {
+      const run = await loadRun(projectId, runId);
+      run.status = 'cancelled';
+      const saved = await store.write(run);
+      emit(saved);
+      return saved;
     },
   };
 };
