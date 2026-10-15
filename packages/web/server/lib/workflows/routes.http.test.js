@@ -73,6 +73,12 @@ describe('workflow routes', () => {
     expect(response.body.definitions[0].inputs).toEqual([{ name: 'request', description: 'What to build', required: true }]);
   });
 
+  it('forbids caching every workflow response', async () => {
+    const { app } = createApp();
+    const response = await request(app).get('/api/workflows/runs').set(SCOPE);
+    expect(response.headers['cache-control']).toBe('no-store');
+  });
+
   it('answers 400 when the project header is missing', async () => {
     const { app } = createApp();
     const response = await request(app).get('/api/workflows/definitions');

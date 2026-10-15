@@ -48,6 +48,16 @@ const directoryOf = (req) => {
 export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
   const { definitions, store, engine, resolveProjectId, projectPathFromId } = workflowsRuntime;
 
+  // The browser smoke caught this as a real staleness: without a `Cache-Control`,
+  // a reload revalidated a run read and the browser drew the `304` body it had
+  // cached, so a run that had reached `done` on disk still showed `waiting_confirm`.
+  // Every answer under this prefix describes a state that changes while steps
+  // execute, so none of it may be cached.
+  app.use('/api/workflows', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+
   /**
    * The project a request acts on: the `x-opencode-directory` header, turned
    * into the same path-derived id the projects directory names its files by
