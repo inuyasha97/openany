@@ -2803,7 +2803,7 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     next();
   });
 
-  const { definitions, store, engine, resolveProjectId, projectPathFromId } = workflowsRuntime;
+  const { definitions, store, engine, resolveProjectId, projectPathFromId, normalizeDirectoryPath } = workflowsRuntime;
 
   /**
    * The project a request acts on: the `x-opencode-directory` header, turned
@@ -2815,7 +2815,14 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
   const scopeOf = (req) => {
     const directory = directoryOf(req);
     if (!directory) return null;
-    const projectId = resolveProjectId(directory);
+    // The id has to be the one the app's own project list uses, and that list
+    // normalizes a path (realpath) before deriving it. Without this the same
+    // directory has two ids — `/tmp/x` and its realpath `/private/tmp/x` — so a
+    // screen reads one run file while its own writes land in another. The browser
+    // smoke caught exactly that: two run files for one run id, one `done` and one
+    // `waiting_confirm`.
+    const normalized = normalizeDirectoryPath(directory);
+    const projectId = resolveProjectId(normalized || directory);
     if (!projectId) return null;
     const projectPath = projectPathFromId(projectId);
     return projectPath ? { projectId, projectPath } : null;
@@ -3097,6 +3104,7 @@ export const createWorkflowRuntime = ({
   projectsDirPath,
   projectPathFromId,
   resolveProjectId,
+  normalizeDirectoryPath = (value) => value,
   getOmpRuntimeHost,
   setSessionAutoAccept,
   broadcast = () => {},
@@ -3143,6 +3151,7 @@ export const createWorkflowRuntime = ({
     engine,
     resolveProjectId,
     projectPathFromId,
+    normalizeDirectoryPath,
     routes: registerWorkflowRoutes,
   };
 };
