@@ -72,7 +72,7 @@ packages/ui/src/
 
 **Interfaces:**
 - Consumes: the engine plan's Task 1 and Task 11.
-- Produces: `WorkflowDefinitionSummary` gains `steps: WorkflowStepDefinition[]`, which Task 9's diagram needs. This task also creates `packages/ui/src/lib/workflowsApi.ts` with the wire types every later task imports (the route's shapes and the client's types mirror each other, so they land together); Task 1 extends that file with the client functions rather than replacing it.
+- Produces: `WorkflowDefinitionSummary` gains `steps: WorkflowStepDefinition[]` and `inputs: WorkflowInput[]`, which Task 9's diagram and Task 4's start action need. This task also creates `packages/ui/src/lib/workflowsApi.ts` with the wire types every later task imports (the route's shapes and the client's types mirror each other, so they land together); Task 1 extends that file with the client functions rather than replacing it.
 
 - [ ] **Step 1: Extend the summary in the route**
 
@@ -86,6 +86,9 @@ const summary = (entry) => ({
   // The diagram needs the declared steps; a summary without them would force the
   // screen to re-read every file separately.
   steps: entry.definition ? entry.definition.steps : [],
+  // The create route rejects a missing required input, so a screen that offers
+  // to start a run has to know what to ask for.
+  inputs: entry.definition ? entry.definition.inputs : [],
 });
 ```
 
@@ -940,6 +943,10 @@ In `packages/ui/src/lib/i18n/messages/en.ts`, add a `workflows` group in the sam
       truncated: 'output cut at 64 KiB',
       // The run list's delete confirmation; the dialog names the run and says
       // that only the run file goes.
+      start: 'Start a run',
+      startConfirm: 'Start',
+      startCancel: 'Cancel',
+      startNeedsInput: 'This workflow asks for the values below.',
       delete: 'Delete run',
       deleteConfirm: 'This removes the run and its step history. Commits and artifacts stay in the project.',
       deleteCancel: 'Cancel',
@@ -1026,11 +1033,13 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
   // `WorkflowDefinitionSummary` carries `id: string | null`, not the parsed definition.
   const usable = definitions.filter((definition) => definition.id !== null);
 
-  const start = async (workflowId: string) => {
+  const start = async (definition: WorkflowDefinitionSummary) => {
     setBusy(true);
     setError(null);
     try {
-      const run = await createWorkflowRun(project.path, { workflowId });
+      // A definition may require inputs, and the create route rejects a missing
+      // one; the dialog collects them before the run exists.
+      const run = await createWorkflowRun(project.path, { workflowId: definition.id as string, inputs: pendingInputs });
       setRun(project, run);
       onSelect(run.runId);
     } catch (failure) {
@@ -1059,7 +1068,7 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
         <span className="text-xs font-medium">{t('workflows.title')}</span>
         <div className="flex gap-1">
           {usable.map((definition) => (
-            <Button key={definition.file} size="xs" variant="ghost" disabled={busy} onClick={() => void start(definition.id as string)}>
+            <Button key={definition.file} size="xs" variant="ghost" disabled={busy} onClick={() => setPendingStart(definition)}>
               {definition.name ?? definition.id}
             </Button>
           ))}
@@ -1082,7 +1091,14 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
                 </span>
                 <span className="block truncate text-[11px] text-muted-foreground">{run.cursor ?? run.runId.slice(0, 8)}</span>
               </button>
-              <Button size="xs" variant="ghost" disabled={busy} aria-label={t('workflows.run.delete')} onClick={() => setPendingDelete(run.runId)}>
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={busy || run.steps.some((step) => step.status === 'running')}
+                title={t('workflows.run.delete')}
+                aria-label={t('workflows.run.delete')}
+                onClick={() => setPendingDelete(run.runId)}
+              >
                 <Icon name="delete-bin" className="size-3.5" aria-hidden />
               </Button>
             </div>
@@ -1309,6 +1325,16 @@ export const RunDetail = ({ run, project, definition }: RunDetailProps) => {
   const [full, setFull] = useState<WorkflowRun>(run);
   const [stepId, setStepId] = useState<string | null>(run.cursor ?? run.steps[0]?.id ?? null);
   const [error, setError] = useState<string | null>(null);
+
+  // The parent swaps the `run` prop when a person selects another run, without
+  // remounting this component. Without this the pane would show the previous
+  // run's steps under the new selection until the re-read landed, and forever if
+  // that read failed.
+  if (full.runId !== run.runId) {
+    setFull(run);
+    setStepId(run.cursor ?? run.steps[0]?.id ?? null);
+    setError(null);
+  }
   const runStatus = describeRunStatus(run.status, t);
 
   // The frame the server pushes carries a step summary, not the attempts and
@@ -1317,6 +1343,7 @@ export const RunDetail = ({ run, project, definition }: RunDetailProps) => {
   useEffect(() => {
     void fetchWorkflowRun(project.path, run.runId)
       .then((next) => {
+        setError(null);
         setFull(next);
         setStepId((current) => current ?? next.cursor ?? next.steps[0]?.id ?? null);
       })
