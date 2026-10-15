@@ -64,7 +64,16 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     return projectPath ? { projectId, projectPath } : null;
   };
 
-  const summary = (entry) => ({ file: entry.file, id: entry.id, name: entry.name, version: entry.version, errors: entry.errors });
+  const summary = (entry) => ({
+    file: entry.file,
+    id: entry.id,
+    name: entry.name,
+    version: entry.version,
+    errors: entry.errors,
+    // The diagram needs the declared steps; a summary without them would force the
+    // screen to re-read every file separately.
+    steps: entry.definition ? entry.definition.steps : [],
+  });
 
   /**
    * A run id the store would refuse is the caller's mistake, so it answers 400

@@ -41,7 +41,21 @@ describe('workflow routes', () => {
     const { app } = createApp();
     const response = await request(app).get('/api/workflows/definitions').set(SCOPE);
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ definitions: [{ file: 'a.yaml', id: 'a', name: 'A', version: 1, errors: [] }] });
+    expect(response.body).toEqual({ definitions: [{ file: 'a.yaml', id: 'a', name: 'A', version: 1, errors: [], steps: [] }] });
+  });
+
+  it('returns the declared steps of a valid definition', async () => {
+    const { app } = createApp({
+      definitions: {
+        list: async () => [{
+          file: 'a.yaml', id: 'a', name: 'A', version: 1, errors: [],
+          definition: { id: 'a', name: 'A', version: 1, inputs: [], steps: [{ id: 'first', title: 'First', prompt: 'x', session: 'new', permissions: 'ask', verify: { artifacts: [], commands: [] }, confirm: 'human' }] },
+        }],
+        read: async () => null,
+      },
+    });
+    const response = await request(app).get('/api/workflows/definitions').set(SCOPE);
+    expect(response.body.definitions[0].steps.map((step) => step.id)).toEqual(['first']);
   });
 
   it('answers 400 when the project header is missing', async () => {
