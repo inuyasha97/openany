@@ -332,6 +332,34 @@ describe('workflow definition routes', () => {
     expect((await request(app).delete('/api/workflows/definitions/two-step').set(SCOPE)).status).toBe(404);
   });
 
+  it('refuses to delete a definition a run that has not finished still needs', async () => {
+    // The engine re-reads the definition from disk on every advance, so this run
+    // could never move again if the file went away.
+    const live = { ...run, runId: '99999999-2222-4333-8444-555555555555', workflowId: 'two-step', status: 'waiting' };
+    const store = { list: async () => [live], read: async () => live, create: async (value) => value, remove: async () => true };
+    const { app, file } = await createDefinitionApp({ store });
+    await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({ raw: SOURCE });
+
+    const response = await request(app).delete('/api/workflows/definitions/two-step').set(SCOPE);
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toContain('99999999-2222-4333-8444-555555555555');
+    expect(response.body.error).toMatch(/has not finished/);
+    expect(await fs.readFile(file, 'utf8')).toBe(SOURCE);
+  });
+
+  it('deletes a definition once every run of it has finished', async () => {
+    const finished = { ...run, workflowId: 'two-step', status: 'done' };
+    const store = { list: async () => [finished], read: async () => finished, create: async (value) => value, remove: async () => true };
+    const { app, file } = await createDefinitionApp({ store });
+    await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({ raw: SOURCE });
+
+    const response = await request(app).delete('/api/workflows/definitions/two-step').set(SCOPE);
+
+    expect(response.body).toEqual({ removed: true });
+    await expect(fs.stat(file)).rejects.toThrow();
+  });
+
   it('refuses a write with no text in it', async () => {
     const { app, file } = await createDefinitionApp();
     const response = await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({});

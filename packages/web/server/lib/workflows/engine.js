@@ -26,7 +26,13 @@ export class WorkflowError extends Error {
   }
 }
 
-const TERMINAL_RUN_STATUSES = new Set(['done', 'failed', 'cancelled']);
+/**
+ * The statuses a run stops at for good. Exported because the routes decide from
+ * the same set whether a definition may be deleted: the engine re-reads the
+ * definition from disk on every advance, so a run whose status is not in here
+ * would be stranded by that delete.
+ */
+export const TERMINAL_RUN_STATUSES = new Set(['done', 'failed', 'cancelled']);
 const STOPS = new Set(['waiting_confirm', 'needs_work', 'blocked', 'failed', 'interrupted']);
 
 /** Step statuses a fresh verdict moves, in the direction that verdict points. */

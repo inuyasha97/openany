@@ -15,6 +15,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { parseDefinition } from './definitions.js';
+import { TERMINAL_RUN_STATUSES } from './engine.js';
 import { isValidRunId } from './store.js';
 
 const parseJsonBody = express.json({ limit: '1mb' });
@@ -165,12 +166,28 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     }
   });
 
+  /**
+   * Delete one definition.
+   *
+   * The engine reads the definition from disk again on every advance
+   * (`loadStepDefinition`), so a run that has not stopped for good cannot move
+   * once its file is gone. That delete is therefore refused, naming the run that
+   * holds it, rather than stranding the run in silence.
+   */
   app.delete('/api/workflows/definitions/:workflowId', async (req, res) => {
     try {
       const scope = scopeOf(req);
       if (!scope) return res.status(400).json({ error: 'x-opencode-directory is required' });
-      const removed = await definitions.remove(scope.projectId, req.params.workflowId);
-      if (!removed) return res.status(404).json({ error: `workflow "${req.params.workflowId}" was not found` });
+      const workflowId = req.params.workflowId;
+      const runs = await store.list(scope.projectId);
+      const live = runs.find((candidate) => candidate.workflowId === workflowId && !TERMINAL_RUN_STATUSES.has(candidate.status));
+      if (live) {
+        return res.status(409).json({
+          error: `run ${live.runId} has not finished, so ${workflowId}.yaml cannot be deleted: finish or delete that run first`,
+        });
+      }
+      const removed = await definitions.remove(scope.projectId, workflowId);
+      if (!removed) return res.status(404).json({ error: `workflow "${workflowId}" was not found` });
       return res.json({ removed: true });
     } catch (error) {
       return respondWithError(res, error, 'Failed to delete the workflow definition');

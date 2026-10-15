@@ -10,6 +10,10 @@
  * definition with no inputs starts on one click. A failure shows inside the
  * dialog that asked for the action, so it is never hidden behind the overlay;
  * the list banner carries a failure that happened with no dialog open.
+ *
+ * Each definition carries both actions a person takes on it: start a run, and
+ * open its YAML in the editor. The second one lives here because a definition
+ * with no run at all would otherwise be visible and unusable.
  */
 import { useState } from 'react';
 
@@ -28,10 +32,12 @@ export interface RunListProps {
   definitions: WorkflowDefinitionSummary[];
   selectedRunId: string | null;
   onSelect: (runId: string) => void;
+  /** Opens one definition's YAML. The diagram's edit action needs a selected run, so this is how a definition with no run reaches the editor. */
+  onEditDefinition: (definition: WorkflowDefinitionSummary) => void;
   project: ProjectRef;
 }
 
-export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }: RunListProps) => {
+export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefinition, project }: RunListProps) => {
   const { t } = useI18n();
   const setRun = useWorkflowStore((state) => state.setRun);
   const removeRun = useWorkflowStore((state) => state.removeRun);
@@ -110,12 +116,27 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
         <span className="text-xs font-medium">{t('workflows.title')}</span>
         <div className="flex gap-1">
           {usable.map((definition) => (
-            <Button key={definition.file} size="xs" variant="ghost" disabled={busy} onClick={() => beginStart(definition)}>
-              {definition.name ?? definition.id}
-              {/* The mode the run will execute in, before one exists: rendered the
-                  way a run's own header renders it (`RunDetail.tsx`), raw. */}
-              {definition.sandbox ? <span className="text-[11px] text-muted-foreground">{definition.sandbox}</span> : null}
-            </Button>
+            <span key={definition.file} className="flex items-center">
+              <Button size="xs" variant="ghost" disabled={busy} onClick={() => beginStart(definition)}>
+                {definition.name ?? definition.id}
+                {/* The mode the run will execute in, before one exists: rendered the
+                    way a run's own header renders it (`RunDetail.tsx`), raw. */}
+                {definition.sandbox ? <span className="text-[11px] text-muted-foreground">{definition.sandbox}</span> : null}
+              </Button>
+              {/* Every listed definition opens its YAML, whether or not a run of
+                  it exists: the diagram's own edit action is reachable only
+                  through a selected run. */}
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={busy}
+                title={t('workflows.editor.open')}
+                aria-label={`${t('workflows.editor.open')}: ${definition.name ?? definition.id}`}
+                onClick={() => onEditDefinition(definition)}
+              >
+                <Icon name="edit" className="size-3.5" aria-hidden />
+              </Button>
+            </span>
           ))}
         </div>
       </div>

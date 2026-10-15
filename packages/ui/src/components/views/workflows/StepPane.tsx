@@ -23,7 +23,8 @@ import {
   runWorkflowStep,
   verifyWorkflowStep,
 } from '@/lib/workflowsApi';
-import type { WorkflowRun, WorkflowRunStatus, WorkflowStep, WorkflowStepStatus } from '@/lib/workflowsApi';
+import type { WorkflowRun, WorkflowStep, WorkflowStepStatus } from '@/lib/workflowsApi';
+import { runIsLive } from '@/lib/workflows/liveRun';
 import { describeRunStatus, describeStepStatus } from '@/lib/workflows/status';
 import type { ProjectRef } from '@/lib/worktrees/worktreeManager';
 import { useWorkflowStore } from '@/stores/useWorkflowStore';
@@ -47,9 +48,8 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
   // step that is already settled; and `confirm` on a step whose last attempt
   // never completed. The bar computes the same three facts once, so it never
   // offers a button the server would refuse.
-  const TERMINAL_RUN_STATUSES: Partial<Record<WorkflowRunStatus, true>> = { done: true, failed: true, cancelled: true };
   const SETTLED_STEP_STATUSES: Partial<Record<WorkflowStepStatus, true>> = { done: true, skipped: true };
-  const runIsOpen = TERMINAL_RUN_STATUSES[run.status] !== true;
+  const runIsOpen = runIsLive(run.status);
   const stepIsSettled = SETTLED_STEP_STATUSES[step.status] === true;
   const attemptSettled = step.attempts.at(-1)?.status === 'completed';
 

@@ -93,6 +93,7 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
           selectedRunId={selected?.runId ?? null}
           onSelect={setSelectedRunId}
           definitions={entry?.definitions ?? []}
+          onEditDefinition={setEditing}
           project={project}
         />
         {editing ? (

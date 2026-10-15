@@ -13,6 +13,19 @@
  * editor opens. Until that read answers the pane shows its loading state, and a
  * read that fails shows the failure beside the file name: an empty buffer a
  * person then saves is how a working definition gets erased.
+ *
+ * The read follows the file this editor was opened from, not the `id` the body
+ * declares: the two may differ, and the route resolves the path from the name it
+ * is handed. A body whose id differs is refused by the save, which is the message
+ * the person needs rather than a read failure that names nothing on screen.
+ *
+ * Closing with unsaved text asks first, because a buffer the server refused is
+ * exactly the text a person is still reconciling, and the close is the only exit
+ * from that state.
+ *
+ * Deleting is refused while a run of the project has not finished with this
+ * definition: the engine re-reads the file on every advance, so the run could
+ * never move again.
  */
 import { useEffect, useMemo, useState } from 'react';
 
@@ -26,6 +39,7 @@ import { CodeMirrorEditor } from '@/components/ui/CodeMirrorEditor';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { createFlexokiCodeMirrorTheme } from '@/lib/codemirror/flexokiTheme';
 import { languageByExtension } from '@/lib/codemirror/languageByExtension';
+import { liveRunForDefinition } from '@/lib/workflows/liveRun';
 import {
   deleteWorkflowDefinition,
   fetchWorkflowDefinitionSource,
@@ -55,9 +69,15 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
   const { currentTheme } = useThemeSystem();
   const editorFontSize = useUIStore((state) => state.editorFontSize);
   const reload = useWorkflowStore((state) => state.load);
-  // The summary stops at the parsed definition, so the file name is all that is
-  // left of the id for a file that no longer parses.
-  const workflowId = summary.id ?? summary.file.replace(/\.ya?ml$/i, '');
+  const runs = useWorkflowStore((state) => state.getEntry({ id: project.id }).runs);
+  // The file this editor was opened from, without its extension. The read
+  // resolves the path from the name it is handed and the route writes back to the
+  // same name, so a body that declares another id is still refused truthfully
+  // rather than being read from a path the person did not point at.
+  const workflowId = summary.file.replace(/\.ya?ml$/i, '');
+  // The engine re-reads this file on every advance, so a run that has not
+  // finished needs it on disk. The delete waits for that run, and says why.
+  const liveRun = liveRunForDefinition(runs, workflowId);
 
   const [text, setText] = useState('');
   /** The text as it is on disk: what "unsaved" is measured against. */
@@ -71,6 +91,7 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,6 +162,21 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
 
   const editable = !reading && readFailure === null;
 
+  /**
+   * Closing asks when the buffer holds text the file does not. The close stays
+   * available either way: after a refused save the buffer's hash is deliberately
+   * not advanced, so the close is the only exit, and it must not be the one that
+   * throws the edit away without asking.
+   */
+  const requestClose = () => {
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    setError(null);
+    setConfirmClose(true);
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
@@ -148,21 +184,27 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
         {editable && dirty ? <span className="text-[11px] text-muted-foreground">{t('workflows.editor.unsaved')}</span> : null}
         <span className="ml-auto flex items-center gap-1">
           {editable ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={busy}
-              title={t('workflows.editor.delete')}
-              aria-label={t('workflows.editor.delete')}
-              onClick={() => {
-                setError(null);
-                setConfirmDelete(true);
-              }}
-            >
-              <Icon name="delete-bin" className="size-3.5" aria-hidden />
-            </Button>
+            /* A disabled `Button` is `pointer-events-none`
+               (`components/ui/button.tsx`), so its own `title` never appears;
+               the span is the hit target that can carry the reason, as the
+               step bar does (`StepPane.tsx`). */
+            <span title={liveRun ? t('workflows.editor.deleteBlocked') : undefined}>
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={busy || liveRun !== null}
+                title={t('workflows.editor.delete')}
+                aria-label={t('workflows.editor.delete')}
+                onClick={() => {
+                  setError(null);
+                  setConfirmDelete(true);
+                }}
+              >
+                <Icon name="delete-bin" className="size-3.5" aria-hidden />
+              </Button>
+            </span>
           ) : null}
-          <Button size="xs" variant="ghost" disabled={busy} onClick={onClose}>
+          <Button size="xs" variant="ghost" disabled={busy} onClick={requestClose}>
             {t('workflows.editor.close')}
           </Button>
           {editable ? (
@@ -172,6 +214,11 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
           ) : null}
         </span>
       </div>
+      {editable && liveRun ? (
+        <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
+          {t('workflows.editor.deleteBlocked')}
+        </p>
+      ) : null}
       {reading ? <div className="p-3 text-xs text-muted-foreground">{t('workflows.editor.loading')}</div> : null}
       {readFailure !== null ? (
         <p role="alert" className="px-3 py-2 text-xs text-destructive">
@@ -231,6 +278,28 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
             </Button>
             <Button variant="destructive" size="sm" disabled={busy} onClick={() => void remove()}>
               {t('workflows.editor.delete')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={confirmClose} onOpenChange={(open) => { if (!open) setConfirmClose(false); }}>
+        <DialogContent showCloseButton={false} className="max-w-sm gap-5">
+          <DialogHeader>
+            <DialogTitle>{t('workflows.editor.discard')}</DialogTitle>
+            <DialogDescription>
+              <span className="block font-mono text-[11px] text-muted-foreground">{summary.file}</span>
+              {t('workflows.editor.discardConfirm')}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setConfirmClose(false)}>
+              {t('workflows.editor.discardCancel')}
+            </Button>
+            {/* Not disabled by `busy`: a save in flight is exactly when a person
+                changes their mind, and the close must be able to answer a
+                refusal, so the way out stays open. */}
+            <Button variant="destructive" size="sm" onClick={onClose}>
+              {t('workflows.editor.discardClose')}
             </Button>
           </DialogFooter>
         </DialogContent>
