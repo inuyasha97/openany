@@ -203,9 +203,10 @@ Transitions:
 1. The engine creates or adopts the session, sends the prompt, and waits for the
    turn to end (busy to idle).
 2. The engine runs the step's verifiers and records each result on the attempt.
-3. With the verifiers recorded, the step becomes `waiting_confirm` and the screen
-   offers four actions. Every step reaches this point and stops here: no verifier
-   result advances a step on its own.
+3. With the verifiers recorded, the step stops there — no verifier result advances
+   a step on its own. A verifier that passes leaves it `waiting_confirm`, where
+   the screen offers four actions; a verifier that fails leaves it `needs_work`
+   (transition 4). At `waiting_confirm`:
    - Confirm done. The step is recorded as `done` and the run moves on. The engine
      writes no commit; if the step's prompt asked the agent to commit, that commit
      is already in the repository, and if it did not, the step's work stays

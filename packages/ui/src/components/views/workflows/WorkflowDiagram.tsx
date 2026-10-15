@@ -19,7 +19,7 @@ export interface WorkflowDiagramProps {
 const mermaidSource = (steps: WorkflowStepDefinition[]) => {
   const lines = ['flowchart TD'];
   steps.forEach((step, index) => {
-    const label = `${step.id}${step.confirm === 'auto' ? ' (auto)' : ''}`;
+    const label = step.id;
     lines.push(`  s${index}["${label}"]`);
     if (index > 0) lines.push(`  s${index - 1} --> s${index}`);
   });

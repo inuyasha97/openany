@@ -97,7 +97,6 @@ export interface WorkflowStepDefinition {
   session: 'new' | 'reuse';
   permissions: 'ask' | 'auto';
   verify: { artifacts: Array<{ glob: string; hash: boolean }>; commands: Array<{ run: string; expectExit: number; timeoutMs: number }> };
-  confirm: 'human' | 'auto';
 }
 
 export interface WorkflowInput {
