@@ -1037,9 +1037,14 @@ describe('applyAsChanges after round five', () => {
         bg(['commit', '--quiet', '-m', 'a link', '--', 'lib']);
       },
       edit: (scratch) => {
-        fs.rmSync(path.join(scratch, 'lib'));
-        fs.mkdirSync(path.join(scratch, 'lib'));
-        fs.writeFileSync(path.join(scratch, 'lib', 'own.txt'), 'own\n');
+        // The entry is a link to a (dangling, relative) target: drop the link
+        // itself, or a leftover tree, so the folder the case is about is
+        // created whatever the checkout put there.
+        const lib = path.join(scratch, 'lib');
+        if (fs.lstatSync(lib).isSymbolicLink()) fs.unlinkSync(lib);
+        else fs.rmSync(lib, { recursive: true, force: true });
+        fs.mkdirSync(lib);
+        fs.writeFileSync(path.join(lib, 'own.txt'), 'own\n');
       },
     });
     expect(await host.codeOut().applyAsChanges({ repository: repo, spaceId: SPACE_ID })).toMatchObject({ status: 'applied' });
