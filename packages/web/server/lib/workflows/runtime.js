@@ -40,6 +40,16 @@ export const createWorkflowRuntime = ({
   const store = createWorkflowRunStore({ fsPromises: fs, path, projectsDirPath, now });
   const checkpoints = createCheckpointWriter({ git, now });
 
+  // The 6000-line git service must not be pulled in at server boot, so the
+  // worktree functions are loaded on the worktree path only, the way the git
+  // routes do it (`packages/web/server/lib/git/routes.js:11-19`). Tests inject a
+  // fake instead of this loader.
+  const worktrees = {
+    createWorktree: async (...args) => (await import('../git/index.js')).createWorktree(...args),
+    removeWorktree: async (...args) => (await import('../git/index.js')).removeWorktree(...args),
+    getWorktreeBootstrapStatus: async (...args) => (await import('../git/index.js')).getWorktreeBootstrapStatus(...args),
+  };
+
   const requireHost = async () => {
     const mounted = await getOmpRuntimeHost();
     if (!mounted) throw new WorkflowError('unavailable', 'the OMP runtime is not available', 503);
@@ -67,6 +77,7 @@ export const createWorkflowRuntime = ({
     checkpoints,
     listProjectIds,
     reconcileRuns,
+    worktrees,
     runChecks: ({ step, directory }) => runVerifiers({ step, directory }),
     turn: ({ host: sessionHost, sessionId }) => waitForTurnEnd({ host: sessionHost, sessionId }),
     now,

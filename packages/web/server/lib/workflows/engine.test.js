@@ -541,3 +541,88 @@ describe('verifyStep', () => {
     expect(verified.steps[0].note).toBe('a verifier failed');
   });
 });
+
+describe('the worktree sandbox', () => {
+  // Every checkout the fake hands out lives under the same temp root the engine
+  // fixtures use, so `afterEach` removes them too.
+  const fakeWorktrees = (calls) => ({
+    getWorktreeBootstrapStatus: async () => ({ status: 'ready', phase: 'setup-ready', error: null }),
+    createWorktree: async (directory, input) => {
+      if (calls.fail) throw new Error(calls.fail);
+      calls.create.push({ directory, input });
+      const checkout = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-engine-wt-'));
+      roots.push(checkout);
+      return { path: checkout, branch: input.branchName };
+    },
+  });
+
+  it('prepares a checkout once and runs the step inside it', async () => {
+    const calls = { create: [], sessions: [], autoAccept: [], verify: [], checkpoint: [] };
+    const worktrees = fakeWorktrees(calls);
+    const host = {
+      createSession: async (params) => { calls.sessions.push(params); return { id: 'session-1' }; },
+      prompt: async () => true,
+      getSessionStatus: async () => ({ busy: false }),
+      listSessions: async () => [],
+      renameSession: async () => {},
+      setModel: async () => {},
+      setAutoAccept: async (...args) => { calls.autoAccept.push(args); },
+    };
+    const { engine, store, run, root } = await buildEngine({
+      overrides: {
+        worktrees,
+        host,
+        definitions: { read: async () => autoPermissionsDefinition },
+        runChecks: async ({ directory }) => { calls.verify.push(directory); return { ok: true, artifacts: [], commands: [] }; },
+        checkpoints: { write: async ({ directory, artifacts }) => { calls.checkpoint.push(directory); return { at: 42, commit: 'c'.repeat(40), clean: false, artifacts }; } },
+      },
+    });
+    await store.write('proj-1', { ...run, sandbox: 'worktree' });
+    const started = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+
+    expect(started.directory).not.toBe(root);
+    expect(started.worktreeBranch).toBe(`omp/wf/${run.runId}`);
+    expect(calls.create).toEqual([{
+      directory: root,
+      input: { mode: 'new', worktreeName: `wf-${run.runId}`, branchName: `omp/wf/${run.runId}` },
+    }]);
+    // cwd, auto-accept, the verifiers and the checkpoint all read the run's
+    // directory, not the project the run was created from.
+    expect(calls.sessions).toEqual([{ cwd: started.directory }]);
+    // Auto-accept is set on the session by more than one place in the attempt
+    // (unchanged from before this task); every call must name the run's
+    // directory, never the project the run was created from.
+    expect(calls.autoAccept.length).toBeGreaterThan(0);
+    expect(calls.autoAccept.every((entry) => entry[0] === 'session-1' && entry[1] === true && entry[2] === started.directory)).toBe(true);
+    expect(calls.verify).toEqual([started.directory]);
+    expect(calls.checkpoint).toEqual([started.directory]);
+    // The run the answer came from is the one on disk.
+    expect(await store.read('proj-1', run.runId)).toMatchObject({ directory: started.directory, worktreeBranch: `omp/wf/${run.runId}` });
+  });
+
+  it('prepares the checkout once for the run, not once per step', async () => {
+    const calls = { create: [] };
+    const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+    await store.write('proj-1', { ...run, sandbox: 'worktree' });
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'second' });
+    expect(calls.create).toHaveLength(1);
+  });
+
+  it('blocks the step with the git error instead of running in the project tree', async () => {
+    const calls = { create: [], fail: 'not a git repository' };
+    const { engine, store, run, root, prompts } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+    await store.write('proj-1', { ...run, sandbox: 'worktree' });
+    const result = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+
+    expect(result.steps[0].status).toBe('blocked');
+    expect(result.steps[0].note).toBe('the run could not get its own worktree: not a git repository');
+    expect(result.status).toBe('waiting');
+    // Nothing was dispatched into the project's working tree.
+    expect(prompts).toHaveLength(0);
+    expect((await store.read('proj-1', run.runId)).steps[0]).toMatchObject({
+      status: 'blocked',
+      note: 'the run could not get its own worktree: not a git repository',
+    });
+  });
+});

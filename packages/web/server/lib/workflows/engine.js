@@ -12,6 +12,7 @@
  */
 import { substituteInputs } from './prompts.js';
 import { reconcileRuns as defaultReconcile } from './resume.js';
+import { prepareSandbox } from './sandbox.js';
 import { runVerifiers as defaultRunChecks, verifyCheckpoint as defaultVerifyCheckpoint } from './verifiers.js';
 
 export class WorkflowError extends Error {
@@ -63,6 +64,11 @@ export const createWorkflowEngine = ({
   runChecks = defaultRunChecks,
   verifyCheckpoint = defaultVerifyCheckpoint,
   reconcileRuns = defaultReconcile,
+  // The git driver for a run's worktree, injected by the runtime as a lazy
+  // loader so the 6000-line git service is not imported at server boot. Only
+  // read on the `worktree` path, which is why a fixture without it still runs
+  // every `working-tree` case.
+  worktrees = null,
   // No default: the sweep's project list is a fact about this installation, and
   // a guessed one would walk every directory under the projects root.
   listProjectIds,
@@ -135,6 +141,26 @@ export const createWorkflowEngine = ({
     if (!declared) throw new WorkflowError('not-found', `step ${stepId} is not declared by ${run.workflowId}`, 404);
     const step = assertStepIsOpen(findStep(run, stepId));
 
+    // A run in `worktree` mode executes in its own checkout from its first step
+    // on. A refusal blocks the step instead of falling back: running in the
+    // project's working tree while the run says `worktree` is the opposite of
+    // what the person asked for, and they would only learn it from the diff.
+    if (run.sandbox === 'worktree' && (!run.worktreeBranch || run.directory === projectPath)) {
+      try {
+        const prepared = await prepareSandbox({ run, projectPath, git: worktrees });
+        run.directory = prepared.directory;
+        run.worktreeBranch = prepared.branch;
+        emit(await store.write(projectId, run));
+      } catch (error) {
+        step.status = 'blocked';
+        step.note = `the run could not get its own worktree: ${error?.message ?? error}`;
+        run.status = 'waiting';
+        const saved = await store.write(projectId, run);
+        emit(saved);
+        return saved;
+      }
+    }
+
     const { text, missing } = substituteInputs(declared.prompt, run.inputs ?? {});
     if (missing.length > 0) {
       step.status = 'blocked';
@@ -148,7 +174,7 @@ export const createWorkflowEngine = ({
     const bus = requireHost();
     let sessionId = declared.session === 'reuse' ? previousSessionId(run, stepId) : null;
     if (!sessionId) {
-      const created = await bus.createSession({ cwd: projectPath });
+      const created = await bus.createSession({ cwd: run.directory });
       sessionId = created?.id;
       if (!sessionId) throw new WorkflowError('unavailable', 'the runtime created no session');
       try {
@@ -159,14 +185,14 @@ export const createWorkflowEngine = ({
     }
     if (declared.permissions === 'auto') {
       try {
-        await bus.setAutoAccept(sessionId, true, projectPath);
+        await bus.setAutoAccept(sessionId, true, run.directory);
       } catch (error) {
         logger.warn?.('[workflows] could not enable permission auto-accept', error?.message ?? error);
       }
     }
 
     run.cursor = stepId;
-    return runPromptInSession({ projectId, run, step, declared, sessionId, text, projectPath });
+    return runPromptInSession({ projectId, run, step, declared, sessionId, text });
   };
 
   /**
@@ -175,14 +201,14 @@ export const createWorkflowEngine = ({
    * to finish, run the verifiers, then stop for a person or advance. The
    * refused-prompt and never-started paths live here so they exist once.
    */
-  const runPromptInSession = async ({ projectId, run, step, declared, sessionId, text, projectPath }) => {
+  const runPromptInSession = async ({ projectId, run, step, declared, sessionId, text }) => {
     const bus = requireHost();
     if (declared.permissions === 'auto') {
       // The host is wired per call and may not carry a toggle at all, so the
       // optional call is awaited directly: chaining `.catch` onto `undefined`
       // throws before the attempt has even been sent.
       try {
-        await bus.setAutoAccept?.(sessionId, true, projectPath);
+        await bus.setAutoAccept?.(sessionId, true, run.directory);
       } catch (error) {
         logger.warn?.('[workflows] could not enable permission auto-accept', error?.message ?? error);
       }
@@ -344,7 +370,7 @@ export const createWorkflowEngine = ({
       return saved;
     },
 
-    continueStep: async ({ projectId, projectPath, runId, stepId, text }) => {
+    continueStep: async ({ projectId, runId, stepId, text }) => {
       const trimmed = typeof text === 'string' ? text.trim() : '';
       if (!trimmed) throw new WorkflowError('invalid', 'a continue prompt needs text');
       return withLock(projectId, async () => {
@@ -354,7 +380,7 @@ export const createWorkflowEngine = ({
         const step = findStep(run, stepId);
         const sessionId = step.attempts.at(-1)?.sessionId;
         if (!declared || !sessionId) throw new WorkflowError('conflict', `step ${stepId} has no session to continue`, 409);
-        return runPromptInSession({ projectId, run, step, declared, sessionId, text: trimmed, projectPath });
+        return runPromptInSession({ projectId, run, step, declared, sessionId, text: trimmed });
       });
     },
 
