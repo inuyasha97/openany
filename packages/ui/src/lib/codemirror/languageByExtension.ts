@@ -10,6 +10,7 @@ import { html } from '@codemirror/lang-html';
 import { markdown } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { python } from '@codemirror/lang-python';
+import { yaml } from '@codemirror/lang-yaml';
 
 import { Language, LanguageDescription, StreamLanguage, HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
@@ -134,6 +135,11 @@ export function languageByExtension(filePath: string): Extension | null {
       return html();
     case 'excalidraw':
       return json();
+    // YAML (keep static): the workflow definitions are YAML, and they are edited
+    // in the same editor the file viewer uses.
+    case 'yaml':
+    case 'yml':
+      return yaml();
     case 'md':
     case 'mdx':
     case 'markdown':

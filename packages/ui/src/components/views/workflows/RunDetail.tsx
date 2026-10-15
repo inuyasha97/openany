@@ -30,9 +30,11 @@ export interface RunDetailProps {
    * one whose list is still on its way.
    */
   definitionsLoaded: boolean;
+  /** Opens a definition's YAML in the editing surface the pane's owner renders. */
+  onEditDefinition: (summary: WorkflowDefinitionSummary) => void;
 }
 
-export const RunDetail = ({ run, project, definition, definitionsLoaded }: RunDetailProps) => {
+export const RunDetail = ({ run, project, definition, definitionsLoaded, onEditDefinition }: RunDetailProps) => {
   const [tab, setTab] = useState<'steps' | 'definition'>('steps');
   const { t } = useI18n();
   const [full, setFull] = useState<WorkflowRun>(run);
@@ -143,7 +145,7 @@ export const RunDetail = ({ run, project, definition, definitionsLoaded }: RunDe
         </ol>
         {tab === 'definition'
           ? (definition
-            ? <WorkflowDiagram summary={definition} />
+            ? <WorkflowDiagram summary={definition} onEdit={() => onEditDefinition(definition)} />
             : (
               /* The definitions are read; a run missing from that list declares a
                  workflow the project no longer has, so it does not load. */

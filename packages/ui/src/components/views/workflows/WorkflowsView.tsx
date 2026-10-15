@@ -3,8 +3,8 @@
  * detail on the right, and a tab for the declared workflow itself.
  *
  * The list and the detail are separate components; this file owns which run is
- * selected and the loading, error and empty states, so a failure is never
- * rendered as "no runs".
+ * selected, which definition is being edited, and the loading, error and empty
+ * states, so a failure is never rendered as "no runs".
  */
 import { useEffect, useMemo, useState } from 'react';
 
@@ -12,6 +12,8 @@ import { useI18n } from '@/lib/i18n';
 import { useWorkflowStore } from '@/stores/useWorkflowStore';
 import { RunList } from './RunList';
 import { RunDetail } from './RunDetail';
+import { DefinitionEditor } from './DefinitionEditor';
+import type { WorkflowDefinitionSummary } from '@/lib/workflowsApi';
 import type { ProjectRef } from '@/lib/projectContextApi';
 
 export interface WorkflowsViewProps {
@@ -29,6 +31,10 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   const entry = useWorkflowStore((state) => (projectId ? state.getEntry({ id: projectId }) : null));
   const load = useWorkflowStore((state) => state.load);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  // Held as the summary the action was taken from, not as an id resolved against
+  // the entry: a save re-reads the definitions, and an editor that swapped its
+  // summary mid-edit would throw away the buffer's baseline with it.
+  const [editing, setEditing] = useState<WorkflowDefinitionSummary | null>(null);
 
   // `path_…` is the real project-id shape (`createProjectIdFromPath`); anything
   // else is a synthetic owner, so there is nothing to read for it.
@@ -89,8 +95,18 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
           definitions={entry?.definitions ?? []}
           project={project}
         />
-        {selected ? (
-          <RunDetail run={selected} project={project} definition={definition} definitionsLoaded={definitionsLoaded} />
+        {editing ? (
+          /* Keyed on the file, so opening another definition reads its text
+             instead of carrying the previous buffer into it. */
+          <DefinitionEditor key={editing.file} project={project} summary={editing} onClose={() => setEditing(null)} />
+        ) : selected ? (
+          <RunDetail
+            run={selected}
+            project={project}
+            definition={definition}
+            definitionsLoaded={definitionsLoaded}
+            onEditDefinition={setEditing}
+          />
         ) : (
           <Empty text={t('workflows.empty.selectRun')} />
         )}
