@@ -1175,18 +1175,7 @@ Expected: FAIL, `Failed to resolve import "./status"`.
  * cannot separate the hues still reads the same state. The colors come from
  * theme tokens, so light and dark are both legible.
  */
-import {
-  AlertTriangle,
-  Ban,
-  Check,
-  Circle,
-  CircleDashed,
-  CircleSlash,
-  Loader,
-  PauseCircle,
-  Wrench,
-} from 'lucide-react';
-
+import type { IconName } from '@/components/icon/icons';
 import type { WorkflowRunStatus, WorkflowStepStatus } from '@/lib/workflowsApi';
 
 export type StatusTone = 'neutral' | 'active' | 'attention' | 'danger' | 'done';
@@ -1195,17 +1184,21 @@ export interface DescribedStatus {
   label: string;
   tone: StatusTone;
   className: string;
-  icon: typeof Circle;
+  /** A sprite name; the caller renders `<Icon name={status.icon} />`. */
+  icon: IconName;
 }
 
 type Translate = (key: string) => string;
 
+// Only tokens the design system defines: this theme has no `success` or
+// `warning` colour, and a raw Tailwind palette class would silently do nothing.
+// `chart-2` is the theme's green and `chart-3` its amber, in both light and dark.
 const TONE_CLASS: Record<StatusTone, string> = {
   neutral: 'text-muted-foreground',
   active: 'text-primary',
-  attention: 'text-amber-500',
+  attention: 'text-chart-3',
   danger: 'text-destructive',
-  done: 'text-emerald-500',
+  done: 'text-chart-2',
 };
 
 const STEP_TONE: Record<WorkflowStepStatus, StatusTone> = {
@@ -1220,16 +1213,17 @@ const STEP_TONE: Record<WorkflowStepStatus, StatusTone> = {
   skipped: 'neutral',
 };
 
+// Every status carries a distinct sprite icon, so the state reads without colour.
 const STEP_ICON: Record<WorkflowStepStatus, DescribedStatus['icon']> = {
-  pending: CircleDashed,
-  running: Loader,
-  waiting_confirm: PauseCircle,
-  needs_work: Wrench,
-  blocked: Ban,
-  done: Check,
-  failed: AlertTriangle,
-  interrupted: CircleSlash,
-  skipped: Circle,
+  pending: 'checkbox-blank',
+  running: 'loader',
+  waiting_confirm: 'time',
+  needs_work: 'tools',
+  blocked: 'pause',
+  done: 'checkbox-circle',
+  failed: 'error-warning',
+  interrupted: 'alert',
+  skipped: 'stop',
 };
 
 export const describeStepStatus = (status: WorkflowStepStatus, t: Translate): DescribedStatus => ({
@@ -1249,12 +1243,12 @@ const RUN_TONE: Record<WorkflowRunStatus, StatusTone> = {
 };
 
 const RUN_ICON: Record<WorkflowRunStatus, DescribedStatus['icon']> = {
-  idle: CircleDashed,
-  running: Loader,
-  waiting: PauseCircle,
-  done: Check,
-  failed: AlertTriangle,
-  cancelled: CircleSlash,
+  idle: 'checkbox-blank',
+  running: 'loader',
+  waiting: 'time',
+  done: 'checkbox-circle',
+  failed: 'error-warning',
+  cancelled: 'stop',
 };
 
 export const describeRunStatus = (status: WorkflowRunStatus, t: Translate): DescribedStatus => ({
@@ -1265,7 +1259,7 @@ export const describeRunStatus = (status: WorkflowRunStatus, t: Translate): Desc
 });
 ```
 
-Confirm the icon set the UI already imports from (`lucide-react` is the set used at `packages/ui/src/lib/surfaces/registry.ts` icon names, or the icon component the app wraps). If the app wraps icons, use the wrapper; do not add a dependency.
+The icons are the app's own generated sprite: `IconName` is `keyof typeof iconSpriteData` (`components/icon/icons.ts`), the rail renders one through `<Icon name={…} />` (`components/icon/Icon.tsx`), and `lucide-react` is not a dependency of this package. Every name above is present in the sprite. The caller renders the icon with the status's `className`, and `running` may add a spin utility.
 
 - [ ] **Step 4: Write the run detail**
 
