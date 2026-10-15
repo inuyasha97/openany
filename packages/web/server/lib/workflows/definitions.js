@@ -10,7 +10,7 @@ import { parse as parseYaml } from 'yaml';
 const WORKFLOW_DIR = '.openchamber/workflows';
 const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
 const STEP_FIELDS = new Set(['id', 'title', 'prompt', 'session', 'permissions', 'verify', 'confirm']);
-const DEFINITION_FIELDS = new Set(['id', 'name', 'version', 'inputs', 'steps']);
+const DEFINITION_FIELDS = new Set(['id', 'name', 'version', 'inputs', 'sandbox', 'steps']);
 const INPUT_FIELDS = new Set(['name', 'description', 'required']);
 const VERIFY_FIELDS = new Set(['artifacts', 'commands']);
 
@@ -91,6 +91,11 @@ export const parseDefinition = (rawText, { file = 'unknown.yaml' } = {}) => {
   if (!isWorkflowId(raw.id)) errors.push({ field: 'id', message: 'must be lowercase words, dots or dashes' });
   if (!isText(raw.name)) errors.push({ field: 'name', message: 'is required' });
   if (!Number.isInteger(raw.version) || raw.version < 1) errors.push({ field: 'version', message: 'must be a positive integer' });
+  // Where the run executes is a declaration, not a preference: a value the
+  // engine does not know would silently change what a person asked for.
+  if (raw.sandbox !== undefined && !['worktree', 'working-tree'].includes(raw.sandbox)) {
+    errors.push({ field: 'sandbox', message: 'must be "worktree" or "working-tree"' });
+  }
 
   const inputs = Array.isArray(raw.inputs) ? raw.inputs : [];
   if (raw.inputs !== undefined && !Array.isArray(raw.inputs)) errors.push({ field: 'inputs', message: 'must be a list' });
@@ -174,7 +179,17 @@ export const parseDefinition = (rawText, { file = 'unknown.yaml' } = {}) => {
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
-    definition: { id: raw.id, name: raw.name, version: raw.version, inputs: normalizedInputs, steps, file },
+    // A definition written before this field existed means `worktree`: every run
+    // records the mode it actually used, so an old run keeps reading the way it ran.
+    definition: {
+      id: raw.id,
+      name: raw.name,
+      version: raw.version,
+      sandbox: raw.sandbox === 'working-tree' ? 'working-tree' : 'worktree',
+      inputs: normalizedInputs,
+      steps,
+      file,
+    },
   };
 };
 

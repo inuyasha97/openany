@@ -15,6 +15,9 @@ export type WorkflowRunStatus = 'idle' | 'running' | 'waiting' | 'done' | 'faile
 
 export type WorkflowConfirmDecision = 'done' | 'not_done' | 'skip';
 
+/** Where a workflow's steps run: the declaration's own mode, and the run's recorded one. */
+export type WorkflowSandbox = 'worktree' | 'working-tree';
+
 export interface WorkflowVerifyCommandResult {
   run: string;
   expectExit: number;
@@ -83,7 +86,7 @@ export interface WorkflowRun {
   cursor: string | null;
   createdAt: number;
   updatedAt: number;
-  sandbox: string;
+  sandbox: WorkflowSandbox;
   steps: WorkflowStep[];
 }
 
@@ -113,6 +116,11 @@ export interface WorkflowDefinitionSummary {
   steps: WorkflowStepDefinition[];
   /** The declared inputs, so a screen can ask for the values the create route requires. */
   inputs: WorkflowInput[];
+  /**
+   * The mode a run started from this file executes in. `null` for a row that
+   * failed to parse, the same way its `id`, `name` and `version` are.
+   */
+  sandbox: WorkflowSandbox | null;
 }
 
 /** A refusal from the workflow routes: the server's own message, and the status beside it. */

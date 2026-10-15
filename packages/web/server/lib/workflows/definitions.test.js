@@ -50,6 +50,15 @@ describe('parseDefinition', () => {
     expect(verify.verify.commands[0].expectExit).toBe(0);
   });
 
+  it('defaults the sandbox to worktree and rejects an unknown one', () => {
+    expect(parseDefinition(valid, { file: 'a.yaml' }).definition.sandbox).toBe('worktree');
+    const explicit = parseDefinition(`${valid}\nsandbox: working-tree\n`, { file: 'a.yaml' });
+    expect(explicit.definition.sandbox).toBe('working-tree');
+    const bad = parseDefinition(`${valid}\nsandbox: container\n`, { file: 'a.yaml' });
+    expect(bad.ok).toBe(false);
+    expect(bad.errors).toEqual([{ field: 'sandbox', message: 'must be "worktree" or "working-tree"' }]);
+  });
+
   it('reports a placeholder with no declared input', () => {
     const result = parseDefinition(valid.replace('{{request}}', '{{nope}}'), { file: 'a.yaml' });
     expect(result.ok).toBe(false);

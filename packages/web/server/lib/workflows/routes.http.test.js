@@ -44,7 +44,7 @@ describe('workflow routes', () => {
     const { app } = createApp();
     const response = await request(app).get('/api/workflows/definitions').set(SCOPE);
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ definitions: [{ file: 'a.yaml', id: 'a', name: 'A', version: 1, errors: [], steps: [], inputs: [] }] });
+    expect(response.body).toEqual({ definitions: [{ file: 'a.yaml', id: 'a', name: 'A', version: 1, errors: [], steps: [], inputs: [], sandbox: null }] });
   });
 
   it('returns the declared steps of a valid definition', async () => {
@@ -103,13 +103,22 @@ describe('workflow routes', () => {
 
   it('creates a run from a definition with its inputs', async () => {
     const { app, calls } = createApp({
-      definitions: { list: async () => [], read: async () => ({ id: 'a', version: 3, inputs: [{ name: 'request', required: true }], steps: [{ id: 'first' }, { id: 'second' }] }) },
+      definitions: { list: async () => [], read: async () => ({ id: 'a', version: 3, sandbox: 'working-tree', inputs: [{ name: 'request', required: true }], steps: [{ id: 'first' }, { id: 'second' }] }) },
     });
     const response = await request(app).post('/api/workflows/runs').set(SCOPE).send({ workflowId: 'a', inputs: { request: 'x' } });
     expect(response.status).toBe(201);
     expect(calls[0][0]).toBe('create');
     expect(calls[0][1]).toMatchObject({ projectId: 'proj-1', directory: '/tmp/proj', workflowId: 'a', workflowVersion: 3, inputs: { request: 'x' }, status: 'idle', sandbox: 'working-tree' });
     expect(calls[0][1].steps.map((step) => [step.id, step.status])).toEqual([['first', 'pending'], ['second', 'pending']]);
+  });
+
+  it('records the sandbox the definition declared, not a fixed one', async () => {
+    const { app, calls } = createApp({
+      definitions: { list: async () => [], read: async () => ({ id: 'a', version: 1, sandbox: 'worktree', inputs: [], steps: [{ id: 'first' }] }) },
+    });
+    const response = await request(app).post('/api/workflows/runs').set(SCOPE).send({ workflowId: 'a' });
+    expect(response.status).toBe(201);
+    expect(calls[0][1].sandbox).toBe('worktree');
   });
 
   it('refuses a run whose required input has no value', async () => {

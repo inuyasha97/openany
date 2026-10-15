@@ -93,6 +93,10 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     // The create route rejects a missing required input, so a screen that offers
     // to start a run has to know what to ask for.
     inputs: entry.definition ? entry.definition.inputs : [],
+    // The mode a run started from this file will use, so the screen can say it
+    // before the run exists. `null` reads the way the other fields of an
+    // unparsed row do: there is no mode to report.
+    sandbox: entry.definition ? entry.definition.sandbox : null,
   });
 
   /**
@@ -152,7 +156,7 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
         inputs,
         status: 'idle',
         cursor: definition.steps[0].id,
-        sandbox: 'working-tree',
+        sandbox: definition.sandbox,
         steps: definition.steps.map((step) => ({ id: step.id, status: 'pending', attempts: [], checkpoint: null, note: null })),
       };
       return res.status(201).json({ run: await store.create(run) });
