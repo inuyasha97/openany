@@ -2720,6 +2720,12 @@ describe('workflow routes', () => {
     expect(response.body.error).toBe('the run id is not valid');
   });
 
+  it('forbids a cached answer, because a run changes while steps execute', async () => {
+    const { app } = createApp();
+    const response = await request(app).get('/api/workflows/runs').set(SCOPE);
+    expect(response.headers['cache-control']).toBe('no-store');
+  });
+
   it('deletes one run and answers 404 when there is none', async () => {
     const { app } = createApp();
     expect((await request(app).delete('/api/workflows/runs/11111111-2222-4333-8444-555555555555').set(SCOPE)).status).toBe(200);
@@ -2786,6 +2792,17 @@ const directoryOf = (req) => {
 };
 
 export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
+  // Every answer here describes a run whose state changes while steps execute.
+  // Without this header a browser revalidates, gets a 304, and renders what it
+  // cached before the change: the browser smoke caught exactly that, with a run
+  // that had reached `done` still drawn as `waiting_confirm`. Other dynamic route
+  // families set the same header per response (`core-routes.js:761`,
+  // `ui-auth.js:645`).
+  app.use('/api/workflows', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+
   const { definitions, store, engine, resolveProjectId, projectPathFromId } = workflowsRuntime;
 
   /**
