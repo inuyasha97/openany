@@ -1,9 +1,12 @@
 /**
- * The workflow routes' shapes, mirrored for the client.
+ * The workflow routes' shapes and the client that speaks to them.
  *
- * The server owns run state; these are the wire types a screen reads. The
- * HTTP client itself lands with its own task.
+ * The server owns run state; these are the wire types a screen reads, and the
+ * functions below are how it reads them. The client only speaks HTTP and throws
+ * on failure, because a caller that rendered "no runs" after a failed read
+ * would be telling the person their runs are gone.
  */
+import { runtimeFetch } from '@/lib/runtime-fetch';
 
 export type WorkflowStepStatus =
   | 'pending' | 'running' | 'waiting_confirm' | 'needs_work' | 'done' | 'failed' | 'skipped' | 'blocked' | 'interrupted';
@@ -103,3 +106,86 @@ export interface WorkflowDefinitionSummary {
   /** The declared steps, so a diagram needs one request instead of one per file. */
   steps: WorkflowStepDefinition[];
 }
+
+/** A refusal from the workflow routes: the server's own message, and the status beside it. */
+export class WorkflowRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'WorkflowRequestError';
+    this.status = status;
+  }
+}
+
+/**
+ * Every route is scoped by the `x-opencode-directory` header, and `runtimeFetch`'s
+ * `directory` option is NOT that header: it only decides which isolated space a
+ * request belongs to (`lib/runtime-fetch.ts:111-121`). The header has to be set
+ * here, the way the other scoped clients do it
+ * (`lib/contextFileOpenGuard.ts:58`, `lib/guests/files.ts:87`). `runtimeFetch`
+ * percent-encodes the value and adds `x-opencode-directory-encoding: uri` when the
+ * path is not Latin-1-safe, which is exactly what the routes decode for.
+ */
+const request = async <T>(path: string, directory: string, init: RequestInit = {}): Promise<T> => {
+  const response = await runtimeFetch(path, {
+    ...init,
+    headers: { 'x-opencode-directory': directory, ...(init.headers ?? {}) },
+  });
+  const body = await response.json().catch(() => null) as (T & { error?: string }) | null;
+  if (!response.ok) {
+    throw new WorkflowRequestError(body?.error ?? `The request failed with ${response.status}`, response.status);
+  }
+  if (!body) throw new WorkflowRequestError('The server answered with no body', response.status);
+  return body;
+};
+
+const post = <T>(path: string, directory: string, payload?: unknown) => request<T>(path, directory, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(payload ?? {}),
+});
+
+export const fetchWorkflowDefinitions = async (directory: string): Promise<WorkflowDefinitionSummary[]> =>
+  (await request<{ definitions: WorkflowDefinitionSummary[] }>('/api/workflows/definitions', directory)).definitions;
+
+export const fetchWorkflowRuns = async (directory: string): Promise<WorkflowRun[]> =>
+  (await request<{ runs: WorkflowRun[] }>('/api/workflows/runs', directory)).runs;
+
+export const fetchWorkflowRun = async (directory: string, runId: string): Promise<WorkflowRun> =>
+  (await request<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}`, directory)).run;
+
+export const createWorkflowRun = async (directory: string, value: { workflowId: string; inputs?: Record<string, string> }): Promise<WorkflowRun> =>
+  (await post<{ run: WorkflowRun }>('/api/workflows/runs', directory, value)).run;
+
+export const runWorkflow = async (directory: string, runId: string): Promise<WorkflowRun> =>
+  (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/run`, directory)).run;
+
+export const cancelWorkflowRun = async (directory: string, runId: string): Promise<WorkflowRun> =>
+  (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/cancel`, directory)).run;
+
+export const runWorkflowStep = async (directory: string, runId: string, stepId: string): Promise<WorkflowRun> =>
+  (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/run`, directory)).run;
+
+export const verifyWorkflowStep = async (directory: string, runId: string, stepId: string): Promise<WorkflowRun> =>
+  (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/verify`, directory)).run;
+
+export const promptWorkflowStep = async (directory: string, runId: string, stepId: string, text: string): Promise<WorkflowRun> =>
+  (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/prompt`, directory, { text })).run;
+
+export const confirmWorkflowStep = async (
+  directory: string,
+  runId: string,
+  stepId: string,
+  decision: WorkflowConfirmDecision,
+  reason?: string,
+): Promise<WorkflowRun> =>
+  (await post<{ run: WorkflowRun }>(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/confirm`,
+    directory,
+    reason === undefined ? { decision } : { decision, reason },
+  )).run;
+
+export const deleteWorkflowRun = async (directory: string, runId: string): Promise<void> => {
+  await request<{ removed: boolean }>(`/api/workflows/runs/${encodeURIComponent(runId)}`, directory, { method: 'DELETE' });
+};

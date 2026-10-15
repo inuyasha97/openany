@@ -4,6 +4,8 @@
 declare module "bun:test" {
   export function describe(name: string, fn: () => void): void;
   export function test(name: string, fn: () => void | Promise<void>, timeoutMs?: number): void;
+  /** Alias of `test`; bun exposes it and some suites import it by name. */
+  export function it(name: string, fn: () => void | Promise<void>, timeoutMs?: number): void;
   export interface ExpectResult {
     toEqual(expected: unknown): void;
     toBe(expected: unknown): void;
@@ -17,6 +19,7 @@ declare module "bun:test" {
     toMatchObject(expected: unknown): void;
     rejects: {
       toThrow(expected?: string | RegExp | (new (...args: never[]) => unknown)): Promise<void>;
+      toMatchObject(expected: unknown): Promise<void>;
     };
     toBeGreaterThan(expected: number): void;
     toBeGreaterThanOrEqual(expected: number): void;
