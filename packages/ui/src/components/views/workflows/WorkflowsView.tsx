@@ -24,9 +24,13 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   const load = useWorkflowStore((state) => state.load);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
+  // `path_…` is the real project-id shape (`createProjectIdFromPath`); anything
+  // else is a synthetic owner, so there is nothing to read for it.
+  const isProject = project !== null && project.id.startsWith('path_');
+
   useEffect(() => {
-    if (project) void load(project);
-  }, [project?.id, project?.path, load]);
+    if (project && isProject) void load(project);
+  }, [project, isProject, load]);
 
   const selected = useMemo(
     () => entry?.runs.find((run) => run.runId === selectedRunId) ?? entry?.runs[0] ?? null,
@@ -40,17 +44,23 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
     [entry?.definitions, selected],
   );
 
-  if (!project) {
+  // A chat-draft or chats-root directory resolves to a synthetic owner that is
+  // not a project (`useProjectContextOwner`), and a project id is `path_…`; the
+  // surface has nothing to read for either, so it shows the no-project state
+  // instead of asking the routes for a directory that is not a checkout.
+  if (!project || !isProject) {
     return <Empty text={t('workflows.empty.noProject')} />;
   }
-  if (entry?.loading && !entry.loaded) {
+  // The store's `EMPTY` entry is truthy with no runs and no error, so a project
+  // that has simply not been read yet would paint "No run yet" for a frame.
+  if (!entry?.loaded && !entry?.error) {
     return <Empty text={t('workflows.empty.loading')} />;
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {entry?.error ? (
-        <div role="status" className="border-b border-border bg-destructive/10 px-3 py-2 text-xs text-destructive">
+        <div role="alert" className="border-b border-border bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {t('workflows.error.readFailed')}: {entry.error}
         </div>
       ) : null}
@@ -81,4 +91,5 @@ const Empty = ({ text }: { text: string }) => (
   <div className="flex h-full flex-1 items-center justify-center p-4 text-xs text-muted-foreground">{text}</div>
 );
 
-export default WorkflowsView;
+// No default export: the panel imports the named one through the chunk-recovery
+// wrapper, so a second binding would be dead weight.
