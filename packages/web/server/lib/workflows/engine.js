@@ -140,7 +140,7 @@ export const createWorkflowEngine = ({
       step.status = 'blocked';
       step.note = `missing input: ${missing.join(', ')}`;
       run.status = 'waiting';
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     }
@@ -166,7 +166,7 @@ export const createWorkflowEngine = ({
     }
 
     run.cursor = stepId;
-    return runPromptInSession({ run, step, declared, sessionId, text, projectPath });
+    return runPromptInSession({ projectId, run, step, declared, sessionId, text, projectPath });
   };
 
   /**
@@ -175,7 +175,7 @@ export const createWorkflowEngine = ({
    * to finish, run the verifiers, then stop for a person or advance. The
    * refused-prompt and never-started paths live here so they exist once.
    */
-  const runPromptInSession = async ({ run, step, declared, sessionId, text, projectPath }) => {
+  const runPromptInSession = async ({ projectId, run, step, declared, sessionId, text, projectPath }) => {
     const bus = requireHost();
     if (declared.permissions === 'auto') {
       // The host is wired per call and may not carry a toggle at all, so the
@@ -191,7 +191,7 @@ export const createWorkflowEngine = ({
     step.attempts.push(attempt);
     step.status = 'running';
     run.status = 'running';
-    const started = await store.write(run);
+    const started = await store.write(projectId, run);
     // The request that starts the attempt answers only when the turn is over, so
     // this frame is the only way a screen learns the step is running.
     emit(started);
@@ -208,7 +208,7 @@ export const createWorkflowEngine = ({
         step.status = 'blocked';
         step.note = attempt.error.message;
         run.status = 'waiting';
-        const saved = await store.write(run);
+        const saved = await store.write(projectId, run);
         emit(saved);
         return saved;
       }
@@ -221,11 +221,11 @@ export const createWorkflowEngine = ({
         step.status = 'blocked';
         step.note = attempt.error.message;
         run.status = 'waiting';
-        const saved = await store.write(run);
+        const saved = await store.write(projectId, run);
         emit(saved);
         return saved;
       }
-      return await settleAttempt({ run, step, declared, attempt });
+      return await settleAttempt({ projectId, run, step, declared, attempt });
     } catch (error) {
       attempt.status = 'blocked';
       attempt.endedAt = now();
@@ -233,14 +233,14 @@ export const createWorkflowEngine = ({
       step.status = 'blocked';
       step.note = attempt.error.message;
       run.status = 'waiting';
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     }
   };
 
   /** Run the verifiers and record the outcome of one completed attempt. */
-  const settleAttempt = async ({ run, step, declared, attempt }) => {
+  const settleAttempt = async ({ projectId, run, step, declared, attempt }) => {
     const verify = await runChecks({ step: declared, directory: run.directory });
     attempt.verify = verify;
     attempt.status = 'completed';
@@ -254,7 +254,7 @@ export const createWorkflowEngine = ({
       step.status = verify.ok ? 'waiting_confirm' : 'needs_work';
       run.status = 'waiting';
     }
-    const saved = await store.write(run);
+    const saved = await store.write(projectId, run);
     emit(saved);
     return saved;
   };
@@ -339,7 +339,7 @@ export const createWorkflowEngine = ({
         step.note = reason ?? 'the person answered that the step is not done';
         run.status = 'waiting';
       }
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     },
@@ -354,7 +354,7 @@ export const createWorkflowEngine = ({
         const step = findStep(run, stepId);
         const sessionId = step.attempts.at(-1)?.sessionId;
         if (!declared || !sessionId) throw new WorkflowError('conflict', `step ${stepId} has no session to continue`, 409);
-        return runPromptInSession({ run, step, declared, sessionId, text: trimmed, projectPath });
+        return runPromptInSession({ projectId, run, step, declared, sessionId, text: trimmed, projectPath });
       });
     },
 
@@ -376,7 +376,7 @@ export const createWorkflowEngine = ({
       if (!(typeof step.note === 'string' && step.note.startsWith(CHECKPOINT_NOTE_PREFIX))) {
         step.note = attempt.verify.ok ? null : 'a verifier failed';
       }
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     },
@@ -388,7 +388,7 @@ export const createWorkflowEngine = ({
       if (inFlight.has(projectId)) throw new WorkflowError('busy', 'a step is executing; stop its turn instead of the run', 409);
       const run = await loadRun(projectId, runId);
       run.status = 'cancelled';
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     },

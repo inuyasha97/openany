@@ -78,14 +78,23 @@ export const createWorkflowRunStore = ({ fsPromises, path, projectsDirPath, now 
     return runs.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
   };
 
-  const write = (run) => serialize(`${run.projectId}/${run.runId}`, async () => {
-    assertIds(run.projectId, run.runId);
+  // The file path follows the project the caller named, never the run document's
+  // own `projectId`. The browser smoke found the two disagreeing: a request scoped
+  // to one id read a run whose field named another, wrote it back under that other
+  // id, and left two files for one run id in two project directories — one `done`,
+  // one `waiting_confirm` — so a screen showed one while a scripted client had
+  // advanced the other. A disagreement is a caller bug, so it is refused instead.
+  const write = (projectId, run) => serialize(`${projectId}/${run.runId}`, async () => {
+    assertIds(projectId, run.runId);
+    if (run.projectId !== projectId) {
+      throw new Error(`run ${run.runId} belongs to ${run.projectId}, not ${projectId}`);
+    }
     const next = { ...run, updatedAt: now() };
-    await writeAtomic(pathFor(run.projectId, run.runId), next);
+    await writeAtomic(pathFor(projectId, run.runId), next);
     return next;
   });
 
-  const create = (run) => write({ createdAt: now(), ...run });
+  const create = (run) => write(run.projectId, { createdAt: now(), ...run });
 
   const remove = (projectId, runId) => serialize(`${projectId}/${runId}`, async () => {
     assertIds(projectId, runId);

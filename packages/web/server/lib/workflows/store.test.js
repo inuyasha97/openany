@@ -92,13 +92,20 @@ describe('run store', () => {
   it('serializes concurrent writes to one run', async () => {
     const created = await store.create(run());
     await Promise.all([
-      store.write({ ...created, status: 'running' }),
-      store.write({ ...created, status: 'done' }),
-      store.write({ ...created, status: 'waiting' }),
+      store.write('proj-1', { ...created, status: 'running' }),
+      store.write('proj-1', { ...created, status: 'done' }),
+      store.write('proj-1', { ...created, status: 'waiting' }),
     ]);
     const read = await store.read('proj-1', created.runId);
     expect(['running', 'done', 'waiting']).toContain(read.status);
     expect(JSON.parse(await fs.readFile(store.pathFor('proj-1', created.runId), 'utf8')).updatedAt).toBe(42);
+  });
+
+  it('refuses a write that names another project, rather than writing two files for one run', async () => {
+    const created = await store.create(run());
+    await expect(store.write('proj-2', created)).rejects.toThrow(`run ${created.runId} belongs to proj-1, not proj-2`);
+    expect(await store.read('proj-1', created.runId)).not.toBeNull();
+    expect(await store.read('proj-2', created.runId)).toBeNull();
   });
 
   it('removes exactly one run file', async () => {

@@ -45,7 +45,7 @@ export const reconcileRuns = async ({
     for (const run of runs) {
       if (!ACTIVE.has(run.status)) continue;
       try {
-        const outcome = await reconcileRun({ run, store, host, verifyCheckpoint, sessions, now, logger });
+        const outcome = await reconcileRun({ projectId, run, store, host, verifyCheckpoint, sessions, now, logger });
         summary.runs += outcome.changed ? 1 : 0;
         summary.interrupted += outcome.interrupted;
         summary.blocked += outcome.blocked ? 1 : 0;
@@ -62,7 +62,7 @@ export const reconcileRuns = async ({
  * One run, rebuilt from what is on disk. It answers what the run counted as, so
  * the summary counts runs and never steps.
  */
-const reconcileRun = async ({ run, store, host, verifyCheckpoint, sessions, now, logger }) => {
+const reconcileRun = async ({ projectId, run, store, host, verifyCheckpoint, sessions, now, logger }) => {
   const knownSessions = sessions === null ? null : new Set(sessions.map((entry) => entry.id));
   let interrupted = 0;
   let blocked = false;
@@ -141,7 +141,7 @@ const reconcileRun = async ({ run, store, host, verifyCheckpoint, sessions, now,
         ?? null;
       waiting = true;
     }
-    await store.write(run);
+    await store.write(projectId, run);
   }
 
   return { changed, interrupted, blocked, waiting };

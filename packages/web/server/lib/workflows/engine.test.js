@@ -216,7 +216,7 @@ describe('startStep', () => {
 
   it('blocks a step whose declared input has no value', async () => {
     const { engine, root, runId, store, run } = await buildEngine();
-    await store.write({ ...run, inputs: {} });
+    await store.write(run.projectId, { ...run, inputs: {} });
     const result = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
     expect(result.steps[0].status).toBe('blocked');
     expect(result.steps[0].note).toBe('missing input: request');
@@ -277,7 +277,7 @@ describe('startStep', () => {
 
   it('refuses to confirm a step whose attempt never finished', async () => {
     const { engine, store, run, runId } = await buildEngine();
-    await store.write({
+    await store.write(run.projectId, {
       ...run,
       steps: run.steps.map((step) => (step.id === 'first'
         ? { ...step, status: 'blocked', attempts: [{ index: 0, sessionId: 'session-1', prompt: 'x', startedAt: 1, endedAt: null, status: 'blocked', turn: null, verify: { ok: true, artifacts: [], commands: [] }, error: { code: 'unavailable', message: 'no' } }] }
@@ -513,7 +513,7 @@ describe('verifyStep', () => {
     const { engine, store, run, runId } = await buildEngine();
     await fs.writeFile(path.join(run.directory, 'out/a.md'), 'x');
     const note = 'checkpoint no longer matches: out/a.md (changed)';
-    await store.write({
+    await store.write(run.projectId, {
       ...run,
       status: 'waiting',
       steps: run.steps.map((step) => (step.id === 'first'
@@ -529,7 +529,7 @@ describe('verifyStep', () => {
 
   it('moves a waiting step back to needs_work when the verifier fails', async () => {
     const { engine, store, run, runId } = await buildEngine();
-    await store.write({
+    await store.write(run.projectId, {
       ...run,
       status: 'waiting',
       steps: run.steps.map((step) => (step.id === 'first'
