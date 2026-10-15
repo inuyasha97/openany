@@ -354,17 +354,15 @@ git commit -m "feat(workflows): release a run's worktree when the run is finishe
 - [ ] **Step 1: Measure a worktree's setup cost on a real project**
 
 ```bash
-sh -c '
-set -e
 D=$(mktemp -d /tmp/wf-measure-XXXXXX)
 cd "$D" && git init -q -b main && git config user.email a@b.c && git config user.name A
 echo x > a.txt && git add . && git commit -q -m seed
-git worktree add -q "$D-wt/one" -b omp/wf/measure >/dev/null
-echo "worktree created in $(date +%s.%N) to now: done"
-'
+for i in 1 2 3; do
+  /usr/bin/time -p git worktree add -q "$D-wt/$i" -b "omp/wf/measure-$i" 2>&1 | grep real
+done
 ```
 
-Record the wall-clock time of `git worktree add` here, and separately the time a step spends when it needs a dependency install in the fresh worktree (run one step in `worktree` mode whose verifier runs `bun install --frozen-lockfile`, if the project uses Bun). Report both numbers. If the dependency install dominates, change the default to `working-tree` in the definition parser and say so in the spec, because the default has to earn its cost.
+Record the wall-clock time of `git worktree add` (three runs, report the range), and separately the time the app's own path takes — `createWorktree` plus the bootstrap wait `prepareSandbox` performs — because that is the number a person waits for before the first step starts. Then, on a project that needs one, the time a step spends installing dependencies in the fresh checkout (a project with a lockfile, `bun install --frozen-lockfile` in its verifier). Report both numbers. If the dependency install dominates the time to first output, say so plainly in the evidence and recommend the default change; changing it is the maintainer's decision, so record it rather than making it in this task.
 
 - [ ] **Step 2: Drive both modes on a real server**
 
