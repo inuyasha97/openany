@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runVerifiers, verifyCheckpoint } from './verifiers.js';
+import { runVerifiers, recheckArtifacts } from './verifiers.js';
 
 let root;
 
@@ -69,16 +69,16 @@ describe('runVerifiers', () => {
   });
 });
 
-describe('verifyCheckpoint', () => {
+describe('recheckArtifacts', () => {
   it('passes while the hashed artifact is unchanged', async () => {
     const hashed = await runVerifiers({ step: step({ artifacts: [{ glob: 'docs/design.md', hash: true }], commands: [] }), directory: root });
-    const checkpoint = { artifacts: hashed.artifacts.map(({ path: file, size, sha256 }) => ({ path: file, size, sha256 })) };
-    expect(await verifyCheckpoint({ checkpoint, directory: root })).toEqual({ ok: true, mismatches: [] });
+    const artifacts = hashed.artifacts.map(({ path: file, size, sha256 }) => ({ path: file, size, sha256 }));
+    expect(await recheckArtifacts({ artifacts, directory: root })).toEqual({ ok: true, mismatches: [] });
   });
 
   it('reports a changed artifact and a missing one', async () => {
-    const checkpoint = { artifacts: [{ path: 'docs/design.md', size: 3, sha256: 'a'.repeat(64) }, { path: 'docs/gone.md', size: 1, sha256: 'b'.repeat(64) }] };
-    const result = await verifyCheckpoint({ checkpoint, directory: root });
+    const artifacts = [{ path: 'docs/design.md', size: 3, sha256: 'a'.repeat(64) }, { path: 'docs/gone.md', size: 1, sha256: 'b'.repeat(64) }];
+    const result = await recheckArtifacts({ artifacts, directory: root });
     expect(result.ok).toBe(false);
     expect(result.mismatches).toEqual([
       { path: 'docs/design.md', reason: 'changed' },
@@ -86,17 +86,24 @@ describe('verifyCheckpoint', () => {
     ]);
   });
 
-  it('checks existence only for an artifact the checkpoint recorded without a digest', async () => {
+  it('checks existence only for an artifact the attempt recorded without a digest', async () => {
     // A plain-string pattern in the definition means `hash: false`, so the
-    // checkpoint holds `sha256: null`. Comparing a real digest against that
-    // null would report the step broken on every restart.
-    const checkpoint = { artifacts: [{ path: 'docs/design.md', size: 1, sha256: null }] };
-    expect(await verifyCheckpoint({ checkpoint, directory: root })).toEqual({ ok: true, mismatches: [] });
+    // recorded artifact holds `sha256: null`. Comparing a real digest against
+    // that null would report the step broken on every restart.
+    const artifacts = [{ path: 'docs/design.md', size: 1, sha256: null }];
+    expect(await recheckArtifacts({ artifacts, directory: root })).toEqual({ ok: true, mismatches: [] });
 
     await fs.writeFile(path.join(root, 'docs/design.md'), 'a much longer body');
-    expect(await verifyCheckpoint({ checkpoint, directory: root })).toEqual({ ok: true, mismatches: [] });
+    expect(await recheckArtifacts({ artifacts, directory: root })).toEqual({ ok: true, mismatches: [] });
 
     await fs.rm(path.join(root, 'docs/design.md'));
-    expect(await verifyCheckpoint({ checkpoint, directory: root })).toEqual({ ok: false, mismatches: [{ path: 'docs/design.md', reason: 'missing' }] });
+    expect(await recheckArtifacts({ artifacts, directory: root })).toEqual({ ok: false, mismatches: [{ path: 'docs/design.md', reason: 'missing' }] });
+  });
+
+  it('passes when nothing was recorded', async () => {
+    // An attempt that ran no artifact check leaves `artifacts: []` behind, and
+    // an attempt from before this record existed leaves nothing at all.
+    expect(await recheckArtifacts({ artifacts: [], directory: root })).toEqual({ ok: true, mismatches: [] });
+    expect(await recheckArtifacts({ directory: root })).toEqual({ ok: true, mismatches: [] });
   });
 });

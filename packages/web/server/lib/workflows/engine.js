@@ -15,7 +15,7 @@
 import { substituteInputs } from './prompts.js';
 import { reconcileRuns as defaultReconcile } from './resume.js';
 import { prepareSandbox, releaseSandbox as releaseRunSandbox } from './sandbox.js';
-import { runVerifiers as defaultRunChecks, verifyCheckpoint as defaultVerifyCheckpoint } from './verifiers.js';
+import { runVerifiers as defaultRunChecks, recheckArtifacts as defaultRecheckArtifacts } from './verifiers.js';
 
 export class WorkflowError extends Error {
   constructor(code, message, status) {
@@ -32,8 +32,8 @@ const STOPS = new Set(['waiting_confirm', 'needs_work', 'blocked', 'failed', 'in
 /** Step statuses a fresh verdict moves, in the direction that verdict points. */
 const VERIFIER_PASS_STATUSES = new Set(['needs_work', 'blocked', 'interrupted']);
 const VERIFIER_FAIL_STATUSES = new Set(['waiting_confirm', 'interrupted', 'blocked']);
-/** A note the checkpoint check wrote; a verifier has no say over it. */
-const CHECKPOINT_NOTE_PREFIX = 'checkpoint no longer matches';
+/** A note the artifact re-check wrote; a verifier has no say over it. */
+const ARTIFACT_NOTE_PREFIX = 'an artifact no longer matches';
 
 /**
  * The session a `session: reuse` step continues: the nearest preceding attempt
@@ -63,7 +63,7 @@ export const createWorkflowEngine = ({
   definitions,
   host,
   runChecks = defaultRunChecks,
-  verifyCheckpoint = defaultVerifyCheckpoint,
+  recheckArtifacts = defaultRecheckArtifacts,
   reconcileRuns = defaultReconcile,
   // The git driver for a run's worktree, injected by the runtime as a lazy
   // loader so the 6000-line git service is not imported at server boot. Only
@@ -388,11 +388,11 @@ export const createWorkflowEngine = ({
       attempt.verify = await runChecks({ step: declared, directory: run.directory });
       // A fresh verdict is also a fresh status: a step waiting on a check that
       // now fails reads `needs_work`, and one whose check passes goes back to
-      // waiting for the person. A note the checkpoint check wrote stays, because
-      // the checkpoint is still broken whatever this verifier says.
+      // waiting for the person. A note the artifact re-check wrote stays,
+      // because a changed artifact is still a fact whatever this verifier says.
       if (attempt.verify.ok && VERIFIER_PASS_STATUSES.has(step.status)) step.status = 'waiting_confirm';
       if (!attempt.verify.ok && VERIFIER_FAIL_STATUSES.has(step.status)) step.status = 'needs_work';
-      if (!(typeof step.note === 'string' && step.note.startsWith(CHECKPOINT_NOTE_PREFIX))) {
+      if (!(typeof step.note === 'string' && step.note.startsWith(ARTIFACT_NOTE_PREFIX))) {
         step.note = attempt.verify.ok ? null : 'a verifier failed';
       }
       const saved = await store.write(projectId, run);
@@ -452,7 +452,7 @@ export const createWorkflowEngine = ({
     reconcile: () => reconcileRuns({
       store,
       host: requireHost(),
-      verifyCheckpoint,
+      recheckArtifacts,
       listProjectIds,
       // A project with a step executing right now must not be written from a
       // snapshot taken before that attempt started.

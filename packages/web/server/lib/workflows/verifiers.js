@@ -57,10 +57,17 @@ export const runVerifiers = async ({ step, directory, deps = {} }) => {
     : { ok, artifacts, commands: commandResults, error: inspectionError };
 };
 
-export const verifyCheckpoint = async ({ checkpoint, directory, deps = {} }) => {
+/**
+ * Re-check the artifacts one attempt recorded, so a restart can say whether a
+ * step that was already confirmed still holds: an artifact that went missing is
+ * a mismatch, and one whose recorded digest changed is a mismatch. The list is
+ * the attempt's own evidence — `runVerifiers` wrote it — and no commit is
+ * involved.
+ */
+export const recheckArtifacts = async ({ artifacts, directory, deps = {} }) => {
   const hash = deps.hashFile ?? hashFile;
   const mismatches = [];
-  for (const artifact of checkpoint?.artifacts ?? []) {
+  for (const artifact of artifacts ?? []) {
     const absolute = path.join(directory, artifact.path);
     let current;
     try {
@@ -72,7 +79,7 @@ export const verifyCheckpoint = async ({ checkpoint, directory, deps = {} }) => 
       }
       throw error;
     }
-    // A checkpoint carries a digest only for an artifact the definition marks
+    // An attempt records a digest only for an artifact the definition marks
     // `hash: true`. For every other artifact the contract is that the file is
     // still there, so a file that changed is not a mismatch: comparing a real
     // digest against the recorded `null` would report every unhashed step as

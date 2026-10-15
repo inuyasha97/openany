@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { reconcileRuns } from './resume.js';
 import { createWorkflowEngine } from './engine.js';
 import { createWorkflowRunStore } from './store.js';
+import { recheckArtifacts, runVerifiers } from './verifiers.js';
 
 let root;
 let store;
@@ -22,11 +23,21 @@ const baseRun = (overrides = {}) => ({
   createdAt: 1,
   sandbox: 'working-tree',
   steps: [
-    { id: 'first', status: 'done', attempts: [{ index: 0, sessionId: 'session-1', status: 'completed' }], checkpoint: { at: 1, commit: 'a'.repeat(40), clean: false, artifacts: [] }, note: null },
+    { id: 'first', status: 'done', attempts: [{ index: 0, sessionId: 'session-1', status: 'completed', verify: { ok: true, artifacts: [], commands: [] } }], note: null },
     { id: 'second', status: 'running', attempts: [{ index: 0, sessionId: 'session-9', status: 'running' }], note: null },
   ],
   ...overrides,
 });
+
+/** A step the person confirmed: its last attempt recorded what the check saw. */
+const doneStep = (id, verify) => ({ id, status: 'done', attempts: [{ index: 0, sessionId: 'session-1', status: 'completed', verify }], note: null });
+
+/** A project directory the sweep can read artifacts from. */
+const projectDirectory = async () => {
+  const directory = path.join(root, 'project');
+  await fs.mkdir(directory, { recursive: true });
+  return directory;
+};
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-resume-'));
@@ -41,7 +52,7 @@ const deps = (overrides = {}) => ({
   store,
   definitions: { read: async () => ({ id: 'two-step', steps: [{ id: 'first' }, { id: 'second' }] }) },
   host: { getSessionStatus: async () => ({ busy: false }), listSessions: async () => [{ id: 'session-9' }] },
-  verifyCheckpoint: async () => ({ ok: true, mismatches: [] }),
+  recheckArtifacts,
   listProjectIds: async () => ['proj-1'],
   logger: { warn: () => {} },
   ...overrides,
@@ -57,15 +68,92 @@ describe('reconcileRuns', () => {
     expect(run.status).toBe('waiting');
   });
 
-  it('blocks the run when a checkpoint no longer matches', async () => {
-    await store.create(baseRun());
-    const summary = await reconcileRuns(deps({ verifyCheckpoint: async () => ({ ok: false, mismatches: [{ path: 'a.md', reason: 'changed' }] }) }));
+  it('flags a step whose recorded artifact changed while the server was down', async () => {
+    const directory = await projectDirectory();
+    await fs.writeFile(path.join(directory, 'spec.md'), 'the body the step left behind');
+    // The evidence is whatever `runVerifiers` recorded on the attempt, so the
+    // fixture records it the way a real attempt does.
+    const recorded = await runVerifiers({ step: { verify: { artifacts: [{ glob: 'spec.md', hash: true }] } }, directory });
+    expect(recorded.ok).toBe(true);
+    await store.create(baseRun({ directory, steps: [doneStep('first', recorded), baseRun().steps[1]] }));
+
+    await fs.writeFile(path.join(directory, 'spec.md'), 'something else entirely');
+
+    const summary = await reconcileRuns(deps());
     const run = await store.read('proj-1', baseRun().runId);
     expect(summary.blocked).toBe(1);
     expect(run.status).toBe('waiting');
     expect(run.steps[0].status).toBe('done');
-    expect(run.steps[0].note).toMatch(/a\.md \(changed\)/);
+    // The note names the path and the reason, because that is all a person has
+    // to go on: the engine writes no commit they could look at instead.
+    expect(run.steps[0].note).toBe('an artifact no longer matches: spec.md (changed)');
     expect(run.cursor).toBe('first');
+  });
+
+  it('flags a step whose recorded artifact vanished while the server was down', async () => {
+    const directory = await projectDirectory();
+    await fs.writeFile(path.join(directory, 'spec.md'), 'the body the step left behind');
+    const recorded = await runVerifiers({ step: { verify: { artifacts: [{ glob: 'spec.md', hash: false }] } }, directory });
+    await store.create(baseRun({ directory, steps: [doneStep('first', recorded), baseRun().steps[1]] }));
+
+    await fs.rm(path.join(directory, 'spec.md'));
+
+    const summary = await reconcileRuns(deps());
+    const run = await store.read('proj-1', baseRun().runId);
+    expect(summary.blocked).toBe(1);
+    expect(run.steps[0].note).toBe('an artifact no longer matches: spec.md (missing)');
+  });
+
+  it('does not flag a step whose artifact is unhashed and still exists', async () => {
+    const directory = await projectDirectory();
+    await fs.writeFile(path.join(directory, 'notes.md'), 'one');
+    const recorded = await runVerifiers({ step: { verify: { artifacts: [{ glob: 'notes.md', hash: false }] } }, directory });
+    expect(recorded.artifacts[0].sha256).toBeNull();
+    await store.create(baseRun({ directory, steps: [doneStep('first', recorded), baseRun().steps[1]] }));
+
+    // No digest was recorded, so the contract is that the file is still there —
+    // a file that changed is not a mismatch, or every unhashed step would read
+    // broken on the first restart.
+    await fs.writeFile(path.join(directory, 'notes.md'), 'a much longer body');
+
+    const summary = await reconcileRuns(deps());
+    const run = await store.read('proj-1', baseRun().runId);
+    expect(summary.blocked).toBe(0);
+    expect(run.steps[0].note).toBeNull();
+  });
+
+  it('skips a settled step that recorded no artifacts', async () => {
+    // A step whose definition checks no artifact leaves `artifacts: []` behind,
+    // and a step confirmed before an attempt settled leaves nothing at all.
+    await store.create(baseRun({ steps: [doneStep('first', { ok: true, artifacts: [], commands: [] }), baseRun().steps[1]] }));
+    const summary = await reconcileRuns(deps());
+    expect(summary.blocked).toBe(0);
+    expect((await store.read('proj-1', baseRun().runId)).steps[0].note).toBeNull();
+  });
+
+  it('does not re-check a step the person skipped', async () => {
+    const directory = await projectDirectory();
+    const recorded = { ok: true, artifacts: [{ path: 'gone.md', size: 1, sha256: 'a'.repeat(64) }], commands: [] };
+    await store.create(baseRun({ directory, steps: [{ ...doneStep('first', recorded), status: 'skipped', note: 'not needed' }, baseRun().steps[1]] }));
+    const summary = await reconcileRuns(deps());
+    const run = await store.read('proj-1', baseRun().runId);
+    // The person decided this step's work does not matter, so its missing
+    // artifact is not a reason to block the run on it.
+    expect(summary.blocked).toBe(0);
+    expect(run.steps[0].note).toBe('not needed');
+  });
+
+  it('ignores a step field this release no longer reads, and still loads the run', async () => {
+    // A run file written by an earlier release carries a field this engine
+    // dropped. The store passes unknown keys through, so the file loads; the
+    // sweep must not read that field, even where its content would have been a
+    // mismatch, because the attempt is the record now.
+    const dropped = { at: 1, artifacts: [{ path: 'gone.md', size: 1, sha256: 'a'.repeat(64) }] };
+    await store.create(baseRun({ steps: [{ ...doneStep('first', { ok: true, artifacts: [], commands: [] }), previousReleaseField: dropped }, baseRun().steps[1]] }));
+    expect((await store.read('proj-1', baseRun().runId)).steps[0].previousReleaseField).toEqual(dropped);
+
+    const summary = await reconcileRuns(deps());
+    expect(summary.blocked).toBe(0);
   });
 
   it('leaves a run alone when its session is gone', async () => {
@@ -78,22 +166,25 @@ describe('reconcileRuns', () => {
   });
 
   it('leaves a finished run untouched', async () => {
-    await store.create(baseRun({ status: 'done', steps: [{ id: 'first', status: 'done', attempts: [], checkpoint: null, note: null }, { id: 'second', status: 'done', attempts: [], checkpoint: null, note: null }] }));
+    await store.create(baseRun({ status: 'done', steps: [{ id: 'first', status: 'done', attempts: [], note: null }, { id: 'second', status: 'done', attempts: [], note: null }] }));
     const summary = await reconcileRuns(deps());
     expect(summary).toMatchObject({ runs: 0, interrupted: 0, blocked: 0 });
   });
 
   it('keeps the first blocked step as the cursor, not the last', async () => {
+    const directory = await projectDirectory();
     await store.create(baseRun({
+      directory,
       steps: [
-        { id: 'first', status: 'done', attempts: [], checkpoint: { at: 1, commit: 'a'.repeat(40), clean: false, artifacts: [{ path: 'a.md', size: 1, sha256: 'x' }] }, note: null },
-        { id: 'second', status: 'done', attempts: [], checkpoint: { at: 2, commit: 'b'.repeat(40), clean: false, artifacts: [{ path: 'b.md', size: 1, sha256: 'y' }] }, note: null },
+        doneStep('first', { ok: true, artifacts: [{ path: 'a.md', size: 1, sha256: 'a'.repeat(64) }], commands: [] }),
+        doneStep('second', { ok: true, artifacts: [{ path: 'b.md', size: 1, sha256: 'b'.repeat(64) }], commands: [] }),
       ],
     }));
-    const summary = await reconcileRuns(deps({ verifyCheckpoint: async () => ({ ok: false, mismatches: [{ path: 'x.md', reason: 'changed' }] }) }));
+    // Neither file is on disk, so both steps fail their re-check; the run's
+    // cursor has to point at the first of them, or the earlier block is
+    // invisible and the run can later read `done`.
+    const summary = await reconcileRuns(deps());
     const run = await store.read('proj-1', baseRun().runId);
-    // Both steps fail their check; the run's cursor has to point at the first of
-    // them, or the earlier block is invisible and the run can later read `done`.
     expect(summary).toMatchObject({ runs: 1, blocked: 1 });
     expect(run.cursor).toBe('first');
     expect(run.status).toBe('waiting');
@@ -177,7 +268,7 @@ describe('reconcileRuns and the session of an interrupted step', () => {
     expect(verified.steps[1].status).toBe('waiting_confirm');
     const confirmed = await engine.confirmStep({ projectId: 'proj-1', runId: baseRun().runId, stepId: 'second', decision: 'done' });
     expect(confirmed.steps[1].status).toBe('done');
-    expect(confirmed.steps[1].checkpoint).toBeUndefined();
+    expect(Object.keys(confirmed.steps[1]).sort()).toEqual(['attempts', 'id', 'note', 'status']);
     expect(confirmed.status).toBe('done');
   });
 });

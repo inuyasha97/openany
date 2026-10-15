@@ -1,14 +1,14 @@
 /**
  * What a restart means for the runs on disk.
  *
- * The run file is an index, not the record: sessions belong to OMP, artifacts
- * belong to the project, and commits belong to git. Every one of them is
- * re-checked here, and anything uncertain is reported instead of assumed. A
- * step that was running when the server stopped becomes `interrupted`, because
- * the engine cannot tell a finished turn from a turn that never returned — but
- * the session can: a session that is idle settled its turn before the kill, so
- * the attempt is closed on the evidence and the person can still answer the
- * step, while a busy session keeps its attempt running and says so.
+ * The run file is an index, not the record: sessions belong to OMP, and the
+ * artifacts a step recorded belong to the project. Each is re-checked here, and
+ * anything uncertain is reported instead of assumed. A step that was running
+ * when the server stopped becomes `interrupted`, because the engine cannot tell
+ * a finished turn from a turn that never returned — but the session can: a
+ * session that is idle settled its turn before the kill, so the attempt is
+ * closed on the evidence and the person can still answer the step, while a busy
+ * session keeps its attempt running and says so.
  *
  * The sweep is deliberately forgiving: one project or one run that cannot be
  * read must not cost the others their reconciliation, and a project with a step
@@ -22,7 +22,7 @@ const SETTLED_STEP_STATUSES = new Set(['done', 'skipped']);
 export const reconcileRuns = async ({
   store,
   host,
-  verifyCheckpoint,
+  recheckArtifacts,
   listProjectIds,
   isProjectBusy = () => false,
   now = Date.now,
@@ -45,7 +45,7 @@ export const reconcileRuns = async ({
     for (const run of runs) {
       if (!ACTIVE.has(run.status)) continue;
       try {
-        const outcome = await reconcileRun({ projectId, run, store, host, verifyCheckpoint, sessions, now, logger });
+        const outcome = await reconcileRun({ projectId, run, store, host, recheckArtifacts, sessions, now, logger });
         summary.runs += outcome.changed ? 1 : 0;
         summary.interrupted += outcome.interrupted;
         summary.blocked += outcome.blocked ? 1 : 0;
@@ -62,7 +62,7 @@ export const reconcileRuns = async ({
  * One run, rebuilt from what is on disk. It answers what the run counted as, so
  * the summary counts runs and never steps.
  */
-const reconcileRun = async ({ projectId, run, store, host, verifyCheckpoint, sessions, now, logger }) => {
+const reconcileRun = async ({ projectId, run, store, host, recheckArtifacts, sessions, now, logger }) => {
   const knownSessions = sessions === null ? null : new Set(sessions.map((entry) => entry.id));
   let interrupted = 0;
   let blocked = false;
@@ -84,11 +84,15 @@ const reconcileRun = async ({ projectId, run, store, host, verifyCheckpoint, ses
       changed = true;
     }
 
-    if (step.checkpoint) {
-      const check = await verifyCheckpoint({ checkpoint: step.checkpoint, directory: run.directory });
+    // A step the person confirmed is re-checked against its own evidence: the
+    // artifacts its last attempt recorded. A skipped step is not, because that
+    // person's answer already settled it, and a step with nothing recorded has
+    // nothing to compare.
+    if (step.status === 'done') {
+      const check = await recheckArtifacts({ artifacts: step.attempts.at(-1)?.verify?.artifacts, directory: run.directory });
       if (!check.ok) {
         const details = check.mismatches.map((entry) => `${entry.path} (${entry.reason})`).join(', ');
-        step.note = `checkpoint no longer matches: ${details}`;
+        step.note = `an artifact no longer matches: ${details}`;
         blocked = true;
         blockedStepId = blockedStepId ?? step.id;
         changed = true;
@@ -98,9 +102,9 @@ const reconcileRun = async ({ projectId, run, store, host, verifyCheckpoint, ses
 
     const attempt = step.attempts.at(-1);
     // Only a step that still owes the run something cares whether its session
-    // survives: a finished step's record is its checkpoint, and re-flagging it
-    // would double-count the run as blocked and overwrite a note that says
-    // something more useful.
+    // survives: a finished step's record is the evidence its attempts carry, and
+    // re-flagging it would double-count the run as blocked and overwrite a note
+    // that says something more useful.
     if (!SETTLED_STEP_STATUSES.has(step.status) && attempt?.sessionId && knownSessions && !knownSessions.has(attempt.sessionId)) {
       attempt.status = 'blocked';
       attempt.error = { code: 'unavailable', message: `session ${attempt.sessionId} is no longer known` };

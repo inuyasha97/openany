@@ -164,7 +164,9 @@ describe('startStep', () => {
     const run = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
     expect(run.steps[0].status).toBe('waiting_confirm');
     expect(run.steps[0].attempts[0].verify.ok).toBe(true);
-    expect(run.steps[0].checkpoint).toBeUndefined();
+    // The step record is the whole record: nothing here holds a commit, because
+    // whether this work is committed is the step prompt's business.
+    expect(Object.keys(run.steps[0]).sort()).toEqual(['attempts', 'id', 'note', 'status']);
     expect(run.cursor).toBe('first');
     expect(run.status).toBe('waiting');
   });
@@ -352,13 +354,14 @@ describe('confirmStep', () => {
   it('writes no commit when a person confirms a step', async () => {
     const commits = [];
     const { engine, root, runId } = await buildEngine({
-      // The old wiring, still handed in the way the runtime used to: nothing may
-      // reach it, because the engine no longer commits on its own behalf.
+      // A caller that still hands in a git driver, the way the runtime used to:
+      // nothing may reach it, because the engine writes no commit on its own
+      // behalf.
       overrides: {
-        checkpoints: {
-          write: async (input) => {
+        git: {
+          commit: async (input) => {
             commits.push(input);
-            return { at: 42, commit: 'c'.repeat(40), clean: false, artifacts: [] };
+            return 'c'.repeat(40);
           },
         },
       },
@@ -367,7 +370,7 @@ describe('confirmStep', () => {
     await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
     const run = await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'done' });
     expect(run.steps[0].status).toBe('done');
-    expect(run.steps[0].checkpoint).toBeUndefined();
+    expect(Object.keys(run.steps[0]).sort()).toEqual(['attempts', 'id', 'note', 'status']);
     expect(commits).toEqual([]);
     expect(run.cursor).toBe('second');
     expect(run.status).toBe('running');
@@ -505,10 +508,10 @@ describe('verifyStep', () => {
     expect(run.steps[0].attempts[0].verify.ok).toBe(false);
   });
 
-  it('keeps the checkpoint note and moves a blocked step back to waiting_confirm', async () => {
+  it('keeps the artifact note and moves a blocked step back to waiting_confirm', async () => {
     const { engine, store, run, runId } = await buildEngine();
     await fs.writeFile(path.join(run.directory, 'out/a.md'), 'x');
-    const note = 'checkpoint no longer matches: out/a.md (changed)';
+    const note = 'an artifact no longer matches: out/a.md (changed)';
     await store.write(run.projectId, {
       ...run,
       status: 'waiting',
@@ -517,7 +520,7 @@ describe('verifyStep', () => {
         : step)),
     });
     const verified = await engine.verifyStep({ projectId: 'proj-1', runId, stepId: 'first' });
-    // The fresh verdict is a pass, but the broken checkpoint is still a fact, so
+    // The fresh verdict is a pass, but the changed artifact is still a fact, so
     // its note survives while the status follows the verdict.
     expect(verified.steps[0].status).toBe('waiting_confirm');
     expect(verified.steps[0].note).toBe(note);
