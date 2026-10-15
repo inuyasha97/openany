@@ -100,6 +100,20 @@ describe('recheckArtifacts', () => {
     expect(await recheckArtifacts({ artifacts, directory: root })).toEqual({ ok: false, mismatches: [{ path: 'docs/design.md', reason: 'missing' }] });
   });
 
+  it('skips a recorded entry that has no path, instead of throwing', async () => {
+    // `runVerifiers` records `path: null` for a pattern that matched nothing and
+    // for an inspection that could not run, and `verifyStep` rewrites the last
+    // attempt's `verify` for any step that has attempts — so a step that reads
+    // `done` can carry such an entry. That entry is not evidence a file held
+    // anything, so it is skipped; `path.join` on it would throw
+    // `ERR_INVALID_ARG_TYPE` and cost the caller its whole pass.
+    const recorded = await runVerifiers({ step: step({ artifacts: [{ glob: 'docs/nothing.md', hash: false }], commands: [] }), directory: root });
+    expect(recorded.artifacts).toEqual([{ glob: 'docs/nothing.md', path: null, exists: false, size: null, sha256: null }]);
+
+    const artifacts = [...recorded.artifacts, { path: 'docs/design.md', size: 3, sha256: null }];
+    expect(await recheckArtifacts({ artifacts, directory: root })).toEqual({ ok: true, mismatches: [] });
+  });
+
   it('passes when nothing was recorded', async () => {
     // An attempt that ran no artifact check leaves `artifacts: []` behind, and
     // an attempt from before this record existed leaves nothing at all.

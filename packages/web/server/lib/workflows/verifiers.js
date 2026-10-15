@@ -68,6 +68,11 @@ export const recheckArtifacts = async ({ artifacts, directory, deps = {} }) => {
   const hash = deps.hashFile ?? hashFile;
   const mismatches = [];
   for (const artifact of artifacts ?? []) {
+    // The list is the attempt's own evidence, and that evidence records
+    // `path: null` for a pattern that matched nothing and for an inspection that
+    // could not run. There is no file to compare for such an entry: it is not a
+    // mismatch, and letting `path.join` throw on it would reject every caller.
+    if (typeof artifact?.path !== 'string') continue;
     const absolute = path.join(directory, artifact.path);
     let current;
     try {

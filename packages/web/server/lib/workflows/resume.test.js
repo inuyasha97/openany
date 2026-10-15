@@ -131,6 +131,29 @@ describe('reconcileRuns', () => {
     expect((await store.read('proj-1', baseRun().runId)).steps[0].note).toBeNull();
   });
 
+  it('still sweeps the run when a settled step recorded an entry with no path', async () => {
+    // A `done` step can carry `path: null`: `runVerifiers` records it for a
+    // pattern that matched nothing, and `verifyStep` rewrites a step's last
+    // attempt whenever the step has attempts. Skipping that entry is not only
+    // about the entry — a throw here rejects the whole run's reconciliation, so
+    // the `running` step below would keep saying `running` on every restart and
+    // the run would stay unreconciled forever.
+    const directory = await projectDirectory();
+    const recorded = await runVerifiers({ step: { verify: { artifacts: [{ glob: 'gone.md', hash: false }] } }, directory });
+    expect(recorded.artifacts[0]).toMatchObject({ path: null, exists: false });
+    await store.create(baseRun({ directory, steps: [doneStep('first', recorded), baseRun().steps[1]] }));
+
+    const summary = await reconcileRuns(deps({ host: { getSessionStatus: async () => ({ busy: false }), listSessions: async () => [] } }));
+    const run = await store.read('proj-1', baseRun().runId);
+    expect(summary).toMatchObject({ runs: 1, interrupted: 1, blocked: 1 });
+    expect(run.steps[1].status).toBe('interrupted');
+    expect(run.steps[1].attempts[0]).toMatchObject({ status: 'blocked' });
+    // The entry with no path is not a mismatch, so the step that recorded it
+    // stays as it was.
+    expect(run.steps[0].status).toBe('done');
+    expect(run.steps[0].note).toBeNull();
+  });
+
   it('does not re-check a step the person skipped', async () => {
     const directory = await projectDirectory();
     const recorded = { ok: true, artifacts: [{ path: 'gone.md', size: 1, sha256: 'a'.repeat(64) }], commands: [] };
