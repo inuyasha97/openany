@@ -1713,6 +1713,11 @@ with these locals above it in `StepPane`:
   const setRun = useWorkflowStore((state) => state.setRun);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // One step's refusal must not stand against the next step's banner.
+  useEffect(() => {
+    setActionError(null);
+  }, [sessionId]);
   const [prompt, setPrompt] = useState('');
 
   const act = async (run_action: () => Promise<WorkflowRun>) => {
@@ -1749,7 +1754,7 @@ git commit -m "feat(workflows): the actions a person takes on a step"
 **Files:**
 - Create: `packages/ui/src/components/chat/WorkflowStepBanner.tsx`
 - Modify: the chat transcript header that already renders `AutoReviewBanner` (`packages/ui/src/components/chat/AutoReviewBanner.tsx` is the pattern; find its mount point and add this one beside it)
-- Modify: `packages/ui/src/components/session/sidebar/sessions/RunSidebarRow.tsx` or the list that uses it, so sessions a run created are grouped
+- Read (not modified): `packages/ui/src/components/session/sidebar/sessions/RunSidebarRow.tsx`, the multi-run grouping this task decided not to reuse
 
 **Interfaces:**
 - Consumes: Task 2's store, Task 1's client.
@@ -1784,18 +1789,40 @@ export const WorkflowStepBanner = ({ sessionId, project }: WorkflowStepBannerPro
   const entry = useWorkflowStore((state) => state.getEntry(project));
   const setRun = useWorkflowStore((state) => state.setRun);
 
+  // A `session: reuse` step continues the session of the nearest preceding
+  // attempt, so two steps can name the same session. The run's own cursor is the
+  // step that is live in it; anything else is a step that has finished with that
+  // session, and answering the live one from here is the point of the banner.
   const found = useMemo(() => {
+    let fallback: { run: WorkflowRun; step: WorkflowStep } | null = null;
     for (const run of entry.runs) {
       for (const step of run.steps) {
         const attempt = step.attempts.at(-1);
-        if (attempt?.sessionId === sessionId) return { run, step };
+        if (attempt?.sessionId !== sessionId) continue;
+        if (run.cursor === step.id) return { run, step };
+        fallback = { run, step };
       }
     }
-    return null;
+    return fallback;
   }, [entry.runs, sessionId]);
 
   if (!found) return null;
-  const needsAnswer = found.step.status === 'waiting_confirm' || found.step.status === 'needs_work' || found.step.status === 'blocked';
+  const needsAnswer = found.step.status === 'waiting_confirm' || found.step.status === 'needs_work' || found.step.status === 'blocked' || found.step.status === 'interrupted';
+
+  // A frame carries only each step's status, never its attempts, so a step that
+  // reached a stop while this project was already loaded still shows its last
+  // attempt as `running` and the confirm would stay disabled. One read of that
+  // run settles it; the key keeps it to one read per step and status.
+  useEffect(() => {
+    if (!needsAnswer) return;
+    const attempt = found.step.attempts.at(-1);
+    if (attempt?.status === 'completed') return;
+    let cancelled = false;
+    void fetchWorkflowRun(project.path, found.run.runId)
+      .then((next) => { if (!cancelled) setRun(project, next); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [needsAnswer, found.run.runId, found.step.id, found.step.status, found.step.attempts.length, project.path, setRun]);
 
   return (
     <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-xs">
@@ -1818,7 +1845,9 @@ Wire it where the transcript header renders, next to `AutoReviewBanner`. If `Aut
 
 - [ ] **Step 2: Group the step sessions in the sidebar**
 
-The sessions a run created are ordinary sessions with a title the engine set (`<workflowId> <stepId>`). Follow the multi-run grouping: `packages/ui/src/components/session/sidebar/sessions/RunSidebarRow.tsx` groups sessions by run metadata. Either reuse that component by deriving a run label from the workflow store, or add the grouping in the same list with the same visual language. Do not build a second sidebar.
+The sessions a run created are ordinary sessions with a title the engine set (`<workflowId> <stepId>`).
+
+Grouping them the way multi-run does was attempted and dropped. `RunSidebarRow` opens its overview by a key that only the session-metadata multirun index resolves (`sessionSidebarRowModel.ts:147-172`), so reusing it means inventing run identity or writing metadata onto sessions; the second route (a group row derived from the workflow store) would restructure a large list for a cosmetic gain. Ruling: dropped, not half-built. A run's sessions stay ordinary rows whose titles name the run and the step. — Cost if wrong: a person with several runs in flight reads the sidebar by title instead of by group.
 
 - [ ] **Step 3: Type check and commit**
 
