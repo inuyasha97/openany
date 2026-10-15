@@ -90,6 +90,22 @@ describe('load', () => {
     expect(entry.runs[0].status).toBe('waiting');
     expect(entry.runs[0].steps[0].status).toBe('waiting_confirm');
   });
+
+  it('does not re-apply a frame that arrived before a later load started', async () => {
+    runsQueue.push(() => [run()]);
+    definitionsQueue.push(() => []);
+    await useWorkflowStore.getState().load(project);
+
+    useWorkflowStore.getState().applyRunFrame({ runId: 'r1', projectId: 'path_proj', status: 'waiting', cursor: 'spec', steps: [{ id: 'spec', status: 'waiting_confirm' }] });
+
+    // Nothing was in flight when that frame arrived, so a later load's payload is
+    // the newer truth and must win.
+    runsQueue.push(() => [run({ status: 'done', steps: [{ id: 'spec', status: 'done', attempts: [], checkpoint: null, note: null }] })]);
+    definitionsQueue.push(() => []);
+    await useWorkflowStore.getState().load(project, { force: true });
+
+    expect(useWorkflowStore.getState().getEntry(project).runs[0].status).toBe('done');
+  });
 });
 
 describe('applyRunFrame', () => {

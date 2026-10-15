@@ -33,7 +33,7 @@ interface WorkflowEntry {
 
 export interface WorkflowStoreState {
   entries: Record<string, WorkflowEntry>;
-  /** Frames for runs this client had not read yet, applied by the next load. */
+  /** Frames that arrived while a load was in flight, re-applied when that load resolves. */
   pendingFrames: Record<string, Record<string, WorkflowRunFrame>>;
   getEntry: (project: { id: string } | null | undefined) => WorkflowEntry;
   load: (project: { id: string; path: string }, options?: { force?: boolean }) => Promise<void>;
@@ -105,15 +105,17 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
     // A frame cannot invent a project this client has never loaded.
     if (!entry) return state;
     const existing = entry.runs.find((candidate) => candidate.runId === frame.runId);
-    // Recorded for both halves: a load already in flight took its snapshot
-    // before this frame, so it re-applies the frame when it resolves and then
-    // clears the map.
-    const pending = { ...state.pendingFrames, [frame.projectId]: { ...(state.pendingFrames[frame.projectId] ?? {}), [frame.runId]: frame } };
+    // Only a frame that arrived while a load was in flight can predate that
+    // load's payload, so only it is remembered for the load to re-apply.
+    const remember = entry.loading === true;
+    const pendingFrames = remember
+      ? { ...state.pendingFrames, [frame.projectId]: { ...(state.pendingFrames[frame.projectId] ?? {}), [frame.runId]: frame } }
+      : state.pendingFrames;
     if (!existing) {
-      return { pendingFrames: pending };
+      return remember ? { pendingFrames } : state;
     }
     return {
-      pendingFrames: pending,
+      pendingFrames,
       entries: {
         ...state.entries,
         [frame.projectId]: {

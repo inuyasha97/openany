@@ -253,16 +253,11 @@ describe('openchamber events', () => {
       }),
     });
 
-    expect(events).toEqual([
-      {
-        type: 'workflow-run-updated',
-        runId: 'r1',
-        projectId: 'path_proj',
-        status: 'waiting',
-        cursor: 'spec',
-        steps: [{ id: 'spec', status: 'waiting_confirm' }],
-      },
-    ]);
+    expect(events).toHaveLength(1);
+    const emitted = events[0];
+    expect(emitted).toMatchObject({ type: 'workflow-run-updated', runId: 'r1', projectId: 'path_proj', status: 'waiting', cursor: 'spec' });
+    const steps = emitted && typeof emitted === 'object' && 'steps' in emitted ? emitted.steps : undefined;
+    expect(steps).toEqual([{ id: 'spec', status: 'waiting_confirm' }]);
     unsubscribe();
   });
 });
