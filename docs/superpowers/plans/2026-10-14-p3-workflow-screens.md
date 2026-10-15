@@ -1283,16 +1283,22 @@ import { useEffect, useState } from 'react';
 
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
-import { fetchWorkflowRun, type WorkflowRun } from '@/lib/workflowsApi';
+import { fetchWorkflowRun, type WorkflowDefinitionSummary, type WorkflowRun } from '@/lib/workflowsApi';
 import { describeRunStatus, describeStepStatus } from '@/lib/workflows/status';
+import { Icon } from '@/components/icon/Icon';
+import { Button } from '@/components/ui/button';
 import { StepPane } from './StepPane';
+import { WorkflowDiagram } from './WorkflowDiagram';
 
 export interface RunDetailProps {
   run: WorkflowRun;
   project: { path: string };
+  /** The declared workflow, for the diagram tab; `null` while it does not load. */
+  definition: WorkflowDefinitionSummary | null;
 }
 
-export const RunDetail = ({ run, project }: RunDetailProps) => {
+export const RunDetail = ({ run, project, definition }: RunDetailProps) => {
+  const [tab, setTab] = useState<'steps' | 'definition'>('steps');
   const { t } = useI18n();
   const [full, setFull] = useState<WorkflowRun>(run);
   const [stepId, setStepId] = useState<string | null>(run.cursor ?? run.steps[0]?.id ?? null);
@@ -1316,10 +1322,18 @@ export const RunDetail = ({ run, project }: RunDetailProps) => {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <runStatus.icon className={runStatus.className} aria-hidden />
+        <Icon name={runStatus.icon} className={runStatus.className} aria-hidden />
         <span className="text-xs font-medium">{full.workflowId}</span>
         <span className="text-xs text-muted-foreground">{runStatus.label}</span>
         <span className="ml-auto text-[11px] text-muted-foreground">{full.sandbox}</span>
+      </div>
+      <div className="flex items-center gap-1 border-b border-border px-2 py-1" role="tablist">
+        <Button size="xs" variant={tab === 'steps' ? 'secondary' : 'ghost'} role="tab" aria-selected={tab === 'steps'} onClick={() => setTab('steps')}>
+          {t('workflows.step.attempts')}
+        </Button>
+        <Button size="xs" variant={tab === 'definition' ? 'secondary' : 'ghost'} role="tab" aria-selected={tab === 'definition'} onClick={() => setTab('definition')}>
+          {t('workflows.definition.tab')}
+        </Button>
       </div>
       {error ? <div role="status" className="px-3 py-2 text-xs text-destructive">{error}</div> : null}
       <div className="flex min-h-0 flex-1">
@@ -1341,7 +1355,11 @@ export const RunDetail = ({ run, project }: RunDetailProps) => {
             );
           })}
         </ol>
-        {step ? <StepPane run={full} step={step} project={project} /> : null}
+        {tab === 'definition'
+          ? (definition
+            ? <WorkflowDiagram summary={definition} />
+            : <div className="flex-1 p-3 text-xs text-muted-foreground">{t('workflows.empty.loading')}</div>)
+          : (step ? <StepPane run={full} step={step} project={project} /> : null)}
       </div>
     </div>
   );
@@ -1837,7 +1855,7 @@ The step ids a definition may carry are restricted to lowercase words and dashes
 
 - [ ] **Step 2: Add the tab**
 
-In `RunDetail`, add a two-tab header (the step view and `t('workflows.definition.tab')`), and switch the right pane to `WorkflowDiagram` for the second tab. Pass the definition the surface loaded in `WorkflowsView`:
+`RunDetail` already carries the two-tab header and renders `WorkflowDiagram` from its `definition` prop (Task 5b), so nothing is added here. The prop is filled by `WorkflowsView` (Task 3b), which owns the definitions list:
 
 ```tsx
 const definition = entry?.definitions.find((candidate) => candidate.id === run.workflowId) ?? null;
