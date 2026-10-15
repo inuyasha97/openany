@@ -1324,6 +1324,7 @@ export const dict: Record<I18nKey, string> = {
   "workflows.step.confirmNotDone": "Не виконано",
   "workflows.step.skip": "Пропустити цей крок",
   "workflows.step.cancelRun": "Зупинити запуск",
+  "workflows.step.releaseWorktree": "Звільнити робоче дерево",
   "workflows.step.attempts": "Спроби",
   "workflows.step.checkpoint": "Контрольна точка",
   "workflows.step.verifier": "Перевірки",

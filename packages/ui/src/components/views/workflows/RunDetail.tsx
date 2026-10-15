@@ -10,11 +10,12 @@ import { useEffect, useState } from 'react';
 
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
-import { fetchWorkflowRun, type WorkflowDefinitionSummary, type WorkflowRun } from '@/lib/workflowsApi';
+import { fetchWorkflowRun, releaseWorkflowSandbox, type WorkflowDefinitionSummary, type WorkflowRun } from '@/lib/workflowsApi';
 import { describeRunStatus, describeStepStatus } from '@/lib/workflows/status';
 import type { ProjectRef } from '@/lib/worktrees/worktreeManager';
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
+import { useWorkflowStore } from '@/stores/useWorkflowStore';
 import { StepPane } from './StepPane';
 import { WorkflowDiagram } from './WorkflowDiagram';
 
@@ -37,6 +38,8 @@ export const RunDetail = ({ run, project, definition, definitionsLoaded }: RunDe
   const [full, setFull] = useState<WorkflowRun>(run);
   const [stepId, setStepId] = useState<string | null>(run.cursor ?? run.steps[0]?.id ?? null);
   const [error, setError] = useState<string | null>(null);
+  const [releasing, setReleasing] = useState(false);
+  const setRun = useWorkflowStore((state) => state.setRun);
 
   // The parent swaps the `run` prop when a person selects another run, without
   // remounting this component. Without this the pane would show the previous
@@ -64,13 +67,51 @@ export const RunDetail = ({ run, project, definition, definitionsLoaded }: RunDe
 
   const step = full.steps.find((candidate) => candidate.id === stepId) ?? full.steps[0] ?? null;
 
+  // The release is offered only where the server would accept it: a run that has
+  // stopped for good and still has the checkout its branch points at. A run that
+  // never took one — `working-tree`, or one stopped before its first step — has
+  // no branch, and a released run keeps its branch but has nothing to remove.
+  const canRelease = (full.status === 'done' || full.status === 'failed' || full.status === 'cancelled')
+    && Boolean(full.worktreeBranch)
+    && !full.worktreeReleasedAt;
+
+  const release = async () => {
+    setReleasing(true);
+    setError(null);
+    try {
+      const updated = await releaseWorkflowSandbox(project.path, full.runId);
+      // The store keeps the truth for the list and the next read; `full` is what
+      // this pane renders, so the answer lands there too and the control stops
+      // offering a release that has already happened.
+      setRun(project, updated);
+      setFull(updated);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : t('workflows.error.actionFailed'));
+    } finally {
+      setReleasing(false);
+    }
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Icon name={runStatus.icon} className={runStatus.className} aria-hidden />
         <span className="text-xs font-medium">{full.workflowId}</span>
         <span className="text-xs text-muted-foreground">{runStatus.label}</span>
-        <span className="ml-auto text-[11px] text-muted-foreground">{full.sandbox}</span>
+        <span className="ml-auto flex items-center gap-2">
+          {canRelease ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              aria-label={t('workflows.step.releaseWorktree')}
+              disabled={releasing}
+              onClick={() => void release()}
+            >
+              {t('workflows.step.releaseWorktree')}
+            </Button>
+          ) : null}
+          <span className="text-[11px] text-muted-foreground">{full.sandbox}</span>
+        </span>
       </div>
       <div className="flex items-center gap-1 border-b border-border px-2 py-1" role="tablist">
         <Button size="xs" variant={tab === 'steps' ? 'secondary' : 'ghost'} role="tab" aria-selected={tab === 'steps'} onClick={() => setTab('steps')}>

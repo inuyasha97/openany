@@ -87,6 +87,14 @@ export interface WorkflowRun {
   createdAt: number;
   updatedAt: number;
   sandbox: WorkflowSandbox;
+  /**
+   * The branch a `worktree` run's checkout was created on. Absent until the run
+   * takes its checkout, which is why the screen treats a missing one as "no
+   * worktree to release".
+   */
+  worktreeBranch?: string | null;
+  /** When the checkout was removed. The branch stays behind for a person to merge. */
+  worktreeReleasedAt?: number | null;
   steps: WorkflowStep[];
 }
 
@@ -179,6 +187,13 @@ export const runWorkflow = async (directory: string, runId: string): Promise<Wor
 
 export const cancelWorkflowRun = async (directory: string, runId: string): Promise<WorkflowRun> =>
   (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/cancel`, directory)).run;
+
+/**
+ * Remove a finished run's checkout. The branch is left behind, so this is
+ * tidy-up, not a merge; the server refuses while the run is still going.
+ */
+export const releaseWorkflowSandbox = async (directory: string, runId: string): Promise<WorkflowRun> =>
+  (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/sandbox/release`, directory)).run;
 
 export const runWorkflowStep = async (directory: string, runId: string, stepId: string): Promise<WorkflowRun> =>
   (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/run`, directory)).run;

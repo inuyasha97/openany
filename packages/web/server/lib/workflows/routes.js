@@ -202,6 +202,11 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     return runId ? engine.cancelRun({ projectId, runId }) : undefined;
   }));
 
+  app.post('/api/workflows/runs/:runId/sandbox/release', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {
+    const runId = runIdOf(req, res);
+    return runId ? engine.releaseSandbox({ projectId, projectPath, runId }) : undefined;
+  }));
+
   app.post('/api/workflows/runs/:runId/steps/:stepId/run', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {
     const runId = runIdOf(req, res);
     return runId ? engine.startStep({ projectId, projectPath, runId, stepId: req.params.stepId }) : undefined;

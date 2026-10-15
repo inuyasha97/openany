@@ -1323,6 +1323,7 @@ export const dict = {
   'workflows.step.confirmNotDone': 'Niet klaar',
   'workflows.step.skip': 'Deze stap overslaan',
   'workflows.step.cancelRun': 'Run stoppen',
+  'workflows.step.releaseWorktree': 'Werkboom vrijgeven',
   'workflows.step.attempts': 'Pogingen',
   'workflows.step.checkpoint': 'Controlepunt',
   'workflows.step.verifier': 'Controles',

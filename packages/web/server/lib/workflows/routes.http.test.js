@@ -1,6 +1,7 @@
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
+import { createWorkflowEngine } from './engine.js';
 import { registerWorkflowRoutes } from './routes.js';
 
 const run = { runId: '11111111-2222-4333-8444-555555555555', projectId: 'proj-1', status: 'idle', cursor: 'first', steps: [] };
@@ -26,6 +27,7 @@ const createApp = (overrides = {}) => {
       confirmStep: async (value) => { calls.push(['confirmStep', value]); return run; },
       verifyStep: async () => run,
       cancelRun: async () => run,
+      releaseSandbox: async (value) => { calls.push(['releaseSandbox', value]); return run; },
     },
     resolveProjectId: () => 'proj-1',
     projectPathFromId: () => '/tmp/proj',
@@ -152,6 +154,36 @@ describe('workflow routes', () => {
       .send({ decision: 'maybe' });
     expect(response.status).toBe(400);
     expect(response.body.error).toMatch(/decision/);
+  });
+
+  it('releases a finished run\'s checkout through the engine', async () => {
+    const { app, calls } = createApp();
+    const response = await request(app).post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/sandbox/release').set(SCOPE).send({});
+    expect(response.status).toBe(200);
+    // The project path is forwarded with the run, because releasing a checkout
+    // needs the repository the worktree belongs to.
+    expect(calls[0]).toEqual(['releaseSandbox', { projectId: 'proj-1', projectPath: '/tmp/proj', runId: '11111111-2222-4333-8444-555555555555' }]);
+    expect(response.body).toEqual({ run });
+  });
+
+  it('refuses to release a worktree while the run is still going', async () => {
+    // The refusal is the engine's rule, so the route is driven with the real
+    // engine over a store that answers a live run: a stub would only prove the
+    // stub. Everything else about the request is the route under test.
+    const running = { ...run, status: 'running', sandbox: 'worktree', worktreeBranch: 'omp/wf/x', directory: '/tmp/proj/wt' };
+    const store = { read: async () => running, write: async (_projectId, value) => value, list: async () => [], remove: async () => true, create: async (value) => value };
+    const engine = createWorkflowEngine({
+      store,
+      definitions: { read: async () => null },
+      host: {},
+      checkpoints: {},
+      turn: async () => 'completed',
+      listProjectIds: async () => [],
+    });
+    const { app } = createApp({ engine, store });
+    const response = await request(app).post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/sandbox/release').set(SCOPE).send({});
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatch(/still running/);
   });
 
   it('maps an engine WorkflowError to its status and its message', async () => {

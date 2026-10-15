@@ -1298,6 +1298,7 @@ export const dict = {
   'workflows.step.confirmNotDone': 'Tamamlanmadı',
   'workflows.step.skip': 'Bu adımı atla',
   'workflows.step.cancelRun': 'Çalıştırmayı durdur',
+  'workflows.step.releaseWorktree': 'Çalışma ağacını serbest bırak',
   'workflows.step.attempts': 'Deneme',
   'workflows.step.checkpoint': 'Kontrol noktası',
   'workflows.step.verifier': 'Kontroller',

@@ -3191,6 +3191,7 @@ export const dict = {
   'workflows.step.confirmNotDone': 'Nicht fertig',
   'workflows.step.skip': 'Diesen Schritt überspringen',
   'workflows.step.cancelRun': 'Durchlauf stoppen',
+  'workflows.step.releaseWorktree': 'Arbeitsbaum freigeben',
   'workflows.step.attempts': 'Versuche',
   'workflows.step.checkpoint': 'Kontrollpunkt',
   'workflows.step.verifier': 'Prüfungen',

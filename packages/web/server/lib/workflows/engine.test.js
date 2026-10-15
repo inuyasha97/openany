@@ -665,4 +665,64 @@ describe('the worktree sandbox', () => {
     expect(result.steps[0].note).toBe('missing input: request');
     expect(calls.create).toHaveLength(0);
   });
+
+  describe('releasing the checkout', () => {
+    it('removes a finished run\'s checkout, leaves the branch and records when', async () => {
+      const calls = { create: [], remove: [] };
+      const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+      await store.write('proj-1', { ...run, sandbox: 'worktree' });
+      const started = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+      const finished = await store.write('proj-1', { ...started, status: 'done' });
+
+      const released = await engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId });
+
+      // The branch is what a person merges, so it is deliberately left behind.
+      expect(calls.remove).toEqual([{ directory: root, input: { directory: finished.directory, deleteLocalBranch: false } }]);
+      expect(released.worktreeReleasedAt).toBe(42);
+      await expect(fs.stat(finished.directory)).rejects.toThrow();
+      expect(await store.read('proj-1', run.runId)).toMatchObject({ worktreeReleasedAt: 42 });
+    });
+
+    it('refuses while the run is still running or waiting on a person', async () => {
+      const calls = { create: [], remove: [] };
+      const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+      for (const status of ['running', 'waiting']) {
+        await store.write('proj-1', { ...run, sandbox: 'worktree', directory: `${root}/checkout`, worktreeBranch: `omp/wf/${run.runId}`, status });
+        await expect(engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId }))
+          .rejects.toMatchObject({ code: 'conflict', status: 409 });
+      }
+      expect(calls.remove).toEqual([]);
+    });
+
+    it('is a no-op for a run that never took a checkout', async () => {
+      const calls = { create: [], remove: [] };
+      const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+
+      // The fixture's sandbox is `working-tree`: there is no checkout, and the
+      // run is not stamped as if one had been released.
+      const released = await engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId });
+
+      expect(released.worktreeReleasedAt).toBeUndefined();
+      expect(calls.remove).toEqual([]);
+      expect((await store.read('proj-1', run.runId)).worktreeReleasedAt).toBeUndefined();
+    });
+
+    it('is a no-op for a checkout that was already released', async () => {
+      const calls = { create: [], remove: [] };
+      const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+      await store.write('proj-1', {
+        ...run,
+        sandbox: 'worktree',
+        directory: `${root}/gone`,
+        worktreeBranch: `omp/wf/${run.runId}`,
+        worktreeReleasedAt: 7,
+        status: 'done',
+      });
+
+      const released = await engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId });
+
+      expect(released.worktreeReleasedAt).toBe(7);
+      expect(calls.remove).toEqual([]);
+    });
+  });
 });

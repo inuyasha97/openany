@@ -1324,6 +1324,7 @@ export const dict: Record<I18nKey, string> = {
   'workflows.step.confirmNotDone': '未完成',
   'workflows.step.skip': '跳过此步骤',
   'workflows.step.cancelRun': '停止运行',
+  'workflows.step.releaseWorktree': '释放工作树',
   'workflows.step.attempts': '尝试次数',
   'workflows.step.checkpoint': '检查点',
   'workflows.step.verifier': '检查',

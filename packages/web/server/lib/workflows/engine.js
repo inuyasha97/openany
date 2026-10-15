@@ -12,7 +12,7 @@
  */
 import { substituteInputs } from './prompts.js';
 import { reconcileRuns as defaultReconcile } from './resume.js';
-import { prepareSandbox } from './sandbox.js';
+import { prepareSandbox, releaseSandbox as releaseRunSandbox } from './sandbox.js';
 import { runVerifiers as defaultRunChecks, verifyCheckpoint as defaultVerifyCheckpoint } from './verifiers.js';
 
 export class WorkflowError extends Error {
@@ -417,6 +417,32 @@ export const createWorkflowEngine = ({
       if (inFlight.has(projectId)) throw new WorkflowError('busy', 'a step is executing; stop its turn instead of the run', 409);
       const run = await loadRun(projectId, runId);
       run.status = 'cancelled';
+      const saved = await store.write(projectId, run);
+      emit(saved);
+      return saved;
+    },
+
+    /**
+     * Take a finished run's checkout away and leave its branch.
+     *
+     * The checkout is tidiness, the branch is the work: a person merges it
+     * themselves, so nothing here touches a branch. An in-flight run is refused
+     * because it is still writing into that checkout — and because `waiting` may
+     * still be answered, which would start a fresh attempt in a directory this
+     * call had just removed.
+     */
+    releaseSandbox: async ({ projectId, projectPath, runId }) => {
+      const run = await loadRun(projectId, runId);
+      if (run.status === 'running' || run.status === 'waiting') {
+        throw new WorkflowError('conflict', `run ${runId} is still running`, 409);
+      }
+      // A run that never took a checkout — a `working-tree` run, or one that
+      // stopped before its first step — has nothing to release. Answering it as
+      // it stands keeps `worktreeReleasedAt` meaning "a checkout was removed".
+      if (run.sandbox !== 'worktree' || !run.worktreeBranch || run.worktreeReleasedAt) return run;
+      const { removed } = await releaseRunSandbox({ run, projectPath, git: worktrees });
+      if (!removed) return run;
+      run.worktreeReleasedAt = now();
       const saved = await store.write(projectId, run);
       emit(saved);
       return saved;

@@ -1324,6 +1324,7 @@ export const dict: Record<I18nKey, string> = {
   'workflows.step.confirmNotDone': '완료 안 됨',
   'workflows.step.skip': '이 단계 건너뛰기',
   'workflows.step.cancelRun': '실행 중지',
+  'workflows.step.releaseWorktree': '워크트리 해제',
   'workflows.step.attempts': '시도',
   'workflows.step.checkpoint': '체크포인트',
   'workflows.step.verifier': '검사',

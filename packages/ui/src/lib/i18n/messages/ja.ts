@@ -1320,6 +1320,7 @@ export const dict: Record<I18nKey, string> = {
   'workflows.step.confirmNotDone': '未完了',
   'workflows.step.skip': 'このステップをスキップ',
   'workflows.step.cancelRun': '実行を停止',
+  'workflows.step.releaseWorktree': 'ワークツリーを解放',
   'workflows.step.attempts': '試行回数',
   'workflows.step.checkpoint': 'チェックポイント',
   'workflows.step.verifier': 'チェック',

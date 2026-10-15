@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { confirmWorkflowStep, createWorkflowRun, fetchWorkflowRun, fetchWorkflowRuns, WorkflowRequestError } from './workflowsApi';
+import { confirmWorkflowStep, createWorkflowRun, fetchWorkflowRun, fetchWorkflowRuns, releaseWorkflowSandbox, WorkflowRequestError } from './workflowsApi';
 
 const originalFetch = globalThis.fetch;
 let calls: Array<{ url: string; init: RequestInit }> = [];
@@ -61,6 +61,22 @@ describe('createWorkflowRun', () => {
     expect(calls[0].url).toContain('/api/workflows/runs');
     expect(calls[0].init.method).toBe('POST');
     expect(JSON.parse(String(calls[0].init.body))).toEqual({ workflowId: 'a', inputs: { request: 'x' } });
+  });
+});
+
+describe('releaseWorkflowSandbox', () => {
+  it('posts to the release action and reads the run out of the envelope', async () => {
+    responses = [{ status: 200, body: { run: { runId: 'r1', worktreeReleasedAt: 42 } } }];
+    const run = await releaseWorkflowSandbox('/Users/me/project', 'r1');
+    expect(calls[0].url).toContain('/api/workflows/runs/r1/sandbox/release');
+    expect(calls[0].init.method).toBe('POST');
+    expect(headersOf(0).get('x-opencode-directory')).toBe('/Users/me/project');
+    expect(run).toMatchObject({ runId: 'r1', worktreeReleasedAt: 42 });
+  });
+
+  it('carries the server refusal, so a screen can show it', async () => {
+    responses = [{ status: 409, body: { error: 'run r1 is still running' } }];
+    await expect(releaseWorkflowSandbox('/Users/me/project', 'r1')).rejects.toMatchObject({ status: 409, message: 'run r1 is still running' });
   });
 });
 
