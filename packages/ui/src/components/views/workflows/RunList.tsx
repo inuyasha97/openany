@@ -7,7 +7,9 @@
  *
  * A definition may declare inputs, and the create route rejects a missing
  * required one; the start dialog collects them before the run exists, and a
- * definition with no inputs starts on one click.
+ * definition with no inputs starts on one click. A failure shows inside the
+ * dialog that asked for the action, so it is never hidden behind the overlay;
+ * the list banner carries a failure that happened with no dialog open.
  */
 import { useState } from 'react';
 
@@ -45,8 +47,21 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
   const missingRequired = startFor
     ? startFor.inputs.some((input) => input.required && !(inputValues[input.name] ?? '').trim())
     : false;
+  const dialogOpen = startFor !== null || pendingDelete !== null;
 
-  const start = async (definition: WorkflowDefinitionSummary, inputs: Record<string, string>) => {
+  const closeStart = () => {
+    setStartFor(null);
+    setError(null);
+  };
+
+  const closeDelete = () => {
+    setPendingDelete(null);
+    setError(null);
+  };
+
+  // Resolves true when the run was created; on a failure the dialog stays open
+  // and the message renders inside it.
+  const start = async (definition: WorkflowDefinitionSummary, inputs: Record<string, string>): Promise<boolean> => {
     setBusy(true);
     setError(null);
     try {
@@ -54,14 +69,17 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
       setRun(project, run);
       onSelect(run.runId);
       setStartFor(null);
+      return true;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : t('workflows.error.actionFailed'));
+      return false;
     } finally {
       setBusy(false);
     }
   };
 
   const beginStart = (definition: WorkflowDefinitionSummary) => {
+    setError(null);
     if (definition.inputs.length === 0) {
       void start(definition, {});
       return;
@@ -70,14 +88,17 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
     setStartFor(definition);
   };
 
-  const remove = async (runId: string) => {
+  const remove = async (runId: string): Promise<boolean> => {
     setBusy(true);
     setError(null);
     try {
       await deleteWorkflowRun(project.path, runId);
       removeRun(project, runId);
+      setPendingDelete(null);
+      return true;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : t('workflows.error.actionFailed'));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -95,7 +116,7 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
           ))}
         </div>
       </div>
-      {error ? <div role="status" className="px-3 py-2 text-xs text-destructive">{error}</div> : null}
+      {error && !dialogOpen ? <div role="status" className="px-3 py-2 text-xs text-destructive">{error}</div> : null}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {runs.map((run) => {
           const status = describeRunStatus(run.status, t);
@@ -121,7 +142,10 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
                 disabled={busy || executing}
                 title={t('workflows.run.delete')}
                 aria-label={t('workflows.run.delete')}
-                onClick={() => setPendingDelete(run)}
+                onClick={() => {
+                  setError(null);
+                  setPendingDelete(run);
+                }}
               >
                 <Icon name="delete-bin" className="size-3.5" aria-hidden />
               </Button>
@@ -129,7 +153,7 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
           );
         })}
       </div>
-      <Dialog open={startFor !== null} onOpenChange={(open) => { if (!open) setStartFor(null); }}>
+      <Dialog open={startFor !== null} onOpenChange={(open) => { if (!open) closeStart(); }}>
         <DialogContent className="max-w-sm gap-5">
           <DialogHeader>
             <DialogTitle>{t('workflows.run.start')}</DialogTitle>
@@ -147,8 +171,9 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
               </label>
             ))}
           </div>
+          {error ? <div role="alert" className="text-xs text-destructive">{error}</div> : null}
           <DialogFooter>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setStartFor(null)}>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={closeStart}>
               {t('workflows.run.startCancel')}
             </Button>
             <Button
@@ -164,7 +189,7 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={pendingDelete !== null} onOpenChange={(open) => { if (!open) setPendingDelete(null); }}>
+      <Dialog open={pendingDelete !== null} onOpenChange={(open) => { if (!open) closeDelete(); }}>
         <DialogContent showCloseButton={false} className="max-w-sm gap-5">
           <DialogHeader>
             <DialogTitle>{t('workflows.run.delete')}</DialogTitle>
@@ -177,8 +202,9 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
               {t('workflows.run.deleteConfirm')}
             </DialogDescription>
           </DialogHeader>
+          {error ? <div role="alert" className="text-xs text-destructive">{error}</div> : null}
           <DialogFooter>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setPendingDelete(null)}>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={closeDelete}>
               {t('workflows.run.deleteCancel')}
             </Button>
             <Button
@@ -187,7 +213,7 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
               disabled={busy}
               onClick={() => {
                 if (!pendingDelete) return;
-                void remove(pendingDelete.runId).finally(() => setPendingDelete(null));
+                void remove(pendingDelete.runId);
               }}
             >
               {t('workflows.run.delete')}
