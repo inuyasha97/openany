@@ -55,7 +55,7 @@ export interface WorkflowAttempt {
   startedAt: number;
   endedAt: number | null;
   status: 'running' | 'completed' | 'failed' | 'blocked' | 'interrupted';
-  turn: null | { outcome?: string };
+  turn: string | { outcome: string } | null;
   verify: WorkflowVerifyResult | null;
   error: null | { code: string; message: string };
 }

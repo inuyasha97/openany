@@ -44,6 +44,7 @@ export const runVerifiers = async ({ step, directory, deps = {} }) => {
         stdout: '',
         stderr: error?.message ?? 'the command could not be started',
         timedOut: false,
+        truncated: false,
         durationMs: 0,
         ok: false,
       });
