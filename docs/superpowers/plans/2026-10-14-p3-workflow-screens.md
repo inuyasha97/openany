@@ -114,7 +114,7 @@ In the `lists definitions for a project directory` case, the fixture's `definiti
 
 - [ ] **Step 3: Create the wire types in the UI**
 
-Write `packages/ui/src/lib/workflowsApi.ts` with the type block from Task 1's Step 3 (the status unions, the run, step, attempt, checkpoint, verify and definition shapes), plus `steps: WorkflowStepDefinition[]` on `WorkflowDefinitionSummary`. No functions yet: Task 1 adds those to this same file, so do not write a client here and do not expect one to exist.
+Write `packages/ui/src/lib/workflowsApi.ts` with the type block from Task 1's Step 3 (the status unions, the run, step, attempt, verify and definition shapes), plus `steps: WorkflowStepDefinition[]` on `WorkflowDefinitionSummary`. No functions yet: Task 1 adds those to this same file, so do not write a client here and do not expect one to exist.
 
 - [ ] **Step 4: Run both suites**
 
@@ -300,13 +300,6 @@ export interface WorkflowVerifyResult {
   error?: string;
 }
 
-export interface WorkflowCheckpoint {
-  at: number;
-  commit: string;
-  clean: boolean;
-  artifacts: Array<{ path: string; size: number; sha256: string | null }>;
-}
-
 export interface WorkflowAttempt {
   index: number;
   sessionId: string | null;
@@ -323,7 +316,6 @@ export interface WorkflowStep {
   id: string;
   status: WorkflowStepStatus;
   attempts: WorkflowAttempt[];
-  checkpoint: WorkflowCheckpoint | null;
   note: string | null;
 }
 
@@ -506,7 +498,7 @@ const run = (overrides: Record<string, unknown> = {}) => ({
   cursor: 'spec',
   createdAt: 1,
   updatedAt: 1,
-  steps: [{ id: 'spec', status: 'pending', attempts: [], checkpoint: null, note: null }],
+  steps: [{ id: 'spec', status: 'pending', attempts: [], note: null }],
   ...overrides,
 });
 
@@ -964,7 +956,6 @@ In `packages/ui/src/lib/i18n/messages/en.ts`, add a `workflows` group in the sam
       skip: 'Skip this step',
       cancelRun: 'Stop the run',
       attempts: 'Attempts',
-      checkpoint: 'Checkpoint',
       verifier: 'Checks',
       truncated: 'output cut at 64 KiB',
       // The run list's delete confirmation; the dialog names the run and says
@@ -978,11 +969,8 @@ In `packages/ui/src/lib/i18n/messages/en.ts`, add a `workflows` group in the sam
       deleteCancel: 'Cancel',
       timeout: 'timed out',
       exit: 'exit {code}',
-      diffFailed: 'The diff could not be read',
       session: 'Session',
       openTranscript: 'Open the transcript',
-      diff: 'See the changes',
-      notMatching: 'This checkpoint no longer matches what is on disk.',
     },
     banner: {
       title: 'Step of a workflow run',
@@ -1446,7 +1434,7 @@ git commit -m "feat(workflows): describe statuses and render the run timeline"
 
 **Interfaces:**
 - Consumes: Task 1's types, Task 5's `describeStepStatus`.
-- Produces: `<StepPane run step project />`, showing the block reason, the attempts with their sessions, the verifier results verbatim, and the checkpoint with its commit and artifacts.
+- Produces: `<StepPane run step project />`, showing the block reason, the attempts with their sessions, the verifier results verbatim, and each artifact with its digest.
 
 - [ ] **Step 1: Write the pane**
 
@@ -1454,8 +1442,8 @@ git commit -m "feat(workflows): describe statuses and render the run timeline"
 // packages/ui/src/components/views/workflows/StepPane.tsx
 /**
  * One step, shown as evidence: what the step is waiting for, what each attempt
- * ran in which session, what the verifiers actually printed, and what the
- * checkpoint recorded.
+ * ran in which session, what the verifiers actually printed, and the artifacts
+ * and command output it recorded.
  *
  * Nothing here summarizes a model's claim. The verifier block shows the command
  * that ran and its exit code and output, because a person deciding whether to
@@ -1488,23 +1476,6 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
           <p className="text-xs text-muted-foreground">{step.note}</p>
         ) : null}
       </div>
-
-      {step.checkpoint ? (
-        <section className="rounded border border-border p-2">
-          <h4 className="text-[11px] font-medium text-muted-foreground">{t('workflows.step.checkpoint')}</h4>
-          <p className="font-mono text-[11px]">{step.checkpoint.commit.slice(0, 12)}</p>
-          <ul className="mt-1 flex flex-col gap-0.5">
-            {step.checkpoint.artifacts.map((artifact) => (
-              <li key={artifact.path} className="truncate font-mono text-[11px] text-muted-foreground">
-                {artifact.path} {artifact.sha256 ? artifact.sha256.slice(0, 8) : ''}
-              </li>
-            ))}
-          </ul>
-          {/* The diff of one commit is rendered from the same data the changes
-              panel uses; do not write a second differ. */}
-          <CheckpointDiff directory={project.path} commit={step.checkpoint.commit} />
-        </section>
-      ) : null}
 
       <section className="flex flex-col gap-2">
         <h4 className="text-[11px] font-medium text-muted-foreground">{t('workflows.step.attempts')}</h4>
@@ -1543,6 +1514,7 @@ const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'
           <li key={`${artifact.glob}:${artifact.path ?? 'none'}`} className="flex items-center gap-2 text-[11px]">
             <span className={artifact.exists ? 'text-chart-2' : 'text-destructive'}>{artifact.exists ? '✓' : '✗'}</span>
             <span className="truncate font-mono">{artifact.path ?? artifact.glob}</span>
+            {artifact.sha256 ? <span className="ml-auto font-mono text-muted-foreground">{artifact.sha256.slice(0, 8)}</span> : null}
             {!artifact.exists ? <span className="text-muted-foreground">{t('workflows.step.verifier')}: {artifact.glob}</span> : null}
           </li>
         ))}
@@ -1566,56 +1538,15 @@ const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'
 };
 ```
 
-- [ ] **Step 2: Add the checkpoint diff, reusing the git routes**
+- [ ] **Step 2: ~~Add the step-diff block, reusing the git routes~~ — removed by P6**
 
-Add to the same file:
-
-```tsx
-/**
- * The diff of one checkpoint commit, read from the git routes the changes panel
- * already uses. This is why the checkpoint is a commit: the evidence a person
- * needs to confirm a step is the change itself, and it does not need a second
- * implementation of diffing.
- */
-const CheckpointDiff = ({ directory, commit }: { directory: string; commit: string }) => {
-  const { t } = useI18n();
-  const [files, setFiles] = useState<Array<{ path: string; insertions: number; deletions: number }> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    // A new commit (or a new translator identity) means the previous answer no
-    // longer describes what this block is about, so nothing stale may survive
-    // the refetch: an error from the last attempt would otherwise hide a
-    // successful one, and the old file list would sit under the new header.
-    setFiles(null);
-    setError(null);
-    void runtimeFetch(`/api/git/commit-files?directory=${encodeURIComponent(directory)}&hash=${encodeURIComponent(commit)}`, { directory })
-      .then((response) => (response.ok ? response.json() : response.json().catch(() => null).then((body: { error?: string } | null) => Promise.reject(new Error(body?.error ?? `${t('workflows.step.diffFailed')} (${response.status})`)))))
-      // `GET /api/git/commit-files` answers `{ files: [{ path, insertions, deletions, changeType }] }`
-      // (`lib/git/service.js:5640-5677`); the field is `insertions`, not `additions`.
-      .then((body: { files?: Array<{ path: string; insertions: number; deletions: number }> }) => { if (!cancelled) setFiles(body.files ?? []); })
-      .catch((failure: unknown) => { if (!cancelled) setError(failure instanceof Error ? failure.message : t('workflows.error.readFailed')); });
-    return () => { cancelled = true; };
-  }, [directory, commit, t]);
-
-  if (error) return <p className="mt-1 text-[11px] text-destructive">{error}</p>;
-  if (!files) return <p className="mt-1 text-[11px] text-muted-foreground">{t('workflows.empty.loading')}</p>;
-  return (
-    <ul className="mt-1 flex flex-col gap-0.5">
-      {files.map((file) => (
-        <li key={file.path} className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate">{file.path}</span>
-          <span className="text-chart-2">+{file.insertions}</span>
-          <span className="text-destructive">-{file.deletions}</span>
-        </li>
-      ))}
-    </ul>
-  );
-};
-```
-
-Read the exact query parameters and response shape of `GET /api/git/commit-files` in `packages/web/server/lib/git/routes.js:1336-1374` before writing the call, and match it. If the response is a bare array rather than `{ files }`, use the array; the point of this step is to read that route, not to guess it. For the full hunks themselves, open the changes panel's own diff view for the commit rather than embedding a reducer here: compare against how `packages/ui/src/components/views/walkthrough/WalkthroughHunkRun.tsx` renders a hunk and follow it.
+The pane used to render the diff of the commit the engine wrote for a confirmed
+step, read from the git routes the changes panel already uses. That commit does
+not exist any more: `docs/superpowers/plans/2026-10-15-p6-prompt-commits.md` made
+a step's commit the business of that step's own prompt, and the engine writes
+none. The pane shows the attempt's own record instead — each artifact with its
+digest, each command with its exit code and output — so there is nothing to add
+here. The step is kept as the record of what P3 built; do not re-add it.
 
 - [ ] **Step 3: Add the missing strings**
 
@@ -1991,11 +1922,11 @@ bun packages/web/server/index.js --port 4199
 Open the app on that port, add the fixture project, and, with the browser's own tooling (not jsdom):
 
 1. Open the workflows surface from the rail. Observed: the run created during the engine smoke is listed with its status, and a definition with a broken file shows its errors instead of vanishing from the list.
-2. Select the run. Observed: the step sequence renders with a label and an icon per step, the finished step carries its checkpoint commit and artifact hashes, and the waiting step carries its verifier result.
+2. Select the run. Observed: the step sequence renders with a label and an icon per step, the finished step carries its artifact paths and their digests, and the waiting step carries its verifier result. That drive predates P6, when the engine also wrote a commit for a confirmed step; it writes none now.
 3. Click "run this step" on the waiting step. Observed: the button disables while the turn runs, the step shows `running` with a spinner, and it returns to `waiting_confirm` when the turn ends.
 4. Click "run this step" twice quickly. Observed: one attempt appears, and the second click's message is the server's `this run is already executing a step`.
 5. Type a prompt and send it. Observed: a second attempt lands in the same session (the session id is unchanged) with the new prompt text shown.
-6. Confirm done. Observed: a new checkpoint commit appears for that step, and the next step becomes current. Check `git -C "$DIR" log --oneline` for the new subject.
+6. Confirm done. Observed: the step reads `done` and the next step becomes current. In that drive the confirm also wrote a commit for the step; the P6 pass removed it, so the step's own prompt is now the only thing that can put a commit in the log. Check `git -C "$DIR" log --oneline` for what that prompt asked for.
 7. Stop the server, reload the page, and reopen the surface while the server is down. Observed: the surface shows the read error, not "no runs yet". Start the server again and confirm the list recovers.
 8. Open the step's session in the chat. Observed: the workflow banner names the run and the step and offers the same confirm.
 9. Switch the app theme between light and dark with a step in each of the four tones on screen. Observed: each status stays legible in both.

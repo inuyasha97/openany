@@ -41,7 +41,7 @@ const run = (overrides: Record<string, unknown> = {}) => ({
   cursor: 'spec',
   createdAt: 1,
   updatedAt: 1,
-  steps: [{ id: 'spec', status: 'pending', attempts: [], checkpoint: null, note: null }],
+  steps: [{ id: 'spec', status: 'pending', attempts: [], note: null }],
   ...overrides,
 });
 
@@ -118,7 +118,7 @@ describe('load', () => {
 
     // Nothing was in flight when that frame arrived, so a later load's payload is
     // the newer truth and must win.
-    runsQueue.push(() => [run({ status: 'done', steps: [{ id: 'spec', status: 'done', attempts: [], checkpoint: null, note: null }] })]);
+    runsQueue.push(() => [run({ status: 'done', steps: [{ id: 'spec', status: 'done', attempts: [], note: null }] })]);
     definitionsQueue.push(() => []);
     await useWorkflowStore.getState().load(project, { force: true });
 
@@ -154,7 +154,7 @@ describe('load', () => {
     await loading;
 
     // Dropped with that load, so a later read's newer payload wins.
-    runsQueue.push(() => [run({ status: 'done', steps: [{ id: 'spec', status: 'done', attempts: [], checkpoint: null, note: null }] })]);
+    runsQueue.push(() => [run({ status: 'done', steps: [{ id: 'spec', status: 'done', attempts: [], note: null }] })]);
     definitionsQueue.push(() => []);
     await useWorkflowStore.getState().load(project, { force: true });
 

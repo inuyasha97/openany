@@ -1,5 +1,14 @@
 # Workflow engine (P1 + P2) Implementation Plan
 
+> **Superseded in part, 2026-10-15.** The checkpoint tasks of this plan — Task 5,
+> Task 8 (`git checkpoint`), and every mention of `checkpoints`,
+> `writeCheckpointFor` and `verifyCheckpoint` — were removed by
+> `docs/superpowers/plans/2026-10-15-p6-prompt-commits.md`. The engine writes no
+> git commit, a step becomes `done` only when a person confirms it, and a step's
+> work is committed only if that step's prompt asks the agent to commit it. This
+> document stays as the record of what was built then; do not re-implement the
+> checkpoint path from it. Its body is left as written.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Run a declared sequence of SDLC steps against a project from the server, with verifiable checkpoints, a person confirming each step, and a resume that rebuilds from evidence after a restart.

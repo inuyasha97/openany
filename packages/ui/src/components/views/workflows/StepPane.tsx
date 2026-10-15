@@ -1,18 +1,19 @@
 /**
  * One step, shown as evidence: what the step is waiting for, what each attempt
- * ran in which session, what the verifiers actually printed, and what the
- * checkpoint recorded.
+ * ran in which session, and what the verifiers recorded — each artifact with its
+ * digest, each command with its exit code and output. That record is the whole of
+ * what a `done` step leaves behind: whether its work was committed is decided by
+ * the step's own prompt, so the engine writes no commit to show here.
  *
  * Nothing here summarizes a model's claim. The verifier block shows the command
  * that ran and its exit code and output, because a person deciding whether to
  * confirm needs the evidence, not a sentence about it.
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/i18n';
-import { runtimeFetch } from '@/lib/runtime-fetch';
 import { cn } from '@/lib/utils';
 import {
   cancelWorkflowRun,
@@ -217,23 +218,6 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
         {step.note ? <p className="text-xs text-muted-foreground">{step.note}</p> : null}
       </div>
 
-      {step.checkpoint ? (
-        <section className="rounded border border-border p-2">
-          <h4 className="text-[11px] font-medium text-muted-foreground">{t('workflows.step.checkpoint')}</h4>
-          <p className="font-mono text-[11px]">{step.checkpoint.commit.slice(0, 12)}</p>
-          <ul className="mt-1 flex flex-col gap-0.5">
-            {step.checkpoint.artifacts.map((artifact) => (
-              <li key={artifact.path} className="truncate font-mono text-[11px] text-muted-foreground">
-                {artifact.path} {artifact.sha256 ? artifact.sha256.slice(0, 8) : ''}
-              </li>
-            ))}
-          </ul>
-          {/* The diff of one commit is rendered from the same data the changes
-              panel uses; do not write a second differ. */}
-          <CheckpointDiff directory={project.path} commit={step.checkpoint.commit} />
-        </section>
-      ) : null}
-
       <section className="flex flex-col gap-2">
         <h4 className="text-[11px] font-medium text-muted-foreground">{t('workflows.step.attempts')}</h4>
         {step.attempts.length === 0 ? (
@@ -263,9 +247,9 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
 
 const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'][number]['verify']> }) => {
   const { t } = useI18n();
-  // A step may declare no checks at all (`confirm: human` with no verifier), and
-  // the engine records an empty verdict for it. A heading over an empty list
-  // reads as a bug, so the block simply is not there.
+  // A step may declare no checks at all, and the engine records an empty verdict
+  // for it. A heading over an empty list reads as a bug, so the block simply is
+  // not there.
   if (!verify.error && verify.artifacts.length === 0 && verify.commands.length === 0) return null;
   return (
     <div className="mt-2 border-t border-border pt-2">
@@ -276,6 +260,11 @@ const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'
           <li key={`${artifact.glob}:${artifact.path ?? 'none'}`} className="flex items-center gap-2 text-[11px]">
             <span className={artifact.exists ? 'text-chart-2' : 'text-destructive'}>{artifact.exists ? '✓' : '✗'}</span>
             <span className="truncate font-mono">{artifact.path ?? artifact.glob}</span>
+            {artifact.sha256 ? (
+              // The digest is the record a restart re-checks, so the pane shows
+              // it beside the path rather than only in the run file.
+              <span className="ml-auto font-mono text-muted-foreground">{artifact.sha256.slice(0, 8)}</span>
+            ) : null}
             {!artifact.exists ? (
               <span className="text-muted-foreground">
                 {t('workflows.step.verifier')}: {artifact.glob}
@@ -309,69 +298,5 @@ const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'
         ))}
       </ul>
     </div>
-  );
-};
-
-/**
- * The diff of one checkpoint commit, read from the git routes the changes panel
- * already uses. This is why the checkpoint is a commit: the evidence a person
- * needs to confirm a step is the change itself, and it does not need a second
- * implementation of diffing.
- *
- * `GET /api/git/commit-files` takes `directory` and `hash` and answers
- * `{ files: [{ path, insertions, deletions, isBinary, changeType }] }`.
- */
-const CheckpointDiff = ({ directory, commit }: { directory: string; commit: string }) => {
-  const { t } = useI18n();
-  const [files, setFiles] = useState<Array<{ path: string; insertions: number; deletions: number }> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    // A new commit (or a new translator identity) means the previous answer no
-    // longer describes what this block is about, so nothing stale may survive
-    // the refetch: an error from the last attempt would otherwise hide a
-    // successful one, and the old file list would sit under the new header.
-    setFiles(null);
-    setError(null);
-    void runtimeFetch(
-      `/api/git/commit-files?directory=${encodeURIComponent(directory)}&hash=${encodeURIComponent(commit)}`,
-      { directory },
-    )
-      .then((response) =>
-        response.ok
-          ? response.json()
-          : response
-              .json()
-              .catch(() => null)
-              .then((body: { error?: string } | null) =>
-                Promise.reject(new Error(body?.error ?? `${t('workflows.step.diffFailed')} (${response.status})`)),
-              ),
-      )
-      // `GET /api/git/commit-files` answers `{ files: [{ path, insertions, deletions, changeType }] }`
-      // (`lib/git/service.js:5640-5677`); the field is `insertions`, not `additions`.
-      .then((body: { files?: Array<{ path: string; insertions: number; deletions: number }> }) => {
-        if (!cancelled) setFiles(body.files ?? []);
-      })
-      .catch((failure: unknown) => {
-        if (!cancelled) setError(failure instanceof Error ? failure.message : t('workflows.error.readFailed'));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [directory, commit, t]);
-
-  if (error) return <p className="mt-1 text-[11px] text-destructive">{error}</p>;
-  if (!files) return <p className="mt-1 text-[11px] text-muted-foreground">{t('workflows.empty.loading')}</p>;
-  return (
-    <ul className="mt-1 flex flex-col gap-0.5">
-      {files.map((file) => (
-        <li key={file.path} className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate">{file.path}</span>
-          <span className="text-chart-2">+{file.insertions}</span>
-          <span className="text-destructive">-{file.deletions}</span>
-        </li>
-      ))}
-    </ul>
   );
 };

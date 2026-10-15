@@ -47,13 +47,6 @@ export interface WorkflowVerifyResult {
   error?: string;
 }
 
-export interface WorkflowCheckpoint {
-  at: number;
-  commit: string;
-  clean: boolean;
-  artifacts: Array<{ path: string; size: number; sha256: string | null }>;
-}
-
 export interface WorkflowAttempt {
   index: number;
   sessionId: string | null;
@@ -70,7 +63,6 @@ export interface WorkflowStep {
   id: string;
   status: WorkflowStepStatus;
   attempts: WorkflowAttempt[];
-  checkpoint: WorkflowCheckpoint | null;
   note: string | null;
 }
 

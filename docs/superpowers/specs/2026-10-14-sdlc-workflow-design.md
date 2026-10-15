@@ -5,11 +5,10 @@ Status: approved design, 2026-10-14. Owner: maintainer.
 ## Context
 
 The ask: a group of screens for the steps of an SDLC process, able to run several
-steps as one workflow, with clear checkpoints, resumable after a stop or a
-restart, and a screen that shows the workflow.
+steps as one workflow, with each step's evidence recorded and checkable,
+resumable after a stop or a restart, and a screen that shows the workflow.
 
-Nothing of the kind exists in this tree. The token `checkpoint` has no match in
-`packages/ui/src` or `packages/web/server`. The plan documents under
+Nothing of the kind exists in this tree. The plan documents under
 `docs/superpowers/plans/` are prose written for an agent to read, and the only
 markdown plan parser in the repo takes the first heading and treats the rest as
 a body (`packages/ui/src/lib/projectContextApi.ts:83`,
@@ -38,8 +37,9 @@ Four properties of OMP shape the design. They are facts about the runtime, not
 choices open to this work:
 
 1. No revert and no per-turn diff (`packages/ui/src/lib/agent/omp-runtime.ts:47-88`).
-   A checkpoint cannot be an internal snapshot of the agent, so it has to be a
-   git commit, a copied artifact, or both.
+   OMP hands back no snapshot of a step, so a step's evidence has to be what is on
+   disk: artifacts with their digests, and the exit code and output of each
+   command. The engine verifies instead of snapshotting.
 2. Subagents are invisible. `isSubagentTool("task")` is false
    (`packages/ui/src/lib/opencode/tools.ts:36,269`) and the adapter skips
    depth-2 transcripts (`packages/omp-adapter/src/session-store.ts:114-117`).
@@ -68,8 +68,9 @@ choices open to this work:
 
 - Run a declared sequence of steps against one project, driven from the UI, one
   step at a time or continuously until the next stop.
-- Make each step's evidence checkable: artifacts on disk, command exit codes, a
-  git commit, and the transcript of the attempt that produced it.
+- Make each step's evidence checkable: artifacts on disk with their digests,
+  command exit codes and output, and the transcript of the attempt that produced
+  it.
 - Resume after a server restart by rebuilding from evidence, and mark anything
   uncertain as interrupted rather than assuming it finished.
 - Show the workflow and its live state on one screen, with the decisions a
@@ -85,8 +86,8 @@ choices open to this work:
   machine that produced them.
 - Replacing or merging session goals, scheduled tasks, multi-run, or auto
   review. This work borrows their building blocks and changes none of them.
-- Confirming a step on a person's behalf. A workflow that needs nobody declares
-  `confirm: auto` with a verifier.
+- Confirming a step on a person's behalf. Every step stops for a person, and
+  that is the point: there is no unattended run.
 - A definition editor in the first phases. Definitions are YAML files, with a
   template to copy.
 - Merging a worktree automatically. The merge is a step someone runs.
@@ -139,7 +140,6 @@ steps:
       artifacts:
         - glob: "docs/superpowers/specs/*-design.md"
           hash: true
-    confirm: human          # human (default) | auto
 
   - id: plan
     title: Write the implementation plan
@@ -147,7 +147,6 @@ steps:
     session: reuse
     verify:
       artifacts: ["docs/superpowers/plans/*.md"]
-    confirm: human
 
   - id: verify
     title: Verify the branch
@@ -155,7 +154,6 @@ steps:
     session: reuse
     verify:
       commands: [{ run: "bun run type-check:web", expectExit: 0 }]
-    confirm: auto
 ```
 
 Field notes:
@@ -169,21 +167,27 @@ Field notes:
   request appears in the existing permission dock for that session and the step
   reports `blocked` until it is answered. `permissions: auto` enrolls the session
   the way scheduled tasks do
-  (`packages/web/server/lib/scheduled-tasks/runtime.js:600-606`), and is for a
-  step someone has decided to leave unattended.
+  (`packages/web/server/lib/scheduled-tasks/runtime.js:600-606`), and accepts
+  that step's tools without asking. It does not make the step unattended: the
+  step still stops for a person before it can be `done`.
 - `verify.artifacts` takes a glob string, or an object with `glob` and `hash`.
   `hash: true` records the size and sha256 of each match and re-checks it on
-  resume, which suits an artifact that should not change once approved, such as a
-  spec or a plan. A plain string checks existence only, which suits a file the
-  step regenerates.
+  resume — the check reads the file, never a commit — which suits an artifact
+  that should not change once approved, such as a spec or a plan. A plain string
+  checks existence only, which suits a file the step regenerates.
 - `verify.commands` runs in the run's directory with a timeout and passes on the
   expected exit code. Its `stdout` and `stderr` are stored on the attempt, so a
   screen shows what ran instead of what a model said about it.
-- `confirm: auto` without a verifier is rejected when the definition loads. A
-  step that advances on its own with nothing to check is a guess.
+- `prompt` is the only place that can ask for a commit: **a step's work is
+  committed only if that step's prompt asks the agent to commit it.** The engine
+  never commits, stages or adds, in either sandbox mode, so nothing else in the
+  definition can put a person's uncommitted work into a commit.
+- `confirm` is gone from the schema. A definition that still declares it is a
+  load error whose message says why: a step becomes `done` only when a person
+  confirms it, and no verifier result can do that on their behalf.
 
-Run state holds four things: the run, its steps, the attempts inside each step,
-and the checkpoint a confirmation writes.
+Run state holds three things: the run, its steps, and the attempts inside each
+step.
 
 Step states: `pending`, `running`, `waiting_confirm`, `needs_work`, `done`,
 `failed`, `skipped`, `blocked`, `interrupted`.
@@ -199,34 +203,36 @@ Transitions:
 1. The engine creates or adopts the session, sends the prompt, and waits for the
    turn to end (busy to idle).
 2. The engine runs the step's verifiers and records each result on the attempt.
-3. `confirm: auto` with every verifier passed: the step becomes `done` and the
-   engine writes its checkpoint.
-4. `confirm: human`: the step becomes `waiting_confirm` and the screen offers
-   four actions.
-   - Confirm done. The engine writes the checkpoint, records the step as `done`,
-     and the run moves on.
+3. With the verifiers recorded, the step becomes `waiting_confirm` and the screen
+   offers four actions. Every step reaches this point and stops here: no verifier
+   result advances a step on its own.
+   - Confirm done. The step is recorded as `done` and the run moves on. The engine
+     writes no commit; if the step's prompt asked the agent to commit, that commit
+     is already in the repository, and if it did not, the step's work stays
+     uncommitted exactly as the agent left it.
    - Send another prompt. A new attempt starts in the same session and the step
      returns to `running`.
    - Skip the step. It is recorded as `skipped` with a reason and does not run
      again in this run.
    - Stop the run.
-5. A verifier that fails, or "not done" with no further prompt, puts the step in
+4. A verifier that fails, or "not done" with no further prompt, puts the step in
    `needs_work` with the failure recorded. `needs_work` and `waiting_confirm`
    are both stops.
-6. A turn error, or a prompt the runtime refused, fails the attempt. When the
+5. A turn error, or a prompt the runtime refused, fails the attempt. When the
    runtime answers that it did not take the prompt (`promptSession` returning
    anything but `true`), nothing is recorded as sent, following
    `packages/web/server/lib/scheduled-tasks/runtime.js:519-527`.
-7. A tool approval waiting, a provider that refused the model, or a session
+6. A tool approval waiting, a provider that refused the model, or a session
    whose directory is not the run's puts the step in `blocked` with the reason
    on the attempt. The run does not advance, and nothing is recorded as a failed
    step. Answering the approval in the session's permission dock, or picking a
    model that works, clears the block.
 
 Consequence to keep in view: "run the whole workflow" runs until the first stop.
-A `confirm: human` step stops it on purpose, and so does a `blocked` step that
-needs a person. An unattended run needs every step to declare `confirm: auto`
-with a verifier, `permissions: auto`, and a model that answers.
+Every step stops for a person on purpose — that is the point, not a gap — and so
+does a `blocked` step that needs a person. An unattended run is not possible, and
+is not wanted: a person confirms each step, and whether the step's work is
+committed is decided by the step's own prompt.
 
 ## Components
 
@@ -261,7 +267,7 @@ with a verifier, `permissions: auto`, and a model that answers.
 - `stores/useWorkflowStore.ts` caches runs per project and applies stream
   updates.
 - `components/views/workflows/` holds the run list, run detail, step timeline,
-  step pane, checkpoint view and definition diagram.
+  step pane and definition diagram.
 - `lib/surfaces/registry.ts`, `lib/surfaces/modes.ts` and
   `components/layout/ContextPanel.tsx` gain the `workflows` screen.
 - New text goes into all 13 locales under `packages/ui/src/lib/i18n/messages/`:
@@ -278,20 +284,20 @@ with a verifier, `permissions: auto`, and a model that answers.
 4. The engine writes the attempt and the step state to the run file and
    broadcasts an `openchamber:workflow` frame.
 5. The screen applies the frame to the store and renders the new step state.
-6. On confirmation, the engine writes the checkpoint (artifacts plus a git commit
-   whose message carries `[run=<runId> step=<id> attempt=<n>]`), marks the step
-   done, and broadcasts again.
+6. On confirmation, the engine records the step `done` and broadcasts again. It
+   writes nothing to git: whether the step's work is committed was already decided
+   by that step's prompt, and the engine records only what its verifiers saw.
 
 ## Storage and resume
 
 Two kinds of data, kept apart on purpose.
 
-Artifacts and commits are the record. They live in the repository and in git,
-and read fine without this feature. The commit message carries the run id and
-the step id, so git history is the checkpoint chain. A checkpoint records the
-commit holding the step's changes, and the verified artifacts with their hashes.
-When the working tree is already clean the engine records the current HEAD rather
-than creating an empty commit.
+Artifacts are the record. They live in the repository and read fine without this
+feature. What a step leaves behind as evidence is the verification record on its
+attempt: each artifact with its digest, and each command with its exit code and
+output. There is no commit in it. A step's work is committed only if that step's
+prompt asked the agent to commit it, so a run's git history is whatever the
+prompts asked for — the engine never writes, stages or adds anything.
 
 Run state is an index, local to the machine, at
 `<projectsDir>/<projectConfigFileStemOf(projectId)>/workflow-runs/<runId>.json`, the same projects
@@ -304,9 +310,10 @@ and rebuilds from evidence instead of trusting the file:
 
 - A step that was `running` when the server died becomes `interrupted`. The
   engine does not assume the turn finished.
-- Every recorded checkpoint is re-checked: the commit exists, and the hashed
-  artifacts still match. A mismatch shows on the screen and blocks that step
-  from advancing.
+- The last settled attempt's recorded artifacts are re-checked: a missing file is
+  a mismatch, and a changed file is one only when a digest was recorded. A
+  mismatch shows on the screen and blocks that step from advancing. No commit is
+  involved in the check.
 - The step's session is looked up in `host.listSessions()`. A busy session is
   reattached and watched. An idle session means the last turn ended, so the
   verifiers and the person decide what that means.
@@ -317,7 +324,7 @@ and rebuilds from evidence instead of trusting the file:
 GET    /api/workflows/definitions                    definitions with validation errors
 GET    /api/workflows/runs                           runs for the project
 POST   /api/workflows/runs                           create a run with its input values (does not start it)
-GET    /api/workflows/runs/:runId                    full state: steps, attempts, checkpoints
+GET    /api/workflows/runs/:runId                    full state: steps and their attempts
 POST   /api/workflows/runs/:runId/run                run until the next stop
 POST   /api/workflows/runs/:runId/cancel
 DELETE /api/workflows/runs/:runId                    the run file only; commits, artifacts and sessions stay
@@ -353,8 +360,10 @@ no workflow yet, with an empty state that points at the definition directory; a
   not from a diagram renderer, because live status changes on every frame and
   re-rendering a full SVG each time is wasted work.
 - Step pane: the attempts, each linked to its session transcript; the verifier
-  results with real command output; the checkpoint with commit, artifacts,
-  hashes and diff; the prompt box for "prompt tiếp"; and the four actions.
+  results with real command output, each artifact with its digest and each
+  command with its exit code and output; the prompt box for "prompt tiếp"; and
+  the four actions. A `done` step shows that record — its evidence is what was
+  verified, and it holds no commit.
 - Definition diagram: a separate read-only tab that draws the declared workflow
   with `beautiful-mermaid`, already a dependency. It describes structure, not
   live state.
@@ -383,8 +392,8 @@ until someone asks for it.
 
 ### P2: resume
 
-- Boot reconciliation, interrupted steps, checkpoint re-verification against git
-  and artifact hashes, session reattachment.
+- Boot reconciliation, interrupted steps, re-verification of a settled step's
+  recorded artifacts, session reattachment.
 - Validation: tests with a fake host and a temporary repository, plus killing the
   server mid-turn and restarting it.
 
@@ -409,10 +418,11 @@ until someone asks for it.
 
 ## Testing strategy
 
-- Server tests cover the transitions that can go wrong: auto with a passing
-  verifier, auto with no verifier rejected at load, the human stop, a continue
-  prompt in the same session, a refused prompt, an interrupted step, a checkpoint
-  whose hash no longer matches, and one run per project. Verifiers are tested
+- Server tests cover the transitions that can go wrong: a verifier that passes and
+  a step that still waits for a person, a definition that still declares `confirm`
+  rejected at load, the human stop, a continue prompt in the same session, a
+  refused prompt, an interrupted step, a recorded artifact whose hash no longer
+  matches, and one run per project. Verifiers are tested
   against temporary directories: hashing, glob matching, timeout, expected exit
   code.
 - The engine takes its host as an argument, so a test drives the whole loop with
@@ -420,10 +430,10 @@ until someone asks for it.
 - UI tests cover the state derivation the screens depend on, not render output.
   Click paths are covered by the browser smoke below.
 - Required before this is called working: a two-step fixture definition on a
-  scratch repository, run against the real `omp` binary. Step one advances on its
-  own with a verifier over a temporary file; step two waits for a person.
+  scratch repository, run against the real `omp` binary. Step one ends with its
+  verification record and waits for a person, exactly as step two does.
   Observed end to end: create, run, verifier pass, stop at the gate, continue
-  prompt, confirm, checkpoint commit present.
+  prompt, confirm, and no commit written by the engine.
 - Static checks prove nothing here. The routes, the session behavior and the
   resume path are exercised on a running server.
 
@@ -452,8 +462,9 @@ until someone asks for it.
   chat sidebar.
 - In worktree mode, is the final merge a step in the YAML or a built-in action on
   the run? Leaning to a step, so the definition says what happens.
-- Do checkpoint commits land on the run's branch only (worktree mode) or on the
-  current branch (working tree mode), and should they be tagged?
+- When a step's prompt tells the agent to commit, does that commit belong on the
+  run's own branch in `worktree` mode before the merge back, and should it be
+  tagged so the run reads as a chain?
 - Should `session: reuse` become the default for consecutive steps, since it
   saves context?
 - How much of the run list belongs in the sidebar next to sessions, and how much

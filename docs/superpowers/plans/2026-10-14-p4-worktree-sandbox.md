@@ -31,7 +31,7 @@
 3. A definition that says `worktree` on a project with uncommitted changes must not move or lose those changes. Owner: Task 2.
 4. Measured cost: a worktree that needs a fresh dependency install is slow, and the default ships only with a number attached. Owner: Task 4.
 5. A step's session is created with the worktree as its `cwd`, which is what makes the isolation real — and it means the chat banner, which resolves a project from the session's directory, will not find the run for a `worktree` step. That is the same class as the open banner item plan 2 handed over; record it in Task 4's evidence rather than papering over it here. Owner: Task 4.
-6. The mirror of focus 3 for `working-tree`: because the checkpoint commit stages everything dirty, a run in that mode commits the person's own uncommitted and untracked files too, on their checked-out branch, and afterwards `git status` reads clean — so nothing tells them their work was committed under the run's message. Record both consequences in Task 4's evidence, and note that refusing or warning on a dirty checkout is an open decision for the maintainer (not implemented). Owner: Task 4.
+6. The mirror of focus 3 for `working-tree`: a run in that mode executes inside the person's own checkout, so a step whose prompt asks the agent to commit can carry that person's uncommitted and untracked files into its commit, on the branch they have checked out, and afterwards `git status` reads clean — so nothing tells them what happened. Record both consequences in Task 4's evidence, and note that refusing or warning on a dirty checkout is an open decision for the maintainer (not implemented). The engine itself no longer stages or commits anything — that removal is `docs/superpowers/plans/2026-10-15-p6-prompt-commits.md` — so what is left of this risk is the prompt's doing, not the engine's. Owner: Task 4.
 
 ---
 
@@ -202,7 +202,7 @@ Expected: FAIL, `Failed to resolve import "./sandbox.js"`.
  * The sandbox a run executes in.
  *
  * `worktree` mode gives every run its own checkout and branch, so its steps
- * cannot touch the project working tree and a checkpoint commit lands somewhere
+ * cannot touch the project working tree and whatever they commit lands somewhere
  * reviewable. The branch outlives the worktree: removing the worktree is tidy-up,
  * the merge is a person's decision.
  *
@@ -309,7 +309,7 @@ In `engine.js`, in `attemptStep`, after `const step = assertStepIsOpen(findStep(
     }
 ```
 
-Then make `run.directory` the single place the execution path is read. The `projectPath` argument is the project the run was created from, and it stops being where the run executes the moment a worktree exists. Three call sites move: `createSession({ cwd: run.directory })` (`:151`), `setAutoAccept(sessionId, true, run.directory)` (`:162`), and `runPromptInSession`'s `projectPath` parameter, which exists only for auto-accept (`:185`) — drop the parameter from `runPromptInSession` and from its two callers (`:169`, `:357`) and read `run.directory` inside. Verifiers and checkpoints already read `run.directory` (`:244`, `:264`, `:369`), so no other line moves.
+Then make `run.directory` the single place the execution path is read. The `projectPath` argument is the project the run was created from, and it stops being where the run executes the moment a worktree exists. Three call sites move: `createSession({ cwd: run.directory })` (`:151`), `setAutoAccept(sessionId, true, run.directory)` (`:162`), and `runPromptInSession`'s `projectPath` parameter, which exists only for auto-accept (`:185`) — drop the parameter from `runPromptInSession` and from its two callers (`:169`, `:357`) and read `run.directory` inside. Verifiers read `run.directory`, so no other line moves.
 
 `worktrees` is a new engine dependency, injected by `runtime.js` as a lazy loader so the 6000-line git service is not imported at server boot:
 
@@ -407,7 +407,7 @@ Record the wall-clock time of `git worktree add` (three runs, report the range),
 
 - [ ] **Step 2: Drive both modes on a real server**
 
-With the fixture project: one run whose definition says `worktree` and one whose definition says `working-tree`. Observed for each: the run's `directory` (the worktree path, or the project path), that a checkpoint commit lands on the run's branch in worktree mode and on the checked-out branch in working-tree mode, and that the project's working tree is untouched while the worktree run is in flight (`git status` clean apart from the person's own changes).
+With the fixture project: one run whose definition says `worktree` and one whose definition says `working-tree`. Observed for each: the run's `directory` (the worktree path, or the project path), that a commit lands for a step whose prompt asks for one — on the run's branch in worktree mode, on the checked-out branch in working-tree mode — and that the project's working tree is untouched while the worktree run is in flight (`git status` clean apart from the person's own changes). That step was driven while the engine still wrote a commit of its own when a person confirmed; `docs/superpowers/plans/2026-10-15-p6-prompt-commits.md` removed that, and Task 4 of that plan is what drives the commit a step's own prompt asks for.
 
 - [ ] **Step 3: Report and commit**
 
