@@ -33,7 +33,7 @@ interface WorkflowEntry {
 
 export interface WorkflowStoreState {
   entries: Record<string, WorkflowEntry>;
-  /** Frames that arrived while a load was in flight, re-applied when that load resolves. */
+  /** Frames that arrived while a load was in flight: re-applied by a load that succeeds, dropped when one fails. */
   pendingFrames: Record<string, Record<string, WorkflowRunFrame>>;
   getEntry: (project: { id: string } | null | undefined) => WorkflowEntry;
   load: (project: { id: string; path: string }, options?: { force?: boolean }) => Promise<void>;
@@ -71,8 +71,9 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
         fetchWorkflowDefinitions(project.path),
       ]);
       set((state) => {
-        // A frame that arrived for a run this load had not read yet is newer than
-        // the read, so the read is patched with it rather than replacing it.
+        // A frame that arrived while this load was in flight is newer than the
+        // read, so the read is patched with it. A framed run the read omitted is
+        // not merged in; the next successful read returns it.
         const frames = state.pendingFrames[project.id] ?? {};
         const patched = runs.map((run) => (frames[run.runId] ? patchRun(run, frames[run.runId]) : run));
         const { [project.id]: _dropped, ...pendingFrames } = state.pendingFrames;
@@ -83,8 +84,11 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
       });
     } catch (error) {
       set((state) => {
+        // The frames remembered for this load belonged to it, so a failed load
+        // must not hand them to a later one.
+        const { [project.id]: _dropped, ...pendingFrames } = state.pendingFrames;
         const entry = state.entries[project.id] ?? EMPTY;
-        return { entries: { ...state.entries, [project.id]: { ...entry, loading: false, error: error instanceof Error ? error.message : 'The workflow runs could not be read' } } };
+        return { pendingFrames, entries: { ...state.entries, [project.id]: { ...entry, loading: false, error: error instanceof Error ? error.message : 'The workflow runs could not be read' } } };
       });
     }
   },

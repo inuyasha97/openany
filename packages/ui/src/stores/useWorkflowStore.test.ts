@@ -106,6 +106,42 @@ describe('load', () => {
 
     expect(useWorkflowStore.getState().getEntry(project).runs[0].status).toBe('done');
   });
+
+  it('patches the cache from a frame that arrives while idle', async () => {
+    runsQueue.push(() => [run()]);
+    definitionsQueue.push(() => []);
+    await useWorkflowStore.getState().load(project);
+
+    useWorkflowStore.getState().applyRunFrame({ runId: 'r1', projectId: 'path_proj', status: 'waiting', cursor: 'spec', steps: [{ id: 'spec', status: 'waiting_confirm' }] });
+
+    // No read asked for: the frame alone must move what the screen shows.
+    const entry = useWorkflowStore.getState().getEntry(project);
+    expect(entry.runs[0].status).toBe('waiting');
+    expect(entry.runs[0].steps[0].status).toBe('waiting_confirm');
+  });
+
+  it('drops a frame remembered by a load that fails', async () => {
+    runsQueue.push(() => [run()]);
+    definitionsQueue.push(() => []);
+    await useWorkflowStore.getState().load(project);
+
+    const { promise: failing, reject } = Promise.withResolvers<unknown>();
+    runsQueue.push(() => failing);
+    definitionsQueue.push(() => []);
+    const loading = useWorkflowStore.getState().load(project, { force: true });
+
+    // Remembered while that load is in flight, then the load fails.
+    useWorkflowStore.getState().applyRunFrame({ runId: 'r1', projectId: 'path_proj', status: 'waiting', cursor: 'spec', steps: [{ id: 'spec', status: 'waiting_confirm' }] });
+    reject(new Error('the server went away'));
+    await loading;
+
+    // Dropped with that load, so a later read's newer payload wins.
+    runsQueue.push(() => [run({ status: 'done', steps: [{ id: 'spec', status: 'done', attempts: [], checkpoint: null, note: null }] })]);
+    definitionsQueue.push(() => []);
+    await useWorkflowStore.getState().load(project, { force: true });
+
+    expect(useWorkflowStore.getState().getEntry(project).runs[0].status).toBe('done');
+  });
 });
 
 describe('applyRunFrame', () => {
