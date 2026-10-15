@@ -1176,6 +1176,7 @@ Expected: FAIL, `Failed to resolve import "./status"`.
  * theme tokens, so light and dark are both legible.
  */
 import type { IconName } from '@/components/icon/icons';
+import type { I18nKey, I18nParams } from '@/lib/i18n';
 import type { WorkflowRunStatus, WorkflowStepStatus } from '@/lib/workflowsApi';
 
 export type StatusTone = 'neutral' | 'active' | 'attention' | 'danger' | 'done';
@@ -1188,7 +1189,9 @@ export interface DescribedStatus {
   icon: IconName;
 }
 
-type Translate = (key: string) => string;
+// The translator's real contract: `useI18n().t` takes an `I18nKey`, so a
+// `(key: string) => string` signature would reject it under `strict`.
+type Translate = (key: I18nKey, params?: I18nParams) => string;
 
 // Only tokens the design system defines: this theme has no `success` or
 // `warning` colour, and a raw Tailwind palette class would silently do nothing.
