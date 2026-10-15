@@ -20,17 +20,23 @@ export interface WorkflowsViewProps {
 
 export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   const { t } = useI18n();
-  const entry = useWorkflowStore((state) => (project ? state.getEntry(project) : null));
+  // Keyed on the id and the path, never on the owner object: `useProjectContextOwner`
+  // rebuilds that object whenever the project list or the worktree topology
+  // changes (an icon discovery, a label edit, a worktree publish), and each
+  // rebuild would re-issue both reads and clear an error already on screen.
+  const projectId = project?.id;
+  const projectPath = project?.path;
+  const entry = useWorkflowStore((state) => (projectId ? state.getEntry({ id: projectId }) : null));
   const load = useWorkflowStore((state) => state.load);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   // `path_…` is the real project-id shape (`createProjectIdFromPath`); anything
   // else is a synthetic owner, so there is nothing to read for it.
-  const isProject = project !== null && project.id.startsWith('path_');
+  const isProject = projectId !== undefined && projectId.startsWith('path_');
 
   useEffect(() => {
-    if (project && isProject) void load(project);
-  }, [project, isProject, load]);
+    if (projectId && projectPath && isProject) void load({ id: projectId, path: projectPath });
+  }, [projectId, projectPath, isProject, load]);
 
   const selected = useMemo(
     () => entry?.runs.find((run) => run.runId === selectedRunId) ?? entry?.runs[0] ?? null,
@@ -53,18 +59,20 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   }
   // The store's `EMPTY` entry is truthy with no runs and no error, so a project
   // that has simply not been read yet would paint "No run yet" for a frame.
-  if (!entry?.loaded && !entry?.error) {
+  // Compared against `null`, not falsiness: the server can fail with an empty
+  // message (`{"error":""}`), and that failure must read as a failure.
+  if (!entry?.loaded && entry?.error === null) {
     return <Empty text={t('workflows.empty.loading')} />;
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {entry?.error ? (
+      {entry && entry.error !== null ? (
         <div role="alert" className="border-b border-border bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {t('workflows.error.readFailed')}: {entry.error}
         </div>
       ) : null}
-      {entry && entry.runs.length === 0 && !entry.error ? (
+      {entry && entry.runs.length === 0 && entry.error === null ? (
         <div className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
           {t('workflows.empty.noRuns')} <code className="text-foreground">.openchamber/workflows/</code>
         </div>
