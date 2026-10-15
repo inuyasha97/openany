@@ -938,6 +938,9 @@ In `packages/ui/src/lib/i18n/messages/en.ts`, add a `workflows` group in the sam
       checkpoint: 'Checkpoint',
       verifier: 'Checks',
       truncated: 'output cut at 64 KiB',
+      timeout: 'timed out',
+      exit: 'exit {code}',
+      diffFailed: 'The diff could not be read',
       session: 'Session',
       openTranscript: 'Open the transcript',
       diff: 'See the changes',
@@ -1450,6 +1453,10 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
 
 const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'][number]['verify']> }) => {
   const { t } = useI18n();
+  // A step may declare no checks at all (`confirm: human` with no verifier), and
+  // the engine records an empty verdict for it. A heading over an empty list
+  // reads as a bug, so the block simply is not there.
+  if (!verify.error && verify.artifacts.length === 0 && verify.commands.length === 0) return null;
   return (
     <div className="mt-2 border-t border-border pt-2">
       <h5 className="text-[11px] font-medium text-muted-foreground">{t('workflows.step.verifier')}</h5>
@@ -1462,13 +1469,13 @@ const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'
             {!artifact.exists ? <span className="text-muted-foreground">{t('workflows.step.verifier')}: {artifact.glob}</span> : null}
           </li>
         ))}
-        {verify.commands.map((command) => (
-          <li key={command.run} className="text-[11px]">
+        {verify.commands.map((command, index) => (
+          <li key={`${command.run}:${index}`} className="text-[11px]">
             <div className="flex items-center gap-2">
               <span className={command.ok ? 'text-chart-2' : 'text-destructive'}>{command.ok ? '✓' : '✗'}</span>
               <span className="truncate font-mono">{command.run}</span>
               <span className="ml-auto text-muted-foreground">
-                {command.timedOut ? 'timeout' : `exit ${command.exitCode ?? '—'}`} · {(command.durationMs / 1000).toFixed(1)}s
+                {command.timedOut ? t('workflows.step.timeout') : t('workflows.step.exit', { code: command.exitCode ?? '—' })} · {(command.durationMs / 1000).toFixed(1)}s
               </span>
             </div>
             {command.truncated ? <span className="ml-1 text-muted-foreground">({t('workflows.step.truncated')})</span> : null}
@@ -1500,8 +1507,14 @@ const CheckpointDiff = ({ directory, commit }: { directory: string; commit: stri
 
   useEffect(() => {
     let cancelled = false;
+    // A new commit (or a new translator identity) means the previous answer no
+    // longer describes what this block is about, so nothing stale may survive
+    // the refetch: an error from the last attempt would otherwise hide a
+    // successful one, and the old file list would sit under the new header.
+    setFiles(null);
+    setError(null);
     void runtimeFetch(`/api/git/commit-files?directory=${encodeURIComponent(directory)}&hash=${encodeURIComponent(commit)}`, { directory })
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`The diff could not be read (${response.status})`))))
+      .then((response) => (response.ok ? response.json() : response.json().catch(() => null).then((body: { error?: string } | null) => Promise.reject(new Error(body?.error ?? `${t('workflows.step.diffFailed')} (${response.status})`)))))
       // `GET /api/git/commit-files` answers `{ files: [{ path, insertions, deletions, changeType }] }`
       // (`lib/git/service.js:5640-5677`); the field is `insertions`, not `additions`.
       .then((body: { files?: Array<{ path: string; insertions: number; deletions: number }> }) => { if (!cancelled) setFiles(body.files ?? []); })
