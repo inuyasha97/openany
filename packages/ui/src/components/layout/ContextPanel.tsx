@@ -20,10 +20,12 @@ const GitView = lazyWithChunkRecovery(() => import('@/components/views/GitView')
 // users never render this panel; keep it out of the main bundle.
 const LinearIssuesView = lazyWithChunkRecovery(() => import('@/components/views/LinearIssuesView').then((m) => ({ default: m.LinearIssuesView })));
 const PlanView = lazyWithChunkRecovery(() => import('@/components/views/PlanView').then((m) => ({ default: m.PlanView })));
+const WorkflowsView = lazyWithChunkRecovery(() => import('@/components/views/workflows/WorkflowsView').then((m) => ({ default: m.WorkflowsView })));
 import { ProjectContextPanel } from './RightSidebarTabs';
 import { SidebarFilesTree } from './SidebarFilesTree';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
+import { useProjectContextOwner } from '@/hooks/useProjectContextOwner';
 import { useGuestSurfaces } from '@/hooks/useGuestSurfaces';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
@@ -176,6 +178,7 @@ const getModeLabel = (
   if (mode === 'diff') return t('contextPanel.mode.diff');
   if (mode === 'walkthrough') return t('contextPanel.mode.walkthrough');
   if (mode === 'plan') return t('contextPanel.mode.plan');
+  if (mode === 'workflows') return t('contextPanel.mode.workflows');
   if (mode === 'browser') return t('contextPanel.mode.browser');
   if (mode === 'git') return t('layout.rightSidebar.git');
   if (mode === 'pr') return t('contextPanel.mode.pr');
@@ -298,6 +301,10 @@ const getTabIcon = (
 
   if (tab.mode === 'plan') {
     return <Icon name="file-text" className="h-3.5 w-3.5" />;
+  }
+
+  if (tab.mode === 'workflows') {
+    return <Icon name="list-check-2" className="h-3.5 w-3.5" />;
   }
 
   if (tab.mode === 'context') {
@@ -519,6 +526,10 @@ export const ContextPanel: React.FC = () => {
   const { t } = useI18n();
   const effectiveDirectory = useEffectiveDirectory() ?? '';
   const directoryKey = React.useMemo(() => normalizeDirectoryKey(effectiveDirectory), [effectiveDirectory]);
+  // The owner of the pane's directory, the same resolution Project knowledge
+  // uses: the workflows surface reads runs for exactly the project on screen,
+  // never a guessed one.
+  const activeProject = useProjectContextOwner(effectiveDirectory || null);
 
   const panelState = useUIStore((state) => (directoryKey ? state.contextPanelByDirectory[directoryKey] : undefined));
   const closeContextPanel = useUIStore((state) => state.closeContextPanel);
@@ -1076,13 +1087,15 @@ export const ContextPanel: React.FC = () => {
                 ? <React.Suspense fallback={null}><LinearIssuesView /></React.Suspense>
             : activeTab?.mode === 'notes'
                 ? <ProjectContextPanel />
-        : activeTab?.mode === 'plan'
+            : activeTab?.mode === 'plan'
             ? <React.Suspense fallback={null}><PlanView
                 targetPath={activeTab.targetPath}
                 savedProjectPlan={activeTab.projectPlanId && activeTab.projectPlanRef
                   ? { projectRef: activeTab.projectPlanRef, planId: activeTab.projectPlanId }
                   : null}
               /></React.Suspense>
+        : activeTab?.mode === 'workflows'
+            ? <React.Suspense fallback={null}><WorkflowsView project={activeProject} /></React.Suspense>
             : null;
 
   const browserTabs = React.useMemo(
