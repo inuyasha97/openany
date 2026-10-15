@@ -35,6 +35,19 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   // the entry: a save re-reads the definitions, and an editor that swapped its
   // summary mid-edit would throw away the buffer's baseline with it.
   const [editing, setEditing] = useState<WorkflowDefinitionSummary | null>(null);
+  // The editor for a definition that does not exist yet. It is what opens the
+  // template: a new definition is a file named by the id a person gives it.
+  const [creating, setCreating] = useState(false);
+
+  const openDefinition = (definition: WorkflowDefinitionSummary) => {
+    setCreating(false);
+    setEditing(definition);
+  };
+
+  const newDefinition = () => {
+    setEditing(null);
+    setCreating(true);
+  };
 
   // `path_…` is the real project-id shape (`createProjectIdFromPath`); anything
   // else is a synthetic owner, so there is nothing to read for it.
@@ -93,10 +106,15 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
           selectedRunId={selected?.runId ?? null}
           onSelect={setSelectedRunId}
           definitions={entry?.definitions ?? []}
-          onEditDefinition={setEditing}
+          onEditDefinition={openDefinition}
+          onNewDefinition={newDefinition}
           project={project}
         />
-        {editing ? (
+        {creating ? (
+          /* No `summary`: the definition has no file yet, and the pane asks for the
+             id and the template it should start from. */
+          <DefinitionEditor key="new" project={project} summary={null} onClose={() => setCreating(false)} />
+        ) : editing ? (
           /* Keyed on the file, so opening another definition reads its text
              instead of carrying the previous buffer into it. */
           <DefinitionEditor key={editing.file} project={project} summary={editing} onClose={() => setEditing(null)} />
@@ -106,7 +124,7 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
             project={project}
             definition={definition}
             definitionsLoaded={definitionsLoaded}
-            onEditDefinition={setEditing}
+            onEditDefinition={openDefinition}
           />
         ) : (
           <Empty text={t('workflows.empty.selectRun')} />

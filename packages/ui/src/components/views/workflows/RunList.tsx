@@ -34,10 +34,12 @@ export interface RunListProps {
   onSelect: (runId: string) => void;
   /** Opens one definition's YAML. The diagram's edit action needs a selected run, so this is how a definition with no run reaches the editor. */
   onEditDefinition: (definition: WorkflowDefinitionSummary) => void;
+  /** Opens the editor for a definition that does not exist yet: the id is asked for there. */
+  onNewDefinition: () => void;
   project: ProjectRef;
 }
 
-export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefinition, project }: RunListProps) => {
+export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefinition, onNewDefinition, project }: RunListProps) => {
   const { t } = useI18n();
   const setRun = useWorkflowStore((state) => state.setRun);
   const removeRun = useWorkflowStore((state) => state.removeRun);
@@ -115,6 +117,18 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <span className="text-xs font-medium">{t('workflows.title')}</span>
         <div className="flex gap-1">
+          {/* A definition is a file, so creating one starts from an id and the
+              shipped template; the editor asks for both. */}
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={busy}
+            title={t('workflows.editor.newDefinition')}
+            aria-label={t('workflows.editor.newDefinition')}
+            onClick={onNewDefinition}
+          >
+            <Icon name="add" className="size-3.5" aria-hidden />
+          </Button>
           {usable.map((definition) => (
             <span key={definition.file} className="flex items-center">
               <Button size="xs" variant="ghost" disabled={busy} onClick={() => beginStart(definition)}>

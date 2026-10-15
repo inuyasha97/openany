@@ -26,6 +26,14 @@
  * Deleting is refused while a run of the project has not finished with this
  * definition: the engine re-reads the file on every advance, so the run could
  * never move again.
+ *
+ * A definition that does not exist yet is the same pane with no file: it asks for
+ * the id that names the file and offers the shipped template to start from. The
+ * template is only ever copied onto a name that has no file — a save carries an
+ * `expectedHash` no file can have until the first one is written — and once the
+ * file exists the id is fixed and the template is no longer offered, because
+ * renaming a definition is refused and copying over one that is there is not a
+ * thing this screen should make easy.
  */
 import { useEffect, useMemo, useState } from 'react';
 
@@ -40,19 +48,43 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { createFlexokiCodeMirrorTheme } from '@/lib/codemirror/flexokiTheme';
 import { languageByExtension } from '@/lib/codemirror/languageByExtension';
 import { liveRunForDefinition } from '@/lib/workflows/liveRun';
+import { sdlcTemplateFor, sdlcTemplateSummary } from '@/lib/workflows/templates';
+import { Input } from '@/components/ui/input';
 import {
   deleteWorkflowDefinition,
   fetchWorkflowDefinitionSource,
   saveWorkflowDefinition,
+  WorkflowRequestError,
   type WorkflowDefinitionSummary,
 } from '@/lib/workflowsApi';
 
 export interface DefinitionEditorProps {
   project: { id: string; path: string };
-  summary: WorkflowDefinitionSummary;
+  /**
+   * The definition to open, or `null` for one that does not exist yet. A
+   * definition that has no file has nothing to read; the pane asks for the id
+   * that will name it and offers the shipped template to start from.
+   */
+  summary: WorkflowDefinitionSummary | null;
   /** Hands the pane back to the run detail. */
   onClose: () => void;
 }
+
+/**
+ * The `expectedHash` a definition's first save carries. A new definition must not
+ * overwrite a file that is already there — copying the template is legitimate
+ * only for a name with no file yet — and no sha256 can be this string, so the
+ * route's own guard refuses a file that exists (or that appeared between opening
+ * the pane and saving) instead of replacing it.
+ */
+const MUST_BE_ABSENT_HASH = 'absent';
+
+/**
+ * The id shape `definitions.js` names a file by (`isWorkflowId`), so the pane can
+ * refuse an unusable id before the route does. The route stays the authority: a
+ * value that passes here is still parsed and checked there.
+ */
+const isWorkflowId = (value: string): boolean => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value);
 
 /**
  * The first line a refusal names. A YAML syntax failure names one ("… at line
@@ -70,21 +102,32 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
   const editorFontSize = useUIStore((state) => state.editorFontSize);
   const reload = useWorkflowStore((state) => state.load);
   const runs = useWorkflowStore((state) => state.getEntry({ id: project.id }).runs);
+  // A definition that does not exist yet is the create state: no file to read, an
+  // id to ask for, and the template to start from. It is entered by opening this
+  // pane with no definition, and by the read below answering 404 — a file removed
+  // since the list was read is that same state, not a failure to show.
+  const [creating, setCreating] = useState(summary === null);
+  /** The id a person typed: it names the file the save writes. */
+  const [createId, setCreateId] = useState('');
+  /** The text the template action seeded, and the id it was seeded for. */
+  const [seed, setSeed] = useState<{ id: string; text: string } | null>(null);
+  /** The name the first save wrote. The id is fixed once the file exists. */
+  const [writtenFile, setWrittenFile] = useState<string | null>(null);
   // The file this editor was opened from, without its extension. The read
   // resolves the path from the name it is handed and the route writes back to the
   // same name, so a body that declares another id is still refused truthfully
   // rather than being read from a path the person did not point at.
-  const workflowId = summary.file.replace(/\.ya?ml$/i, '');
+  const workflowId = summary !== null && !creating ? summary.file.replace(/\.ya?ml$/i, '') : createId;
   // The engine re-reads this file on every advance, so a run that has not
   // finished needs it on disk. The delete waits for that run, and says why.
   const liveRun = liveRunForDefinition(runs, workflowId);
 
   const [text, setText] = useState('');
   /** The text as it is on disk: what "unsaved" is measured against. */
-  const [baseline, setBaseline] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState<string | null>(summary === null ? '' : null);
   /** The hash the buffer was read or written at, passed back as `expectedHash`. */
-  const [hash, setHash] = useState<string | null>(summary.hash);
-  const [reading, setReading] = useState(true);
+  const [hash, setHash] = useState<string | null>(summary?.hash ?? null);
+  const [reading, setReading] = useState(summary !== null);
   // `null` means the read succeeded; an empty string means it failed without a
   // message of its own, which falls back to the shared failure wording.
   const [readFailure, setReadFailure] = useState<string | null>(null);
@@ -94,6 +137,10 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
   const [confirmClose, setConfirmClose] = useState(false);
 
   useEffect(() => {
+    // A pane opened for no definition has no file to read: the buffer starts empty
+    // and the template action is what gives it text. Nothing is read, so nothing
+    // can be reported as a read failure.
+    if (summary === null || creating) return;
     let cancelled = false;
     setReading(true);
     setReadFailure(null);
@@ -107,6 +154,21 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
         setReading(false);
       } catch (failure) {
         if (cancelled) return;
+        // 404 is "there is no file for this id (yet)", which is the create state
+        // rather than a failure: the list can name a definition whose file was
+        // removed after it was read, and a new one starts from an id with no file
+        // at all. A pane that answered this with an error over an empty buffer is
+        // the one outcome that must not happen, so it becomes the new-definition
+        // pane with the id it was opened for already filled in.
+        if (failure instanceof WorkflowRequestError && failure.status === 404) {
+          setCreating(true);
+          setCreateId(workflowId);
+          setText('');
+          setBaseline('');
+          setHash(null);
+          setReading(false);
+          return;
+        }
         setReadFailure(failure instanceof Error && failure.message ? failure.message : '');
         setReading(false);
       }
@@ -114,7 +176,7 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
     return () => {
       cancelled = true;
     };
-  }, [project.path, workflowId]);
+  }, [creating, summary, project.path, workflowId]);
 
   const editorExtensions = useMemo(() => {
     const extensions = [createFlexokiCodeMirrorTheme(currentTheme, { fontSize: editorFontSize })];
@@ -125,15 +187,50 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
 
   const dirty = baseline !== null && text !== baseline;
   const failedLine = error === null ? null : namedLine(error);
+  const idUsable = isWorkflowId(createId);
+  /** The name the write uses: the file being edited, the id a person typed, or what the save wrote. */
+  const fileLabel = writtenFile ?? (summary !== null && !creating ? summary.file : idUsable ? sdlcTemplateSummary(createId).file : null);
+  /** The buffer is still exactly the template this pane seeded. */
+  const seeded = seed !== null && text === seed.text;
+  // A new definition needs the id that names its file before anything is written,
+  // and something to write; an edited one needs a change.
+  const canSave = dirty && (!creating || idUsable);
+
+  /** Puts the template in the buffer, named by the id it is given. */
+  const seedTemplate = (targetId: string) => {
+    const next = { id: targetId, text: sdlcTemplateFor(targetId) };
+    setText(next.text);
+    setSeed(next);
+    setError(null);
+  };
+
+  /**
+   * The id names the file the save writes and the id inside the body has to match
+   * it, so the seed follows the field. Text a person edited is theirs and is never
+   * rewritten; a body whose id no longer matches the field is refused by the route,
+   * with the message that names both.
+   */
+  const applyCreateId = (value: string) => {
+    setCreateId(value);
+    if (seed === null || text !== seed.text || !isWorkflowId(value)) return;
+    seedTemplate(value);
+  };
 
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
-      const written = await saveWorkflowDefinition(project.path, workflowId, text, hash ?? undefined);
+      // A definition with no file yet carries a hash no file can have, so a name
+      // that is already taken is refused by the route instead of overwritten.
+      const expectedHash = hash ?? (creating ? MUST_BE_ABSENT_HASH : undefined);
+      const written = await saveWorkflowDefinition(project.path, workflowId, text, expectedHash);
       setBaseline(text);
       // The next save compares against the text that is now on disk.
       setHash(written.hash);
+      // The name comes from the route, and the id is fixed now that the file
+      // exists: renaming would orphan the runs that reference it, so the route
+      // refuses it and the pane stops offering it.
+      if (creating) setWrittenFile(written.file);
       // The surface's definitions are stale the moment the file changes, and the
       // list and the diagram are both read from them.
       await reload(project, { force: true });
@@ -161,6 +258,8 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
   };
 
   const editable = !reading && readFailure === null;
+  /** There is a file to delete only once one has been read or written. */
+  const hasFile = writtenFile !== null || (summary !== null && !creating);
 
   /**
    * Closing asks when the buffer holds text the file does not. The close stays
@@ -180,10 +279,11 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <span className="min-w-0 truncate font-mono text-xs">{summary.file}</span>
+        <span className="min-w-0 truncate font-mono text-xs">{fileLabel ?? t('workflows.editor.newDefinition')}</span>
+        {seeded ? <span className="text-[11px] text-muted-foreground">{t('workflows.editor.template')}</span> : null}
         {editable && dirty ? <span className="text-[11px] text-muted-foreground">{t('workflows.editor.unsaved')}</span> : null}
         <span className="ml-auto flex items-center gap-1">
-          {editable ? (
+          {editable && hasFile ? (
             /* A disabled `Button` is `pointer-events-none`
                (`components/ui/button.tsx`), so its own `title` never appears;
                the span is the hit target that can carry the reason, as the
@@ -208,12 +308,31 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
             {t('workflows.editor.close')}
           </Button>
           {editable ? (
-            <Button size="xs" disabled={busy || !dirty} onClick={() => void save()}>
+            <Button size="xs" disabled={busy || !canSave} onClick={() => void save()}>
               {t('workflows.editor.save')}
             </Button>
           ) : null}
         </span>
       </div>
+      {editable && creating && writtenFile === null ? (
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+          {/* The id is what names the file, so it is asked for before the buffer
+              has anything to save — the header already shows the name it will
+              write. Nothing is offered for an id the route would refuse. */}
+          <Input
+            value={createId}
+            onChange={(event) => applyCreateId(event.target.value)}
+            placeholder={t('workflows.editor.idPlaceholder')}
+            aria-label={t('workflows.editor.newDefinition')}
+            className="h-7 w-44 font-mono text-xs"
+            autoFocus
+            disabled={busy}
+          />
+          <Button size="xs" variant="outline" disabled={busy || !idUsable} onClick={() => seedTemplate(createId)}>
+            {t('workflows.editor.fromTemplate')}
+          </Button>
+        </div>
+      ) : null}
       {editable && liveRun ? (
         <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
           {t('workflows.editor.deleteBlocked')}
@@ -255,7 +374,7 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
           <DialogHeader>
             <DialogTitle>{t('workflows.editor.delete')}</DialogTitle>
             <DialogDescription>
-              <span className="block font-mono text-[11px] text-muted-foreground">{summary.file}</span>
+              <span className="block font-mono text-[11px] text-muted-foreground">{fileLabel}</span>
               {t('workflows.editor.deleteConfirm')}
             </DialogDescription>
           </DialogHeader>
@@ -287,7 +406,7 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
           <DialogHeader>
             <DialogTitle>{t('workflows.editor.discard')}</DialogTitle>
             <DialogDescription>
-              <span className="block font-mono text-[11px] text-muted-foreground">{summary.file}</span>
+              <span className="block font-mono text-[11px] text-muted-foreground">{fileLabel}</span>
               {t('workflows.editor.discardConfirm')}
             </DialogDescription>
           </DialogHeader>
