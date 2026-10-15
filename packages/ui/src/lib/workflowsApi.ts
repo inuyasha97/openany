@@ -97,6 +97,12 @@ export interface WorkflowStepDefinition {
   confirm: 'human' | 'auto';
 }
 
+export interface WorkflowInput {
+  name: string;
+  description: string;
+  required: boolean;
+}
+
 export interface WorkflowDefinitionSummary {
   file: string;
   id: string | null;
@@ -105,6 +111,8 @@ export interface WorkflowDefinitionSummary {
   errors: Array<{ field: string; message: string }>;
   /** The declared steps, so a diagram needs one request instead of one per file. */
   steps: WorkflowStepDefinition[];
+  /** The declared inputs, so a screen can ask for the values the create route requires. */
+  inputs: WorkflowInput[];
 }
 
 /** A refusal from the workflow routes: the server's own message, and the status beside it. */

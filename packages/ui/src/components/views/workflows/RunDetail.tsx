@@ -30,6 +30,16 @@ export const RunDetail = ({ run, project, definition }: RunDetailProps) => {
   const [full, setFull] = useState<WorkflowRun>(run);
   const [stepId, setStepId] = useState<string | null>(run.cursor ?? run.steps[0]?.id ?? null);
   const [error, setError] = useState<string | null>(null);
+
+  // The parent swaps the `run` prop when a person selects another run, without
+  // remounting this component. Without this the pane would show the previous
+  // run's steps under the new selection until the re-read landed, and forever if
+  // that read failed.
+  if (full.runId !== run.runId) {
+    setFull(run);
+    setStepId(run.cursor ?? run.steps[0]?.id ?? null);
+    setError(null);
+  }
   const runStatus = describeRunStatus(run.status, t);
 
   // The frame the server pushes carries a step summary, not the attempts and
@@ -38,6 +48,7 @@ export const RunDetail = ({ run, project, definition }: RunDetailProps) => {
   useEffect(() => {
     void fetchWorkflowRun(project.path, run.runId)
       .then((next) => {
+        setError(null);
         setFull(next);
         setStepId((current) => current ?? next.cursor ?? next.steps[0]?.id ?? null);
       })

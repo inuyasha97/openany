@@ -4,6 +4,10 @@
  *
  * Delete asks first and names the run. It removes the run file only; commits and
  * artifacts stay in the project, so the dialog says so.
+ *
+ * A definition may declare inputs, and the create route rejects a missing
+ * required one; the start dialog collects them before the run exists, and a
+ * definition with no inputs starts on one click.
  */
 import { useState } from 'react';
 
@@ -11,6 +15,7 @@ import { useI18n } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Icon } from '@/components/icon/Icon';
+import { Input } from '@/components/ui/input';
 import { createWorkflowRun, deleteWorkflowRun, type WorkflowDefinitionSummary, type WorkflowRun } from '@/lib/workflowsApi';
 import { useWorkflowStore } from '@/stores/useWorkflowStore';
 import { describeRunStatus } from '@/lib/workflows/status';
@@ -32,20 +37,37 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
   const [error, setError] = useState<string | null>(null);
   // The run whose delete is being confirmed; the dialog asks before anything is removed.
   const [pendingDelete, setPendingDelete] = useState<WorkflowRun | null>(null);
+  // The definition whose start is being set up, once it declares inputs.
+  const [startFor, setStartFor] = useState<WorkflowDefinitionSummary | null>(null);
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  // `WorkflowDefinitionSummary` carries `id: string | null`, not the parsed definition.
   const usable = definitions.filter((definition) => definition.id !== null);
+  const missingRequired = startFor
+    ? startFor.inputs.some((input) => input.required && !(inputValues[input.name] ?? '').trim())
+    : false;
 
-  const start = async (workflowId: string) => {
+  const start = async (definition: WorkflowDefinitionSummary, inputs: Record<string, string>) => {
     setBusy(true);
     setError(null);
     try {
-      const run = await createWorkflowRun(project.path, { workflowId });
+      const run = await createWorkflowRun(project.path, { workflowId: definition.id as string, inputs });
       setRun(project, run);
       onSelect(run.runId);
+      setStartFor(null);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : t('workflows.error.actionFailed'));
     } finally {
       setBusy(false);
     }
+  };
+
+  const beginStart = (definition: WorkflowDefinitionSummary) => {
+    if (definition.inputs.length === 0) {
+      void start(definition, {});
+      return;
+    }
+    setInputValues({});
+    setStartFor(definition);
   };
 
   const remove = async (runId: string) => {
@@ -67,7 +89,7 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
         <span className="text-xs font-medium">{t('workflows.title')}</span>
         <div className="flex gap-1">
           {usable.map((definition) => (
-            <Button key={definition.file} size="xs" variant="ghost" disabled={busy} onClick={() => void start(definition.id as string)}>
+            <Button key={definition.file} size="xs" variant="ghost" disabled={busy} onClick={() => beginStart(definition)}>
               {definition.name ?? definition.id}
             </Button>
           ))}
@@ -77,6 +99,9 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
       <div className="min-h-0 flex-1 overflow-y-auto">
         {runs.map((run) => {
           const status = describeRunStatus(run.status, t);
+          // A run with a step executing would be written back when that turn
+          // settles, so deleting it now would not stick.
+          const executing = run.steps.some((step) => step.status === 'running');
           return (
             <div
               key={run.runId}
@@ -93,16 +118,52 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
               <Button
                 size="xs"
                 variant="ghost"
-                disabled={busy}
+                disabled={busy || executing}
+                title={t('workflows.run.delete')}
                 aria-label={t('workflows.run.delete')}
                 onClick={() => setPendingDelete(run)}
               >
-                <Icon name="delete-bin" />
+                <Icon name="delete-bin" className="size-3.5" aria-hidden />
               </Button>
             </div>
           );
         })}
       </div>
+      <Dialog open={startFor !== null} onOpenChange={(open) => { if (!open) setStartFor(null); }}>
+        <DialogContent className="max-w-sm gap-5">
+          <DialogHeader>
+            <DialogTitle>{t('workflows.run.start')}</DialogTitle>
+            <DialogDescription>{startFor?.name ?? startFor?.id}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            {startFor?.inputs.map((input) => (
+              <label key={input.name} className="flex flex-col gap-1 text-xs">
+                <span className="text-muted-foreground">{input.description || input.name}</span>
+                <Input
+                  value={inputValues[input.name] ?? ''}
+                  aria-required={input.required}
+                  onChange={(event) => setInputValues((current) => ({ ...current, [input.name]: event.target.value }))}
+                />
+              </label>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setStartFor(null)}>
+              {t('workflows.run.startCancel')}
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy || missingRequired}
+              onClick={() => {
+                if (!startFor) return;
+                void start(startFor, inputValues);
+              }}
+            >
+              {t('workflows.run.startConfirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={pendingDelete !== null} onOpenChange={(open) => { if (!open) setPendingDelete(null); }}>
         <DialogContent showCloseButton={false} className="max-w-sm gap-5">
           <DialogHeader>

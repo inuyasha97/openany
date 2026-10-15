@@ -73,6 +73,9 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     // The diagram needs the declared steps; a summary without them would force the
     // screen to re-read every file separately.
     steps: entry.definition ? entry.definition.steps : [],
+    // The create route rejects a missing required input, so a screen that offers
+    // to start a run has to know what to ask for.
+    inputs: entry.definition ? entry.definition.inputs : [],
   });
 
   /**
