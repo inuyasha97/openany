@@ -145,7 +145,10 @@ export const CONTEXT_SURFACES: readonly ContextSurfaceDescriptor[] = [
   {
     id: 'workflows',
     descriptionKey: 'contextRail.surface.workflows.description',
-    defaultWidthFraction: 0.45,
+    // As wide as the notes and walkthrough surfaces: a run list beside a detail
+    // pane that carries stdout, stderr and verifier output, and a third of the
+    // window leaves the detail column too narrow to read.
+    defaultWidthFraction: 3 / 5,
     mode: 'workflows',
     icon: 'list-check-2',
     labelKey: 'contextPanel.mode.workflows',
