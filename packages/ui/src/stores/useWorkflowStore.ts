@@ -105,10 +105,15 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
     // A frame cannot invent a project this client has never loaded.
     if (!entry) return state;
     const existing = entry.runs.find((candidate) => candidate.runId === frame.runId);
+    // Recorded for both halves: a load already in flight took its snapshot
+    // before this frame, so it re-applies the frame when it resolves and then
+    // clears the map.
+    const pending = { ...state.pendingFrames, [frame.projectId]: { ...(state.pendingFrames[frame.projectId] ?? {}), [frame.runId]: frame } };
     if (!existing) {
-      return { pendingFrames: { ...state.pendingFrames, [frame.projectId]: { ...(state.pendingFrames[frame.projectId] ?? {}), [frame.runId]: frame } } };
+      return { pendingFrames: pending };
     }
     return {
+      pendingFrames: pending,
       entries: {
         ...state.entries,
         [frame.projectId]: {

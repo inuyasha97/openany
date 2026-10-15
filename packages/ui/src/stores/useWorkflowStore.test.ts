@@ -70,6 +70,26 @@ describe('load', () => {
     expect(entry.runs[0].status).toBe('waiting');
     expect(entry.runs[0].steps[0].status).toBe('waiting_confirm');
   });
+
+  it('does not let a slow load overwrite a frame for a run it already knows', async () => {
+    runsQueue.push(() => [run()]);
+    definitionsQueue.push(() => []);
+    await useWorkflowStore.getState().load(project);
+
+    const { promise: pending, resolve: release } = Promise.withResolvers<unknown>();
+    runsQueue.push(() => pending);
+    definitionsQueue.push(() => []);
+    const loading = useWorkflowStore.getState().load(project, { force: true });
+
+    useWorkflowStore.getState().applyRunFrame({ runId: 'r1', projectId: 'path_proj', status: 'waiting', cursor: 'spec', steps: [{ id: 'spec', status: 'waiting_confirm' }] });
+    // The read resolves with the snapshot it took before that frame.
+    release([run()]);
+    await loading;
+
+    const entry = useWorkflowStore.getState().getEntry(project);
+    expect(entry.runs[0].status).toBe('waiting');
+    expect(entry.runs[0].steps[0].status).toBe('waiting_confirm');
+  });
 });
 
 describe('applyRunFrame', () => {

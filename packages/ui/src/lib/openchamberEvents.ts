@@ -39,7 +39,7 @@ const WORKFLOW_STEP_STATUSES: Record<WorkflowStepStatus, true> = {
 };
 
 const isWorkflowStepStatus = (value: unknown): value is WorkflowStepStatus =>
-  typeof value === 'string' && value in WORKFLOW_STEP_STATUSES;
+  typeof value === 'string' && Object.hasOwn(WORKFLOW_STEP_STATUSES, value);
 
 type SessionCreatedEvent = {
   type: 'session-created';
