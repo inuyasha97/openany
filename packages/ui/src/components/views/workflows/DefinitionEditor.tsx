@@ -27,7 +27,9 @@
  * this pane is mounted, so switching to another definition would unmount it over
  * whatever was typed. The parent hands that switch down (`pendingSwitch`) instead
  * of applying it, and this pane answers it with the same question the close asks,
- * because the buffer it would take is the same one.
+ * because the buffer it would take is the same one. A switch that names the
+ * definition this pane already holds is not one of those: the pane it would open
+ * is this one, so it is resolved without a question and without taking the buffer.
  *
  * Deleting is refused while a run of the project has not finished with this
  * definition: the engine re-reads the file on every advance, so the run could
@@ -76,15 +78,24 @@ export interface DefinitionEditorProps {
   /** Hands the pane back to the run detail. */
   onClose: () => void;
   /**
-   * True while a switch to another definition is waiting on this pane's answer.
-   * The parent lists the definitions and owns what is being edited, so it cannot
-   * know whether the buffer here holds unsaved text; it hands the switch down and
-   * this pane resolves it, over the buffer that would go with it.
+   * The switch to another definition that is waiting on this pane's answer, or
+   * `null` when none is. The parent lists the definitions and owns what is being
+   * edited, so it cannot know whether the buffer here holds unsaved text; it hands
+   * the switch down and this pane resolves it, over the buffer that would go with
+   * it. The switch is handed down as itself, not as a flag, because it may name
+   * the definition already mounted here — which is no switch at all — and only
+   * this pane knows what it holds.
    */
-  pendingSwitch: boolean;
+  pendingSwitch: DefinitionSwitch | null;
   /** Answers that switch: `true` discards this buffer and lets it through. */
   onSwitchResolved: (discard: boolean) => void;
 }
+
+/**
+ * What a switch away from this pane is for: another definition, or one that does
+ * not exist yet.
+ */
+export type DefinitionSwitch = { creating: true } | { creating: false; definition: WorkflowDefinitionSummary };
 
 /**
  * The id shape `definitions.js` names a file by (`isWorkflowId`), so the pane can
@@ -214,8 +225,14 @@ export const DefinitionEditor = ({ project, summary, onClose, pendingSwitch, onS
    * id a person has typed, which names the file this pane would write. Only the
    * exits use it — the save keys on `dirty` alone, because an empty buffer with an
    * id is not a definition and Save must not write one.
+   *
+   * The typed id stops counting the moment the first save has written the file:
+   * the name is fixed then, the buffer is what is on disk, and the pane is a pane
+   * over a file like any other. Counting it for the rest of the pane's life is
+   * what made every close and every switch ask about an edit that was already
+   * saved, over a buffer the header badge correctly called clean.
    */
-  const unsaved = dirty || (creating && createId.trim() !== '');
+  const unsaved = dirty || (creating && writtenFile === null && createId.trim() !== '');
   const failedLine = error === null ? null : namedLine(error);
   const idUsable = isWorkflowId(createId);
   /** The name the write uses: the file being edited, the id a person typed, or what the save wrote. */
@@ -318,19 +335,42 @@ export const DefinitionEditor = ({ project, summary, onClose, pendingSwitch, onS
   };
 
   /**
+   * The switch names the definition it is for, and when that is the one already
+   * mounted here there is nothing to switch to: the pane the parent would open is
+   * this one. Letting it through would only read the file again over the buffer —
+   * which is a silent loss of text the person was never asked about, and a
+   * question over it would be a question about nothing. So it is answered "no",
+   * the answer that leaves the buffer exactly as it is.
+   *
+   * A create pane is not that case: it holds no definition, and the id in it names
+   * a file that does not exist yet, so the switch away from it is real and the
+   * question is real with it.
+   */
+  const switchOpensThisPane =
+    pendingSwitch !== null &&
+    !pendingSwitch.creating &&
+    !creating &&
+    summary !== null &&
+    pendingSwitch.definition.file === summary.file;
+
+  /**
    * The parent's switch is this pane's other exit, and it asks the same question
    * the close does: the buffer is a person's text, and unmounting this pane over
    * it is exactly what the guard exists to prevent. A clean buffer has nothing to
    * lose, so the switch goes through.
    */
   useEffect(() => {
-    if (!pendingSwitch) return;
+    if (pendingSwitch === null) return;
+    if (switchOpensThisPane) {
+      onSwitchResolved(false);
+      return;
+    }
     if (unsaved) {
       setConfirmClose(true);
       return;
     }
     onSwitchResolved(true);
-  }, [pendingSwitch, unsaved, onSwitchResolved]);
+  }, [pendingSwitch, switchOpensThisPane, unsaved, onSwitchResolved]);
 
   /** Discards the buffer: the close the person confirmed, or the switch it was asked for. */
   const discardEdits = () => {

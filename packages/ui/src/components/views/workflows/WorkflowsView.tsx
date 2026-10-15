@@ -12,16 +12,13 @@ import { useI18n } from '@/lib/i18n';
 import { useWorkflowStore } from '@/stores/useWorkflowStore';
 import { RunList } from './RunList';
 import { RunDetail } from './RunDetail';
-import { DefinitionEditor } from './DefinitionEditor';
+import { DefinitionEditor, type DefinitionSwitch } from './DefinitionEditor';
 import type { WorkflowDefinitionSummary } from '@/lib/workflowsApi';
 import type { ProjectRef } from '@/lib/projectContextApi';
 
 export interface WorkflowsViewProps {
   project: ProjectRef | null;
 }
-
-/** What the editor is being asked to make room for, held until it answers. */
-type PendingSwitch = { creating: true } | { creating: false; definition: WorkflowDefinitionSummary };
 
 export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   const { t } = useI18n();
@@ -46,9 +43,9 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   // parent does not replace the editor's state: it hands the switch down and the
   // editor applies it over a clean buffer or asks first over a dirty one, with
   // the same words its own close asks with.
-  const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<DefinitionSwitch | null>(null);
 
-  const applySwitch = (next: PendingSwitch) => {
+  const applySwitch = (next: DefinitionSwitch) => {
     if (next.creating) {
       setEditing(null);
       setCreating(true);
@@ -58,7 +55,7 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
     setEditing(next.definition);
   };
 
-  const requestSwitch = (next: PendingSwitch) => {
+  const requestSwitch = (next: DefinitionSwitch) => {
     // With no editor mounted there is no buffer to lose: the switch is the whole
     // change.
     if (creating || editing !== null) {
@@ -149,7 +146,7 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
             project={project}
             summary={null}
             onClose={() => setCreating(false)}
-            pendingSwitch={pendingSwitch !== null}
+            pendingSwitch={pendingSwitch}
             onSwitchResolved={resolveSwitch}
           />
         ) : editing ? (
@@ -160,7 +157,7 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
             project={project}
             summary={editing}
             onClose={() => setEditing(null)}
-            pendingSwitch={pendingSwitch !== null}
+            pendingSwitch={pendingSwitch}
             onSwitchResolved={resolveSwitch}
           />
         ) : selected ? (
