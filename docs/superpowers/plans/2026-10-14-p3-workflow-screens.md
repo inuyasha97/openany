@@ -786,13 +786,15 @@ git commit -m "feat(workflows): cache runs and apply live frames"
 
 - [ ] **Step 1: Add the mode and the surface**
 
-In `lib/surfaces/modes.ts`, add `'workflows'` to `BUILT_IN_CONTEXT_PANEL_MODES`. In `lib/surfaces/registry.ts`, add an entry beside the `plan` entry (`registry.ts:99-107`):
+In `lib/surfaces/modes.ts`, add `'workflows'` to `BUILT_IN_CONTEXT_PANEL_MODES`. A second hand-maintained copy of that list lives at `stores/useUIStore.ts:29` (`contextPanelModeSchema`), and the per-mode panel-width sanitizer iterates it (`useUIStore.ts:766`), so a mode missing there loses its remembered width on the next store migration. Add it in both places. In `lib/surfaces/registry.ts`, add an entry beside the `plan` entry (`registry.ts:99-107`):
 
 ```ts
   {
     id: 'workflows',
     descriptionKey: 'contextRail.surface.workflows.description',
-    defaultWidthFraction: 0.45,
+    // A list beside a detail pane carrying stdout and verifier output: the same
+    // shape as `notes` and `walkthrough`, which are both 3/5 for that reason.
+    defaultWidthFraction: 3 / 5,
     mode: 'workflows',
     icon: 'list-check-2',
     labelKey: 'contextPanel.mode.workflows',
@@ -806,7 +808,7 @@ Check `icon: 'list-check'` against the icon set the registry uses; if that name 
 
 - [ ] **Step 2: Render it**
 
-In `components/layout/ContextPanel.tsx`, the mode switch around line 1077 chooses a component per mode. Add the branch beside `mode === 'plan'`:
+`components/layout/ContextPanel.tsx` keeps **three** hand-written chains keyed by mode, and all three need the new mode or the rail entry opens a tab labelled "Context" with an empty body: the label chain (`getModeLabel`, around line 174), the icon chain (`getTabIcon`, around line 262), and the render chain (`activeNonChatContent`, around line 1073, which falls through to `null`). Extend each one the way its neighbours do, then add the render branch beside `mode === 'plan'`:
 
 ```tsx
 {activeTab.mode === 'workflows' ? <WorkflowsView project={activeProject} /> : null}
