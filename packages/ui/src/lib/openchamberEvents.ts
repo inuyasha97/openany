@@ -4,6 +4,7 @@ import { isRelayModeActive } from './relay/runtime-tunnel';
 import { subscribeRuntimeEndpointChanged } from './runtime-switch';
 import { isVSCodeRuntime } from './desktop';
 import { messageQueueUpdatedEventSchema, type MessageQueueUpdatedEvent } from '@/stores/messageQueueStore';
+import type { WorkflowStepStatus } from '@/lib/workflowsApi';
 import { z } from 'zod';
 
 type ScheduledTaskRanEvent = {
@@ -14,6 +15,31 @@ type ScheduledTaskRanEvent = {
   status: 'running' | 'success' | 'error';
   sessionId?: string;
 };
+
+export type WorkflowRunUpdatedEvent = {
+  type: 'workflow-run-updated';
+  runId: string;
+  projectId: string;
+  status: 'idle' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
+  cursor: string | null;
+  steps: Array<{ id: string; status: WorkflowStepStatus }>;
+};
+
+/** Every step status the client can draw; a frame carrying another one keeps the last known value. */
+const WORKFLOW_STEP_STATUSES: Record<WorkflowStepStatus, true> = {
+  pending: true,
+  running: true,
+  waiting_confirm: true,
+  needs_work: true,
+  done: true,
+  failed: true,
+  skipped: true,
+  blocked: true,
+  interrupted: true,
+};
+
+const isWorkflowStepStatus = (value: unknown): value is WorkflowStepStatus =>
+  typeof value === 'string' && value in WORKFLOW_STEP_STATUSES;
 
 type SessionCreatedEvent = {
   type: 'session-created';
@@ -144,6 +170,7 @@ type OpenChamberEvent =
   | RoutingSafetySkippedEvent
   | MessageQueueUpdatedEvent
   | ScheduledTaskRanEvent
+  | WorkflowRunUpdatedEvent
   | SessionCreatedEvent
   | WorktreeChangedEvent
   | BrowserControlRequestEvent
@@ -424,6 +451,36 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
       parameters: rawParameters && typeof rawParameters === 'object' && !Array.isArray(rawParameters)
         ? rawParameters as Record<string, unknown>
         : {},
+    };
+    for (const listener of listeners) {
+      listener(nextEvent);
+    }
+    return;
+  }
+
+  if (envelope.type === 'openchamber:workflow') {
+    const properties = getEventProperties(envelope.properties);
+    const runId = typeof properties?.runId === 'string' ? properties.runId : '';
+    const projectId = typeof properties?.projectId === 'string' ? properties.projectId : '';
+    if (!runId || !projectId) return;
+    const rawSteps = Array.isArray(properties?.steps) ? properties.steps : [];
+    const rawStatus = properties?.status;
+    const status = rawStatus === 'idle' || rawStatus === 'running' || rawStatus === 'waiting' || rawStatus === 'done' || rawStatus === 'failed' || rawStatus === 'cancelled'
+      ? rawStatus
+      : 'running';
+    const nextEvent: WorkflowRunUpdatedEvent = {
+      type: 'workflow-run-updated',
+      runId,
+      projectId,
+      status,
+      cursor: typeof properties?.cursor === 'string' ? properties.cursor : null,
+      // The frame is a summary. A step whose status this client does not know
+      // keeps its last known value rather than being reset to a guess.
+      steps: rawSteps.flatMap((step) => (
+        Boolean(step) && typeof step.id === 'string' && isWorkflowStepStatus(step.status)
+          ? [{ id: String(step.id), status: step.status }]
+          : []
+      )),
     };
     for (const listener of listeners) {
       listener(nextEvent);
