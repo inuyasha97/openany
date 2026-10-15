@@ -71,7 +71,7 @@ packages/ui/src/
 
 **Interfaces:**
 - Consumes: the engine plan's Task 1 and Task 11.
-- Produces: `WorkflowDefinitionSummary` gains `steps: WorkflowStepDefinition[]`, which Task 9's diagram needs.
+- Produces: `WorkflowDefinitionSummary` gains `steps: WorkflowStepDefinition[]`, which Task 9's diagram needs. This task also creates `packages/ui/src/lib/workflowsApi.ts` with the wire types every later task imports (the route's shapes and the client's types mirror each other, so they land together); Task 1 extends that file with the client functions rather than replacing it.
 
 - [ ] **Step 1: Extend the summary in the route**
 
@@ -108,9 +108,9 @@ In the `lists definitions for a project directory` case, the fixture's `definiti
   });
 ```
 
-- [ ] **Step 3: Mirror the field in the UI type**
+- [ ] **Step 3: Create the wire types in the UI**
 
-In `packages/ui/src/lib/workflowsApi.ts`, `WorkflowDefinitionSummary` gains `steps: WorkflowStepDefinition[]`.
+Write `packages/ui/src/lib/workflowsApi.ts` with the type block from Task 1's Step 3 (the status unions, the run, step, attempt, checkpoint, verify and definition shapes), plus `steps: WorkflowStepDefinition[]` on `WorkflowDefinitionSummary`. No functions yet: Task 1 adds those to this same file, so do not write a client here and do not expect one to exist.
 
 - [ ] **Step 4: Run both suites**
 
@@ -137,8 +137,8 @@ git commit -m "feat(workflows): return the declared steps with a definition"
 - Test: `packages/ui/src/lib/workflowsApi.test.ts`
 
 **Interfaces:**
-- Consumes: `runtimeFetch` (`@/lib/runtime-fetch`), `createProjectIdFromPath` (`@/lib/projectId`), the routes from the engine plan.
-- Produces: types `WorkflowDefinitionSummary`, `WorkflowStepDefinition`, `WorkflowRun`, `WorkflowStep`, `WorkflowAttempt`, `WorkflowCheckpoint`, `WorkflowVerifyResult`; functions
+- Consumes: `runtimeFetch` (`@/lib/runtime-fetch`), `createProjectIdFromPath` (`@/lib/projectId`), the routes from the engine plan, and the wire types Task 0 already wrote into `packages/ui/src/lib/workflowsApi.ts`.
+- Produces: functions
   `fetchWorkflowDefinitions(directory)`, `fetchWorkflowRuns(directory)`, `fetchWorkflowRun(directory, runId)`, `createWorkflowRun(directory, { workflowId, inputs })`, `runWorkflow(directory, runId)`, `cancelWorkflowRun(directory, runId)`, `runWorkflowStep(directory, runId, stepId)`, `verifyWorkflowStep(directory, runId, stepId)`, `promptWorkflowStep(directory, runId, stepId, text)`, `confirmWorkflowStep(directory, runId, stepId, decision, reason?)`, `deleteWorkflowRun(directory, runId)`.
 - Also produces: `WorkflowRequestError` carrying the server's message and status.
 
@@ -215,10 +215,11 @@ describe('confirmWorkflowStep', () => {
 Run: `bun run --cwd packages/ui test -- src/lib/workflowsApi.test.ts`
 Expected: FAIL, `Failed to resolve import "./workflowsApi"`.
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 3: Add the client to the file Task 0 created**
+
+Extend `packages/ui/src/lib/workflowsApi.ts` — it already holds the wire types, including `WorkflowDefinitionSummary.steps`. Add the error class and the functions below it, and keep every existing type exactly as it is: the types are the route's contract and Task 0 pinned them.
 
 ```ts
-// packages/ui/src/lib/workflowsApi.ts
 /**
  * Client for the workflow routes.
  *
