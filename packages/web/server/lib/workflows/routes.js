@@ -96,7 +96,7 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     // The mode a run started from this file will use, so the screen can say it
     // before the run exists. `null` reads the way the other fields of an
     // unparsed row do: there is no mode to report.
-    sandbox: entry.definition ? entry.definition.sandbox : null,
+    sandbox: entry.definition?.sandbox ?? null,
   });
 
   /**

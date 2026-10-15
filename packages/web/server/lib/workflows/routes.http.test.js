@@ -52,7 +52,7 @@ describe('workflow routes', () => {
       definitions: {
         list: async () => [{
           file: 'a.yaml', id: 'a', name: 'A', version: 1, errors: [],
-          definition: { id: 'a', name: 'A', version: 1, inputs: [], steps: [{ id: 'first', title: 'First', prompt: 'x', session: 'new', permissions: 'ask', verify: { artifacts: [], commands: [] }, confirm: 'human' }] },
+          definition: { id: 'a', name: 'A', version: 1, sandbox: 'working-tree', inputs: [], steps: [{ id: 'first', title: 'First', prompt: 'x', session: 'new', permissions: 'ask', verify: { artifacts: [], commands: [] }, confirm: 'human' }] },
         }],
         read: async () => null,
       },
@@ -60,6 +60,7 @@ describe('workflow routes', () => {
     const response = await request(app).get('/api/workflows/definitions').set(SCOPE);
     expect(response.body.definitions[0].steps.map((step) => step.id)).toEqual(['first']);
     expect(response.body.definitions[0].inputs).toEqual([]);
+    expect(response.body.definitions[0].sandbox).toBe('working-tree');
   });
 
   it('returns the declared inputs of a valid definition', async () => {
@@ -74,6 +75,9 @@ describe('workflow routes', () => {
     });
     const response = await request(app).get('/api/workflows/definitions').set(SCOPE);
     expect(response.body.definitions[0].inputs).toEqual([{ name: 'request', description: 'What to build', required: true }]);
+    // The definition object carries no `sandbox` field at all: the summary
+    // reports `null`, not a missing key.
+    expect(response.body.definitions[0].sandbox).toBeNull();
   });
 
   it('forbids caching every workflow response', async () => {
