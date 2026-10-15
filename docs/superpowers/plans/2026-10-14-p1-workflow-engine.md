@@ -1430,9 +1430,9 @@ describe('run store', () => {
   it('serializes concurrent writes to one run', async () => {
     const created = await store.create(run());
     await Promise.all([
-      store.write({ ...created, status: 'running' }),
-      store.write({ ...created, status: 'done' }),
-      store.write({ ...created, status: 'waiting' }),
+      store.write('proj-1', { ...created, status: 'running' }),
+      store.write('proj-1', { ...created, status: 'done' }),
+      store.write('proj-1', { ...created, status: 'waiting' }),
     ]);
     const read = await store.read('proj-1', created.runId);
     expect(['running', 'done', 'waiting']).toContain(read.status);
@@ -1448,6 +1448,11 @@ describe('run store', () => {
 
   it('refuses to write outside the projects directory', async () => {
     await expect(store.create(run({ projectId: '../escape' }))).rejects.toThrow(/invalid project id/);
+  });
+
+  it('refuses a write whose run belongs to another project', async () => {
+    const created = await store.create(run());
+    await expect(store.write('other-project', created)).rejects.toThrow(/belongs to/);
   });
 });
 ```
@@ -1543,14 +1548,24 @@ export const createWorkflowRunStore = ({ fsPromises, path, projectsDirPath, now 
     return runs.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
   };
 
-  const write = (run) => serialize(`${run.projectId}/${run.runId}`, async () => {
-    assertIds(run.projectId, run.runId);
+  /**
+   * A run is written where the caller says it lives, and its own `projectId` has
+   * to agree. Deriving the path from the document alone let one run exist twice:
+   * a browser smoke produced two files for one run id, because a request scoped to
+   * one project id read a run whose field named another and wrote it back under
+   * that other id.
+   */
+  const write = (projectId, run) => serialize(`${projectId}/${run.runId}`, async () => {
+    assertIds(projectId, run.runId);
+    if (run.projectId !== projectId) {
+      throw new Error(`run ${run.runId} belongs to ${run.projectId}, not ${projectId}`);
+    }
     const next = { ...run, updatedAt: now() };
-    await writeAtomic(pathFor(run.projectId, run.runId), next);
+    await writeAtomic(pathFor(projectId, run.runId), next);
     return next;
   });
 
-  const create = (run) => write({ createdAt: now(), ...run });
+  const create = (run) => write(run.projectId, { createdAt: now(), ...run });
 
   const remove = (projectId, runId) => serialize(`${projectId}/${runId}`, async () => {
     assertIds(projectId, runId);
@@ -2164,7 +2179,7 @@ export const createWorkflowEngine = ({
       // A blocked step waits on a person, so the run is waiting, never running:
       // the screens and the resume path both read that status.
       run.status = 'waiting';
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     }
@@ -2194,7 +2209,7 @@ export const createWorkflowEngine = ({
     step.status = 'running';
     run.status = 'running';
     run.cursor = stepId;
-    await store.write(run);
+    await store.write(projectId, run);
     emit(run);
 
     const accepted = await bus.prompt(sessionId, text);
@@ -2208,7 +2223,7 @@ export const createWorkflowEngine = ({
       step.status = 'blocked';
       step.note = attempt.error.message;
       run.status = 'waiting';
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     }
@@ -2222,7 +2237,7 @@ export const createWorkflowEngine = ({
       step.status = 'blocked';
       step.note = attempt.error.message;
       run.status = 'waiting';
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     }
@@ -2247,7 +2262,7 @@ export const createWorkflowEngine = ({
       step.status = 'needs_work';
       run.status = 'waiting';
     }
-    const saved = await store.write(run);
+    const saved = await store.write(projectId, run);
     emit(saved);
     return saved;
   };
@@ -2447,7 +2462,7 @@ Add the four decision methods to the object `engine.js` already returns, and use
         step.note = reason ?? 'the person answered that the step is not done';
         run.status = 'waiting';
       }
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     },
@@ -2476,7 +2491,7 @@ Add the four decision methods to the object `engine.js` already returns, and use
       if (!declared || !attempt) throw new WorkflowError('conflict', `step ${stepId} has not run yet`, 409);
       attempt.verify = await runChecks({ step: declared, directory: run.directory });
       step.note = attempt.verify.ok ? null : 'a verifier failed';
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     },
@@ -2488,7 +2503,7 @@ Add the four decision methods to the object `engine.js` already returns, and use
       if (inFlight.has(projectId)) throw new WorkflowError('busy', 'a step is executing; stop its turn instead of the run', 409);
       const run = await loadRun(projectId, runId);
       run.status = 'cancelled';
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     },
@@ -2511,7 +2526,7 @@ Factor the shared "prompt, wait, verify, decide" body out of `attemptStep` so `r
       step.status = verify.ok ? 'waiting_confirm' : 'needs_work';
       run.status = 'waiting';
     }
-    const saved = await store.write(run);
+    const saved = await store.write(projectId, run);
     emit(saved);
     return saved;
   };
@@ -2529,7 +2544,7 @@ Factor the shared "prompt, wait, verify, decide" body out of `attemptStep` so `r
     step.attempts.push(attempt);
     step.status = 'running';
     run.status = 'running';
-    const started = await store.write(run);
+    const started = await store.write(projectId, run);
     // The request that starts the attempt answers only when the turn is over, so
     // this frame is the only way a screen learns the step is running.
     emit(started);
@@ -2541,7 +2556,7 @@ Factor the shared "prompt, wait, verify, decide" body out of `attemptStep` so `r
       step.status = 'blocked';
       step.note = attempt.error.message;
       run.status = 'waiting';
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     }
@@ -2554,7 +2569,7 @@ Factor the shared "prompt, wait, verify, decide" body out of `attemptStep` so `r
       step.status = 'blocked';
       step.note = attempt.error.message;
       run.status = 'waiting';
-      const saved = await store.write(run);
+      const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
     }
@@ -3472,7 +3487,7 @@ export const reconcileRuns = async ({
     for (const run of runs) {
       if (!ACTIVE.has(run.status)) continue;
       try {
-        const outcome = await reconcileRun({ run, store, verifyCheckpoint, sessions, logger });
+        const outcome = await reconcileRun({ projectId, run, store, verifyCheckpoint, sessions, logger });
         summary.runs += outcome.changed ? 1 : 0;
         summary.interrupted += outcome.interrupted;
         summary.blocked += outcome.blocked ? 1 : 0;
@@ -3489,7 +3504,7 @@ export const reconcileRuns = async ({
  * One run, rebuilt from what is on disk. It answers what the run counted as, so
  * the summary counts runs and never steps.
  */
-const reconcileRun = async ({ run, store, verifyCheckpoint, sessions, logger }) => {
+const reconcileRun = async ({ projectId, run, store, verifyCheckpoint, sessions, logger }) => {
   const knownSessions = sessions === null ? null : new Set(sessions.map((entry) => entry.id));
   let interrupted = 0;
   let blocked = false;
@@ -3544,7 +3559,7 @@ const reconcileRun = async ({ run, store, verifyCheckpoint, sessions, logger }) 
         ?? null;
       waiting = true;
     }
-    await store.write(run);
+    await store.write(projectId, run);
   }
 
   return { changed, interrupted, blocked, waiting };
