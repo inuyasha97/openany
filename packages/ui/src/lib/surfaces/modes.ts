@@ -4,6 +4,7 @@ const BUILT_IN_CONTEXT_PANEL_MODES = [
   'file',
   'context',
   'plan',
+  'workflows',
   'chat',
   'browser',
   'git',

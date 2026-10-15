@@ -14,6 +14,7 @@ export type BuiltInContextSurfaceId =
   | 'walkthrough'
   | 'terminal'
   | 'plan'
+  | 'workflows'
   | 'notes'
   | 'context'
   | 'browser'
@@ -139,6 +140,17 @@ export const CONTEXT_SURFACES: readonly ContextSurfaceDescriptor[] = [
     mode: 'plan',
     icon: 'file-text',
     labelKey: 'contextPanel.mode.plan',
+    availability: 'always',
+  },
+  {
+    id: 'workflows',
+    descriptionKey: 'contextRail.surface.workflows.description',
+    defaultWidthFraction: 0.45,
+    mode: 'workflows',
+    icon: 'list-check-2',
+    labelKey: 'contextPanel.mode.workflows',
+    // Always available: a project with no workflow yet needs the way in to the
+    // definition directory, which a `has-content` rule would hide.
     availability: 'always',
   },
   {
