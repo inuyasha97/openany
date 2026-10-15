@@ -19,7 +19,8 @@
 - No raw colors. Status colors come from theme tokens, so light and dark both read.
 - HTTP goes through `runtimeFetch` from `@/lib/runtime-fetch`, with the project directory passed as `directory` (it becomes the `x-opencode-directory` header the routes scope by). No `fetch` calls to OpenChamber routes.
 - A failed read is an error on screen, never an empty list. `lib/projectContextApi.ts:1-16` states the rule this repo holds to: "An authoritative read must never resolve to an empty value that a caller could mistake for 'the project has nothing'."
-- Focused test command: `bun run --cwd packages/ui test -- src/<path>.test.ts`. Type check: `bun run type-check:ui`. Run `bunx oxlint <changed-paths>` once at the end.
+- The UI package's tests are **`bun:test`** files run by `bun test <file>` (538 files under `packages/ui/src` import `bun:test`; none import vitest). `mock.module(...)` is the package's own way to replace a module (`stores/messageQueueStore.test.ts:6`), and it is available. `packages/web`'s server tests are vitest and stay vitest; the two runners do not mix inside one package.
+- Focused test command for a UI file: `bun test src/<path>.test.ts` from `packages/ui` (or `bun test packages/ui/src/<path>.test.ts` from the repository root). Type check: `bun run type-check:ui`. Run `bunx oxlint <changed-paths>` once at the end.
 - Do not modify `packages/web` in this plan, with one exception: Task 0 extends the definitions route to return each definition's declared steps, because the definition diagram cannot be drawn without them. Any other server change is out of scope: stop and report it instead.
 - `AGENTS.md` forbids git commands unless the maintainer asked. The maintainer asked for this plan to be executed, so the commit steps below are the only git commands an executor runs.
 
@@ -144,47 +145,57 @@ git commit -m "feat(workflows): return the declared steps with a definition"
 
 - [ ] **Step 1: Write the failing test**
 
+The UI suite never mocks a module (`vi.mock(` appears zero times under `packages/ui/src`, and the vendored `anti-slop` lint rejects module mocking). It stubs `globalThis.fetch` and restores it, as `lib/fileReferenceStat.test.ts` does. That is also the stronger test here: it pins the request that actually leaves the process, including the `x-opencode-directory` header the routes are scoped by, which a module mock of `runtimeFetch` could not see.
+
 ```ts
 // packages/ui/src/lib/workflowsApi.test.ts
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { confirmWorkflowStep, createWorkflowRun, fetchWorkflowRun, fetchWorkflowRuns, WorkflowRequestError } from './workflowsApi';
 
-const runtimeFetch = vi.fn();
-vi.mock('@/lib/runtime-fetch', () => ({ runtimeFetch: (...args: unknown[]) => runtimeFetch(...args) }));
+const originalFetch = globalThis.fetch;
+let calls: Array<{ url: string; init: RequestInit }> = [];
+let responses: Array<{ status: number; body: unknown }> = [];
 
-const { fetchWorkflowRuns, fetchWorkflowRun, confirmWorkflowStep, WorkflowRequestError } =
-  await import('./workflowsApi');
+const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+beforeEach(() => {
+  calls = [];
+  responses = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init: init ?? {} });
+    const next = responses.shift() ?? { status: 200, body: {} };
+    return jsonResponse(next.body, next.status);
+  }) as typeof fetch;
+});
 
 afterEach(() => {
-  runtimeFetch.mockReset();
+  globalThis.fetch = originalFetch;
 });
 
-const jsonResponse = (body: unknown, status = 200) => ({
-  ok: status < 400,
-  status,
-  json: async () => body,
-});
+const headersOf = (index: number) => new Headers(calls[index].init.headers);
 
 describe('fetchWorkflowRuns', () => {
   it('sends the directory the routes scope by', async () => {
-    runtimeFetch.mockResolvedValue(jsonResponse({ runs: [] }));
+    responses = [{ status: 200, body: { runs: [] } }];
     await fetchWorkflowRuns('/Users/me/project');
-    expect(runtimeFetch).toHaveBeenCalledWith('/api/workflows/runs', expect.objectContaining({ directory: '/Users/me/project' }));
+    expect(calls[0].url).toContain('/api/workflows/runs');
+    expect(headersOf(0).get('x-opencode-directory')).toBe('/Users/me/project');
   });
 
   it('throws on a failed read instead of answering an empty list', async () => {
-    runtimeFetch.mockResolvedValue(jsonResponse({ error: 'the server is starting' }, 503));
+    responses = [{ status: 503, body: { error: 'the server is starting' } }];
     await expect(fetchWorkflowRuns('/Users/me/project')).rejects.toThrow(/the server is starting/);
   });
 });
 
 describe('fetchWorkflowRun', () => {
   it('reads the run out of the envelope', async () => {
-    runtimeFetch.mockResolvedValue(jsonResponse({ run: { runId: 'r1', steps: [] } }));
+    responses = [{ status: 200, body: { run: { runId: 'r1', steps: [] } } }];
     expect(await fetchWorkflowRun('/Users/me/project', 'r1')).toMatchObject({ runId: 'r1' });
   });
 
   it('carries the server message and status on the error', async () => {
-    runtimeFetch.mockResolvedValue(jsonResponse({ error: 'run r1 was not found' }, 404));
+    responses = [{ status: 404, body: { error: 'run r1 was not found' } }];
     await expect(fetchWorkflowRun('/Users/me/project', 'r1')).rejects.toMatchObject({
       name: 'WorkflowRequestError',
       status: 404,
@@ -194,18 +205,29 @@ describe('fetchWorkflowRun', () => {
   });
 });
 
+describe('createWorkflowRun', () => {
+  it('posts the workflow and its input values', async () => {
+    responses = [{ status: 201, body: { run: { runId: 'r1', steps: [] } } }];
+    await createWorkflowRun('/Users/me/project', { workflowId: 'a', inputs: { request: 'x' } });
+    expect(calls[0].url).toContain('/api/workflows/runs');
+    expect(calls[0].init.method).toBe('POST');
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ workflowId: 'a', inputs: { request: 'x' } });
+  });
+});
+
 describe('confirmWorkflowStep', () => {
   it('sends the decision and the reason', async () => {
-    runtimeFetch.mockResolvedValue(jsonResponse({ run: { runId: 'r1', steps: [] } }));
+    responses = [{ status: 200, body: { run: { runId: 'r1', steps: [] } } }];
     await confirmWorkflowStep('/Users/me/project', 'r1', 'spec', 'not_done', 'the spec is thin');
-    expect(runtimeFetch).toHaveBeenCalledWith(
-      '/api/workflows/runs/r1/steps/spec/confirm',
-      expect.objectContaining({
-        method: 'POST',
-        directory: '/Users/me/project',
-        body: JSON.stringify({ decision: 'not_done', reason: 'the spec is thin' }),
-      }),
-    );
+    expect(calls[0].url).toContain('/api/workflows/runs/r1/steps/spec/confirm');
+    expect(calls[0].init.method).toBe('POST');
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ decision: 'not_done', reason: 'the spec is thin' });
+  });
+
+  it('leaves the reason out when there is none', async () => {
+    responses = [{ status: 200, body: { run: { runId: 'r1', steps: [] } } }];
+    await confirmWorkflowStep('/Users/me/project', 'r1', 'spec', 'done');
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ decision: 'done' });
   });
 });
 ```
@@ -439,18 +461,29 @@ git commit -m "feat(workflows): client for the workflow routes"
 
 ```ts
 // packages/ui/src/stores/useWorkflowStore.test.ts
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, mock } from 'bun:test';
 
-const fetchWorkflowRuns = vi.fn();
-const fetchWorkflowDefinitions = vi.fn();
-vi.mock('@/lib/workflowsApi', () => ({
-  fetchWorkflowRuns: (...args: unknown[]) => fetchWorkflowRuns(...args),
-  fetchWorkflowDefinitions: (...args: unknown[]) => fetchWorkflowDefinitions(...args),
+/**
+ * The client is replaced through `mock.module`, the way the stores' own tests do
+ * it (`stores/messageQueueStore.test.ts:6`). Each queue holds the answers for the
+ * next calls, so a test can hand back data, an error, or a promise it releases
+ * later.
+ */
+const runsQueue: Array<() => unknown> = [];
+const definitionsQueue: Array<() => unknown> = [];
+const take = async (queue: Array<() => unknown>) => {
+  const next = queue.shift();
+  return next ? await next() : [];
+};
+
+mock.module('@/lib/workflowsApi', () => ({
+  fetchWorkflowRuns: () => take(runsQueue),
+  fetchWorkflowDefinitions: () => take(definitionsQueue),
 }));
 
 const { useWorkflowStore } = await import('./useWorkflowStore');
 
-const project = { id: 'path_proj', path: '/Users/me/project', name: 'project' } as never;
+const project = { id: 'path_proj', path: '/Users/me/project', name: 'project' };
 const run = (overrides: Record<string, unknown> = {}) => ({
   runId: 'r1',
   projectId: 'path_proj',
@@ -465,31 +498,32 @@ const run = (overrides: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+  runsQueue.length = 0;
+  definitionsQueue.length = 0;
   useWorkflowStore.setState({ entries: {}, pendingFrames: {} });
-  fetchWorkflowRuns.mockReset();
-  fetchWorkflowDefinitions.mockReset();
 });
 
 describe('load', () => {
   it('keeps the error and the cached runs when the read fails', async () => {
-    fetchWorkflowRuns.mockResolvedValueOnce([run()]);
-    fetchWorkflowDefinitions.mockResolvedValueOnce([]);
+    runsQueue.push(() => [run()]);
+    definitionsQueue.push(() => []);
     await useWorkflowStore.getState().load(project);
     expect(useWorkflowStore.getState().getEntry(project).runs).toHaveLength(1);
 
-    fetchWorkflowRuns.mockRejectedValueOnce(new Error('the server is starting'));
-    fetchWorkflowDefinitions.mockRejectedValueOnce(new Error('the server is starting'));
+    runsQueue.push(() => { throw new Error('the server is starting'); });
+    definitionsQueue.push(() => { throw new Error('the server is starting'); });
     await useWorkflowStore.getState().load(project, { force: true });
     const entry = useWorkflowStore.getState().getEntry(project);
-    expect(entry.error).toMatch(/the server is starting/);
+    expect(entry.error).toContain('the server is starting');
     expect(entry.runs).toHaveLength(1);
     expect(entry.loaded).toBe(true);
   });
 
   it('does not let a slow load overwrite a frame that arrived first', async () => {
-    let release: (value: unknown) => void = () => {};
-    fetchWorkflowRuns.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
-    fetchWorkflowDefinitions.mockResolvedValueOnce([]);
+    let release = () => {};
+    const pending = new Promise((resolve) => { release = resolve; });
+    runsQueue.push(() => pending);
+    definitionsQueue.push(() => []);
     const loading = useWorkflowStore.getState().load(project);
 
     useWorkflowStore.getState().applyRunFrame({ runId: 'r1', projectId: 'path_proj', status: 'waiting', cursor: 'spec', steps: [{ id: 'spec', status: 'waiting_confirm' }] });
@@ -1054,7 +1088,7 @@ git commit -m "feat(workflows): list the runs of a project"
 
 ```ts
 // packages/ui/src/lib/workflows/status.test.ts
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { describeRunStatus, describeStepStatus } from './status';
 
 const t = (key: string) => key;
