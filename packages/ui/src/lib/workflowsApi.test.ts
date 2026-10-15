@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { confirmWorkflowStep, createWorkflowRun, fetchWorkflowRun, fetchWorkflowRuns, releaseWorkflowSandbox, WorkflowRequestError } from './workflowsApi';
+import {
+  confirmWorkflowStep,
+  createWorkflowRun,
+  deleteWorkflowDefinition,
+  fetchWorkflowDefinitionSource,
+  fetchWorkflowRun,
+  fetchWorkflowRuns,
+  releaseWorkflowSandbox,
+  saveWorkflowDefinition,
+  WorkflowRequestError,
+} from './workflowsApi';
 
 const originalFetch = globalThis.fetch;
 let calls: Array<{ url: string; init: RequestInit }> = [];
@@ -93,5 +103,72 @@ describe('confirmWorkflowStep', () => {
     responses = [{ status: 200, body: { run: { runId: 'r1', steps: [] } } }];
     await confirmWorkflowStep('/Users/me/project', 'r1', 'spec', 'done');
     expect(JSON.parse(String(calls[0].init.body))).toEqual({ decision: 'done' });
+  });
+});
+
+describe('fetchWorkflowDefinitionSource', () => {
+  it('reads one definition with the text a person edits and the hash it was read at', async () => {
+    responses = [{ status: 200, body: { definition: { id: 'a', steps: [] }, raw: 'id: a\n', hash: 'h'.repeat(64) } }];
+    const source = await fetchWorkflowDefinitionSource('/Users/me/project', 'a b');
+    expect(calls[0].url).toContain('/api/workflows/definitions/a%20b');
+    expect(headersOf(0).get('x-opencode-directory')).toBe('/Users/me/project');
+    expect(source).toMatchObject({ raw: 'id: a\n', hash: 'h'.repeat(64) });
+  });
+
+  it('carries the 404 a definition that is not there yet answers', async () => {
+    responses = [{ status: 404, body: { error: 'workflow "a" was not found' } }];
+    await expect(fetchWorkflowDefinitionSource('/Users/me/project', 'a')).rejects.toMatchObject({
+      name: 'WorkflowRequestError',
+      status: 404,
+      message: 'workflow "a" was not found',
+    });
+  });
+});
+
+describe('saveWorkflowDefinition', () => {
+  it('puts the text with the hash it was opened at, and answers the hash on disk', async () => {
+    responses = [{ status: 200, body: { written: { file: 'a.yaml', id: 'a', hash: 'n'.repeat(64) } } }];
+    const written = await saveWorkflowDefinition('/Users/me/project', 'a', 'id: a\n', 'o'.repeat(64));
+    expect(calls[0].url).toContain('/api/workflows/definitions/a');
+    expect(calls[0].init.method).toBe('PUT');
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ raw: 'id: a\n', expectedHash: 'o'.repeat(64) });
+    expect(written).toEqual({ file: 'a.yaml', id: 'a', hash: 'n'.repeat(64) });
+  });
+
+  it('leaves the expected hash out for a definition that has none yet', async () => {
+    responses = [{ status: 200, body: { written: { file: 'a.yaml', id: 'a', hash: 'n'.repeat(64) } } }];
+    await saveWorkflowDefinition('/Users/me/project', 'a', 'id: a\n');
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ raw: 'id: a\n' });
+  });
+
+  it('carries the parser\'s refusal, so the editor can show what the server said', async () => {
+    responses = [{ status: 400, body: { error: 'steps: must be a non-empty list' } }];
+    await expect(saveWorkflowDefinition('/Users/me/project', 'a', 'x')).rejects.toMatchObject({
+      status: 400,
+      message: 'steps: must be a non-empty list',
+    });
+  });
+
+  it('carries a conflict, so a window that lost the race can say so instead of winning', async () => {
+    responses = [{ status: 409, body: { error: 'a.yaml changed on disk since it was read' } }];
+    await expect(saveWorkflowDefinition('/Users/me/project', 'a', 'x', 'o'.repeat(64))).rejects.toMatchObject({
+      status: 409,
+      message: 'a.yaml changed on disk since it was read',
+    });
+  });
+});
+
+describe('deleteWorkflowDefinition', () => {
+  it('deletes one definition under the project scope', async () => {
+    responses = [{ status: 200, body: { removed: true } }];
+    await deleteWorkflowDefinition('/Users/me/project', 'a');
+    expect(calls[0].url).toContain('/api/workflows/definitions/a');
+    expect(calls[0].init.method).toBe('DELETE');
+    expect(headersOf(0).get('x-opencode-directory')).toBe('/Users/me/project');
+  });
+
+  it('carries the 404 a definition that is already gone answers', async () => {
+    responses = [{ status: 404, body: { error: 'workflow "a" was not found' } }];
+    await expect(deleteWorkflowDefinition('/Users/me/project', 'a')).rejects.toMatchObject({ status: 404 });
   });
 });

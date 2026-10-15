@@ -5,9 +5,11 @@
  * failure is reported as `{ field, message }` rather than thrown, so a broken
  * file shows up in the screens instead of disappearing from the list.
  */
+import { createHash } from 'node:crypto';
 import { parse as parseYaml } from 'yaml';
 
 const WORKFLOW_DIR = '.openchamber/workflows';
+const DEFINITION_EXTENSIONS = ['.yaml', '.yml'];
 const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
 const STEP_FIELDS = new Set(['id', 'title', 'prompt', 'session', 'permissions', 'verify']);
 const DEFINITION_FIELDS = new Set(['id', 'name', 'version', 'inputs', 'sandbox', 'steps']);
@@ -15,12 +17,25 @@ const INPUT_FIELDS = new Set(['name', 'description', 'required']);
 const VERIFY_FIELDS = new Set(['artifacts', 'commands']);
 
 const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-
 const isName = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(value);
 const isWorkflowId = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value);
 const isText = (value) => typeof value === 'string' && value.trim().length > 0;
 
 const findPlaceholders = (text) => [...text.matchAll(/\{\{([^}]+)\}\}/g)].map((match) => match[1].trim());
+
+/**
+ * A refusal the routes answer with. The parser's own first error is the message,
+ * so the person reads the schema's reason rather than a rewritten one, and the
+ * status travels with the error the way `WorkflowError`'s does.
+ */
+class DefinitionError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'DefinitionError';
+    this.code = code;
+    this.status = code === 'conflict' ? 409 : 400;
+  }
+}
 
 const normalizeArtifacts = (value, field, errors) => {
   if (value === undefined) return [];
@@ -217,16 +232,21 @@ export const createWorkflowDefinitions = ({ fsPromises, path, projectPathFromId 
     const results = [];
     for (const name of entries) {
       let parsed;
+      // The hash is of the bytes on disk, so an editor can hand it back on a save
+      // and be told when someone else changed the file in between. A file that
+      // cannot be read has no hash to answer, the same way it has no id.
+      let hash = null;
       try {
         const raw = await fsPromises.readFile(path.join(directory, name), 'utf8');
+        hash = hashOf(raw);
         parsed = parseDefinition(raw, { file: name });
       } catch (error) {
-        results.push({ file: name, id: null, name: null, version: null, errors: [{ field: '$', message: error?.message ?? 'unreadable' }], definition: null });
+        results.push({ file: name, hash, id: null, name: null, version: null, errors: [{ field: '$', message: error?.message ?? 'unreadable' }], definition: null });
         continue;
       }
       results.push(parsed.ok
-        ? { file: name, id: parsed.definition.id, name: parsed.definition.name, version: parsed.definition.version, errors: [], definition: parsed.definition }
-        : { file: name, id: null, name: null, version: null, errors: parsed.errors, definition: null });
+        ? { file: name, hash, id: parsed.definition.id, name: parsed.definition.name, version: parsed.definition.version, errors: [], definition: parsed.definition }
+        : { file: name, hash, id: null, name: null, version: null, errors: parsed.errors, definition: null });
     }
     return results;
   };
@@ -236,5 +256,113 @@ export const createWorkflowDefinitions = ({ fsPromises, path, projectPathFromId 
     return found ? found.definition : null;
   };
 
-  return { list, read, directoryFor };
+  const hashOf = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
+
+  const exists = async (file) => {
+    try {
+      await fsPromises.access(file);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * The file a definition already lives in, or `null`. `list` accepts both
+   * extensions, so a write that ignored an existing `.yml` would give one id two
+   * files: two rows in the list and two hashes for one definition's text.
+   */
+  const existingFile = async (directory, workflowId) => {
+    for (const extension of DEFINITION_EXTENSIONS) {
+      const file = path.join(directory, `${workflowId}${extension}`);
+      if (await exists(file)) return file;
+    }
+    return null;
+  };
+
+  const fileFor = async (projectId, workflowId) => {
+    const directory = directoryFor(projectId);
+    if (!directory) throw new DefinitionError('invalid', 'the project has no directory to write a workflow into');
+    // The id is the file name, so it is checked before it is ever joined: an id
+    // the parser would refuse must not name a file, least of all outside the
+    // workflows directory.
+    if (!isWorkflowId(workflowId)) throw new DefinitionError('invalid', `invalid workflow id "${workflowId}"`);
+    const file = (await existingFile(directory, workflowId)) ?? path.join(directory, `${workflowId}${DEFINITION_EXTENSIONS[0]}`);
+    return { directory, file, name: path.basename(file) };
+  };
+
+  /**
+   * Write a definition, but only after the parser accepts it and its `id` matches
+   * the id being written. A body that fails to parse, or that renames itself,
+   * would either not load or orphan the runs that reference the old id, and the
+   * person would have lost the file they had.
+   *
+   * The text lands through a temporary in the same directory, so a reader sees
+   * the old file or the new one and never half of either. `expectedHash` is the
+   * hash of the text the caller read; a file someone else changed since then is
+   * refused rather than silently overwritten.
+   */
+  const write = async (projectId, workflowId, rawText, options = {}) => {
+    if (typeof rawText !== 'string') throw new DefinitionError('invalid', 'the definition text is required');
+    const parsed = parseDefinition(rawText, { file: `${workflowId}.yaml` });
+    if (!parsed.ok) {
+      const first = parsed.errors[0];
+      throw new DefinitionError('invalid', `${first.field}: ${first.message}`);
+    }
+    if (parsed.definition.id !== workflowId) {
+      throw new DefinitionError('invalid', `the definition's id "${parsed.definition.id}" does not match ${workflowId}.yaml`);
+    }
+    const { directory, file, name } = await fileFor(projectId, workflowId);
+    if (options.expectedHash) {
+      const current = await fsPromises.readFile(file, 'utf8').catch(() => null);
+      if (current !== null && hashOf(current) !== options.expectedHash) {
+        throw new DefinitionError('conflict', `${name} changed on disk since it was read`);
+      }
+    }
+    await fsPromises.mkdir(directory, { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    try {
+      await fsPromises.writeFile(temporary, rawText, 'utf8');
+      await fsPromises.rename(temporary, file);
+    } catch (error) {
+      // A half-written temporary is the one trace a failed write could leave in
+      // a person's project; it is removed before the failure travels.
+      await fsPromises.rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    }
+    return { file: name, id: workflowId, hash: hashOf(rawText) };
+  };
+
+  /** Delete a definition's file. `false` means there was nothing to delete. */
+  const remove = async (projectId, workflowId) => {
+    const { file } = await fileFor(projectId, workflowId);
+    try {
+      await fsPromises.unlink(file);
+      return true;
+    } catch (error) {
+      if (error?.code === 'ENOENT') return false;
+      throw error;
+    }
+  };
+
+  /**
+   * The text an editor opens, with the hash it was read at and the file it came
+   * from, or `null`. A definition that is not there yet is the ordinary first
+   * case for this call — an editor asks for the file before a person has written
+   * it — so a missing or unreadable file is answered, not thrown.
+   */
+  const readSource = async (projectId, workflowId) => {
+    const directory = directoryFor(projectId);
+    if (!directory || !isWorkflowId(workflowId)) return null;
+    const file = await existingFile(directory, workflowId);
+    if (!file) return null;
+    try {
+      const raw = await fsPromises.readFile(file, 'utf8');
+      return { raw, hash: hashOf(raw), file: path.basename(file) };
+    } catch {
+      return null;
+    }
+  };
+
+  return { list, read, write, remove, readSource, directoryFor };
 };

@@ -1,6 +1,10 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
+import { createWorkflowDefinitions } from './definitions.js';
 import { createWorkflowEngine } from './engine.js';
 import { registerWorkflowRoutes } from './routes.js';
 
@@ -11,8 +15,11 @@ const createApp = (overrides = {}) => {
   const calls = [];
   const runtime = {
     definitions: {
-      list: async () => [{ file: 'a.yaml', id: 'a', name: 'A', version: 1, errors: [], definition: null }],
+      list: async () => [{ file: 'a.yaml', hash: 'h'.repeat(64), id: 'a', name: 'A', version: 1, errors: [], definition: null }],
       read: async () => null,
+      readSource: async () => null,
+      write: async (projectId, workflowId, raw, options) => { calls.push(['write', { projectId, workflowId, raw, options }]); return { file: `${workflowId}.yaml`, id: workflowId, hash: 'h'.repeat(64) }; },
+      remove: async (projectId, workflowId) => { calls.push(['remove', { projectId, workflowId }]); return true; },
     },
     store: {
       list: async () => [run],
@@ -46,7 +53,7 @@ describe('workflow routes', () => {
     const { app } = createApp();
     const response = await request(app).get('/api/workflows/definitions').set(SCOPE);
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ definitions: [{ file: 'a.yaml', id: 'a', name: 'A', version: 1, errors: [], steps: [], inputs: [], sandbox: null }] });
+    expect(response.body).toEqual({ definitions: [{ file: 'a.yaml', hash: 'h'.repeat(64), id: 'a', name: 'A', version: 1, errors: [], steps: [], inputs: [], sandbox: null }] });
   });
 
   it('returns the declared steps of a valid definition', async () => {
@@ -224,5 +231,132 @@ describe('workflow routes', () => {
     expect((await request(app).delete('/api/workflows/runs/11111111-2222-4333-8444-555555555555').set(SCOPE)).status).toBe(200);
     const missing = createApp({ store: { read: async () => null, remove: async () => false, list: async () => [] } });
     expect((await request(missing.app).delete('/api/workflows/runs/11111111-2222-4333-8444-555555555555').set(SCOPE)).status).toBe(404);
+  });
+});
+
+// The definition routes are the one place a person's text becomes a file, so they
+// are driven over the real definitions module and a real temporary project: a
+// mock could agree with the routes about a shape the parser would never accept.
+const SOURCE = `id: two-step
+name: Two steps
+version: 1
+steps:
+  - id: first
+    prompt: "Do the first thing."
+`;
+
+const createDefinitionApp = async (overrides = {}) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-definition-routes-'));
+  const definitions = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId: () => root });
+  return { ...createApp({ definitions, ...overrides }), root, file: path.join(root, '.openchamber/workflows/two-step.yaml') };
+};
+
+describe('workflow definition routes', () => {
+  it('writes a definition a person may run, and answers its hash', async () => {
+    const { app, file } = await createDefinitionApp();
+    const response = await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({ raw: SOURCE });
+
+    expect(response.status).toBe(200);
+    expect(response.body.written).toMatchObject({ file: 'two-step.yaml', id: 'two-step' });
+    expect(response.body.written.hash).toHaveLength(64);
+    expect(await fs.readFile(file, 'utf8')).toBe(SOURCE);
+  });
+
+  it('refuses text the parser rejects, with the parser\'s own message, and writes nothing', async () => {
+    const { app, file } = await createDefinitionApp();
+    const response = await request(app)
+      .put('/api/workflows/definitions/two-step')
+      .set(SCOPE)
+      .send({ raw: 'id: two-step\nname: Two steps\nversion: 1\nsteps: []\n' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('steps: must be a non-empty list');
+    await expect(fs.stat(file)).rejects.toThrow();
+  });
+
+  it('refuses a body whose id is not the definition being written', async () => {
+    const { app, file } = await createDefinitionApp();
+    const response = await request(app)
+      .put('/api/workflows/definitions/two-step')
+      .set(SCOPE)
+      .send({ raw: SOURCE.replace('id: two-step', 'id: other') });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/id "other" does not match/);
+    await expect(fs.stat(file)).rejects.toThrow();
+  });
+
+  it('answers a conflict, not a silent overwrite, when the file changed since it was read', async () => {
+    const { app } = await createDefinitionApp();
+    const written = await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({ raw: SOURCE });
+    const changed = SOURCE.replace('version: 1', 'version: 2');
+
+    const stale = await request(app)
+      .put('/api/workflows/definitions/two-step')
+      .set(SCOPE)
+      .send({ raw: changed, expectedHash: 'a'.repeat(64) });
+    expect(stale.status).toBe(409);
+    expect(stale.body.error).toMatch(/changed on disk/);
+
+    const fresh = await request(app)
+      .put('/api/workflows/definitions/two-step')
+      .set(SCOPE)
+      .send({ raw: changed, expectedHash: written.body.written.hash });
+    expect(fresh.status).toBe(200);
+  });
+
+  it('gives one definition back with the text it was written from', async () => {
+    const { app } = await createDefinitionApp();
+    const written = await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({ raw: SOURCE });
+
+    const response = await request(app).get('/api/workflows/definitions/two-step').set(SCOPE);
+    expect(response.status).toBe(200);
+    expect(response.body.raw).toBe(SOURCE);
+    expect(response.body.hash).toBe(written.body.written.hash);
+    expect(response.body.definition.steps.map((step) => step.id)).toEqual(['first']);
+  });
+
+  it('answers 404 for a definition that is not there yet, which is how an editor opens a new one', async () => {
+    const { app } = await createDefinitionApp();
+    const response = await request(app).get('/api/workflows/definitions/two-step').set(SCOPE);
+    expect(response.status).toBe(404);
+    expect(response.body.error).toBe('workflow "two-step" was not found');
+  });
+
+  it('deletes one definition and answers 404 when there is none', async () => {
+    const { app, file } = await createDefinitionApp();
+    await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({ raw: SOURCE });
+
+    expect((await request(app).delete('/api/workflows/definitions/two-step').set(SCOPE)).body).toEqual({ removed: true });
+    await expect(fs.stat(file)).rejects.toThrow();
+    expect((await request(app).delete('/api/workflows/definitions/two-step').set(SCOPE)).status).toBe(404);
+  });
+
+  it('refuses a write with no text in it', async () => {
+    const { app, file } = await createDefinitionApp();
+    const response = await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({});
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('the definition text is required');
+    await expect(fs.stat(file)).rejects.toThrow();
+  });
+
+  it('asks for a project directory on every definition route', async () => {
+    const { app } = await createDefinitionApp();
+    expect((await request(app).put('/api/workflows/definitions/two-step').send({ raw: SOURCE })).status).toBe(400);
+    expect((await request(app).get('/api/workflows/definitions/two-step')).status).toBe(400);
+    expect((await request(app).delete('/api/workflows/definitions/two-step')).status).toBe(400);
+  });
+
+  it('hands the body and the expected hash to the writer, and answers what it answered', async () => {
+    const { app, calls } = createApp();
+    const response = await request(app)
+      .put('/api/workflows/definitions/two-step')
+      .set(SCOPE)
+      .send({ raw: 'id: two-step\n', expectedHash: 'b'.repeat(64) });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ written: { file: 'two-step.yaml', id: 'two-step', hash: 'h'.repeat(64) } });
+    expect(calls).toContainEqual(['write', { projectId: 'proj-1', workflowId: 'two-step', raw: 'id: two-step\n', options: { expectedHash: 'b'.repeat(64) } }]);
   });
 });

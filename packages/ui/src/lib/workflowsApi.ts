@@ -107,6 +107,12 @@ export interface WorkflowInput {
 
 export interface WorkflowDefinitionSummary {
   file: string;
+  /**
+   * The hash of the bytes on disk. A screen passes it back on a save so the
+   * server can refuse a file another window changed in between, and `null` for
+   * a row whose file could not be read.
+   */
+  hash: string | null;
   id: string | null;
   name: string | null;
   version: number | null;
@@ -120,6 +126,34 @@ export interface WorkflowDefinitionSummary {
    * failed to parse, the same way its `id`, `name` and `version` are.
    */
   sandbox: WorkflowSandbox | null;
+}
+
+/** What a save answers: the file it wrote and the hash of the text now on disk. */
+export interface WorkflowDefinitionWrite {
+  file: string;
+  id: string;
+  hash: string;
+}
+
+/** One definition as the file it is: the text a person edits, and what it parses to. */
+export interface WorkflowDefinitionSource {
+  raw: string;
+  hash: string;
+  /**
+   * `null` when the text no longer parses. The editor still opens such a file —
+   * the text and its hash are what a person repairs it from.
+   */
+  definition: WorkflowDefinition | null;
+}
+
+export interface WorkflowDefinition {
+  id: string;
+  name: string;
+  version: number;
+  sandbox: WorkflowSandbox;
+  inputs: WorkflowInput[];
+  steps: WorkflowStepDefinition[];
+  file: string;
 }
 
 /** A refusal from the workflow routes: the server's own message, and the status beside it. */
@@ -163,6 +197,35 @@ const post = <T>(path: string, directory: string, payload?: unknown) => request<
 
 export const fetchWorkflowDefinitions = async (directory: string): Promise<WorkflowDefinitionSummary[]> =>
   (await request<{ definitions: WorkflowDefinitionSummary[] }>('/api/workflows/definitions', directory)).definitions;
+
+/**
+ * The text of one definition, with the hash it was read at. A definition that has
+ * not been written yet answers 404, which is how an editor learns there is
+ * nothing to open rather than being handed an empty buffer to save.
+ */
+export const fetchWorkflowDefinitionSource = async (directory: string, workflowId: string): Promise<WorkflowDefinitionSource> =>
+  request<WorkflowDefinitionSource>(`/api/workflows/definitions/${encodeURIComponent(workflowId)}`, directory);
+
+/**
+ * Save a definition. The server validates before it writes, so a refusal leaves
+ * the file a person had alone; `expectedHash` is the hash the text was read at,
+ * and a file someone else changed since then is refused instead of overwritten.
+ */
+export const saveWorkflowDefinition = async (
+  directory: string,
+  workflowId: string,
+  raw: string,
+  expectedHash?: string,
+): Promise<WorkflowDefinitionWrite> =>
+  (await request<{ written: WorkflowDefinitionWrite }>(`/api/workflows/definitions/${encodeURIComponent(workflowId)}`, directory, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(expectedHash === undefined ? { raw } : { raw, expectedHash }),
+  })).written;
+
+export const deleteWorkflowDefinition = async (directory: string, workflowId: string): Promise<void> => {
+  await request<{ removed: boolean }>(`/api/workflows/definitions/${encodeURIComponent(workflowId)}`, directory, { method: 'DELETE' });
+};
 
 export const fetchWorkflowRuns = async (directory: string): Promise<WorkflowRun[]> =>
   (await request<{ runs: WorkflowRun[] }>('/api/workflows/runs', directory)).runs;

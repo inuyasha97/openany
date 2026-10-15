@@ -14,6 +14,7 @@
  */
 import crypto from 'node:crypto';
 import express from 'express';
+import { parseDefinition } from './definitions.js';
 import { isValidRunId } from './store.js';
 
 const parseJsonBody = express.json({ limit: '1mb' });
@@ -83,6 +84,9 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
 
   const summary = (entry) => ({
     file: entry.file,
+    // The hash of the bytes on disk, so a screen can hand it back on a save and
+    // be told when another window changed the file in between.
+    hash: entry.hash,
     id: entry.id,
     name: entry.name,
     version: entry.version,
@@ -118,6 +122,58 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
       return res.json({ definitions: list.map(summary) });
     } catch (error) {
       return respondWithError(res, error, 'Failed to list workflow definitions');
+    }
+  });
+
+  /**
+   * One definition, as the file it is: the summary a screen already has stops at
+   * the parsed definition, and the editor needs the text a person edits plus the
+   * hash that text was read at.
+   *
+   * A file that no longer parses still opens — `definition: null` with the text
+   * beside it is what a person repairs it from — and a definition that has not
+   * been written yet answers 404, which is how the editor learns it may offer a
+   * template instead of an empty buffer.
+   */
+  app.get('/api/workflows/definitions/:workflowId', async (req, res) => {
+    try {
+      const scope = scopeOf(req);
+      if (!scope) return res.status(400).json({ error: 'x-opencode-directory is required' });
+      const workflowId = req.params.workflowId;
+      const source = await definitions.readSource(scope.projectId, workflowId);
+      if (!source) return res.status(404).json({ error: `workflow "${workflowId}" was not found` });
+      const parsed = parseDefinition(source.raw, { file: source.file });
+      return res.json({ definition: parsed.ok ? parsed.definition : null, raw: source.raw, hash: source.hash });
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to read the workflow definition');
+    }
+  });
+
+  /**
+   * Write one definition. The parser and the id check live in the definitions
+   * module and refuse with their own reason, which is what the person reads.
+   */
+  app.put('/api/workflows/definitions/:workflowId', parseJsonBody, async (req, res) => {
+    try {
+      const scope = scopeOf(req);
+      if (!scope) return res.status(400).json({ error: 'x-opencode-directory is required' });
+      const expectedHash = typeof req.body?.expectedHash === 'string' && req.body.expectedHash ? req.body.expectedHash : undefined;
+      const written = await definitions.write(scope.projectId, req.params.workflowId, req.body?.raw, { expectedHash });
+      return res.json({ written });
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to write the workflow definition');
+    }
+  });
+
+  app.delete('/api/workflows/definitions/:workflowId', async (req, res) => {
+    try {
+      const scope = scopeOf(req);
+      if (!scope) return res.status(400).json({ error: 'x-opencode-directory is required' });
+      const removed = await definitions.remove(scope.projectId, req.params.workflowId);
+      if (!removed) return res.status(404).json({ error: `workflow "${req.params.workflowId}" was not found` });
+      return res.json({ removed: true });
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to delete the workflow definition');
     }
   });
 
