@@ -1348,6 +1348,7 @@ export const dict: Record<I18nKey, string> = {
   'workflows.editor.discardClose': '破棄して閉じる',
   'workflows.editor.newDefinition': '新しい定義',
   'workflows.editor.idPlaceholder': 'workflow-id',
+  'workflows.editor.idInvalid': 'ID がファイル名になります。小文字の英字・数字・ドット・ハイフンを使い、英小文字か数字で始めてください。',
   'workflows.editor.template': 'SDLC テンプレート',
   'workflows.editor.fromTemplate': 'SDLC テンプレートから作成',
   'contextRail.surface.pr.description': '現在のブランチのプルリクエストを作成・確認・マージ',

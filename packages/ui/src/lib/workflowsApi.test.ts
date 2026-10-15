@@ -141,6 +141,20 @@ describe('saveWorkflowDefinition', () => {
     expect(JSON.parse(String(calls[0].init.body))).toEqual({ raw: 'id: a\n' });
   });
 
+  it('sends `null` as itself, because "must not exist yet" is not "no expectation"', async () => {
+    responses = [{ status: 200, body: { written: { file: 'a.yaml', id: 'a', hash: 'n'.repeat(64) } } }];
+    await saveWorkflowDefinition('/Users/me/project', 'a', 'id: a\n', null);
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ raw: 'id: a\n', expectedHash: null });
+  });
+
+  it('carries the refusal of a create that names a definition already on disk', async () => {
+    responses = [{ status: 409, body: { error: 'a.yaml already exists' } }];
+    await expect(saveWorkflowDefinition('/Users/me/project', 'a', 'id: a\n', null)).rejects.toMatchObject({
+      status: 409,
+      message: 'a.yaml already exists',
+    });
+  });
+
   it('carries the parser\'s refusal, so the editor can show what the server said', async () => {
     responses = [{ status: 400, body: { error: 'steps: must be a non-empty list' } }];
     await expect(saveWorkflowDefinition('/Users/me/project', 'a', 'x')).rejects.toMatchObject({

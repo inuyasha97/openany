@@ -1351,6 +1351,7 @@ export const dict = {
   'workflows.editor.discardClose': 'Weggooien en sluiten',
   'workflows.editor.newDefinition': 'Nieuwe definitie',
   'workflows.editor.idPlaceholder': 'workflow-id',
+  'workflows.editor.idInvalid': 'De id benoemt het bestand: kleine letters, cijfers, punten en streepjes, beginnend met een letter of een cijfer.',
   'workflows.editor.template': 'SDLC-sjabloon',
   'workflows.editor.fromTemplate': 'Beginnen met het SDLC-sjabloon',
   'contextRail.surface.pr.description': 'Maak, beoordeel en merge de pull request voor de huidige branch',

@@ -1364,6 +1364,7 @@ export const dict: Record<I18nKey, string> = {
   'workflows.editor.discardClose': '捨棄並關閉',
   'workflows.editor.newDefinition': '新增定義',
   'workflows.editor.idPlaceholder': 'workflow-id',
+  'workflows.editor.idInvalid': 'id 就是檔案名稱：請使用小寫字母、數字、點和連字號，並以字母或數字開頭。',
   'workflows.editor.template': 'SDLC 範本',
   'workflows.editor.fromTemplate': '從 SDLC 範本開始',
   'contextRail.surface.pr.description': '建立、審查並合併目前分支的提取請求',

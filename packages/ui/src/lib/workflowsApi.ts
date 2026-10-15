@@ -208,18 +208,24 @@ export const fetchWorkflowDefinitionSource = async (directory: string, workflowI
 
 /**
  * Save a definition. The server validates before it writes, so a refusal leaves
- * the file a person had alone; `expectedHash` is the hash the text was read at,
- * and a file someone else changed since then is refused instead of overwritten.
+ * the file a person had alone. `expectedHash` is what the caller expects to find
+ * where the definition goes: the hash the text was read at, so a file someone
+ * else changed since then is refused instead of overwritten, or `null` for a
+ * definition that must not exist yet, which the server answers by refusing a name
+ * that is already taken.
  */
 export const saveWorkflowDefinition = async (
   directory: string,
   workflowId: string,
   raw: string,
-  expectedHash?: string,
+  expectedHash?: string | null,
 ): Promise<WorkflowDefinitionWrite> =>
   (await request<{ written: WorkflowDefinitionWrite }>(`/api/workflows/definitions/${encodeURIComponent(workflowId)}`, directory, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
+    // `null` is sent as itself: omitting the field is "no expectation at all",
+    // which is the case for a definition already open in the editor, and the
+    // route reads the two differently.
     body: JSON.stringify(expectedHash === undefined ? { raw } : { raw, expectedHash }),
   })).written;
 

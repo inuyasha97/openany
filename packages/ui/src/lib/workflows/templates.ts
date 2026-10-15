@@ -4,8 +4,15 @@
  * A definition is a file in the project, so a template is only ever a starting
  * point: the pane that copies it asks for the id that names the file first, and
  * the write refuses a name that is already on disk. A template that does not
- * load is worse than no template, so this one is pinned by the parser's own run
- * (`templates.test.ts`) and by the engine's parser in the task that shipped it.
+ * load is worse than no template, so `templates.test.ts` parses this text with
+ * the `yaml` package and asserts the mapping it declares — the id, the name, the
+ * version, the sandbox, the input and the step ids in order, with no `confirm` on
+ * any step.
+ *
+ * That pins the text, not the schema: the engine's own `parseDefinition` lives in
+ * `packages/web` and cannot run from this package, so the run of the engine's
+ * parser over this text (Step 6 of the plan that shipped it, from the repository
+ * root) is still what proves the template is a definition the engine accepts.
  *
  * Every step stops for a person, because a step becomes done only when a person
  * confirms it; the steps that produce a file carry a verifier so the stop has

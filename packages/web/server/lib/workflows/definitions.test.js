@@ -161,6 +161,61 @@ describe('write', () => {
     await local.write('proj-1', 'sdlc-feature', valid.replace('version: 3', 'version: 4'), { expectedHash: first.hash });
   });
 
+  it('keeps a string hash meaning a change check: the same hash still meets a file that a removal left missing', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-write-'));
+    const directory = path.join(root, '.openchamber/workflows');
+    const local = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId: () => root });
+    const first = await local.write('proj-1', 'sdlc-feature', valid);
+    await fs.rm(path.join(directory, 'sdlc-feature.yaml'));
+
+    // A re-create after an out-of-band removal is legitimate, so a string hash
+    // says nothing about existence: it only refuses a file that is there and differs.
+    const again = await local.write('proj-1', 'sdlc-feature', valid, { expectedHash: first.hash });
+    expect(again.hash).toBe(first.hash);
+    expect(await fs.readFile(path.join(directory, 'sdlc-feature.yaml'), 'utf8')).toBe(valid);
+  });
+
+  it('reads `null` as "this definition must not exist yet", and refuses a file that is there for that reason', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-create-'));
+    const file = path.join(root, '.openchamber/workflows/sdlc-feature.yaml');
+    const local = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId: () => root });
+    await local.write('proj-1', 'sdlc-feature', valid);
+
+    await expect(local.write('proj-1', 'sdlc-feature', valid.replace('version: 3', 'version: 4'), { expectedHash: null }))
+      .rejects.toThrow('sdlc-feature.yaml already exists');
+    // The refusal is about existence, and the file it found is untouched.
+    expect(await fs.readFile(file, 'utf8')).toBe(valid);
+  });
+
+  it('writes when `null` names an id that has no file yet, and refuses the second one', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-create-'));
+    const directory = path.join(root, '.openchamber/workflows');
+    const local = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId: () => root });
+
+    const created = await local.write('proj-1', 'sdlc-feature', valid, { expectedHash: null });
+    expect(created).toMatchObject({ id: 'sdlc-feature', file: 'sdlc-feature.yaml' });
+    expect(created.hash).toHaveLength(64);
+    expect(await fs.readdir(directory)).toEqual(['sdlc-feature.yaml']);
+
+    await expect(local.write('proj-1', 'sdlc-feature', valid, { expectedHash: null })).rejects.toThrow(/already exists/);
+  });
+
+  it('refuses `null` for a name it can see but cannot read, instead of reading it as absent', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-create-'));
+    const directory = path.join(root, '.openchamber/workflows');
+    // A name that exists as a directory is exactly the state a hash comparison
+    // cannot see: `readFile` throws, so the old guard took it for "no file" and
+    // let the create flow replace what was there. `access` sees it.
+    await fs.mkdir(path.join(directory, 'sdlc-feature.yaml'), { recursive: true });
+    const local = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId: () => root });
+
+    await expect(local.write('proj-1', 'sdlc-feature', valid, { expectedHash: null }))
+      .rejects.toThrow('sdlc-feature.yaml already exists');
+    // Nothing was written over or beside the name it found.
+    expect((await fs.stat(path.join(directory, 'sdlc-feature.yaml'))).isDirectory()).toBe(true);
+    expect(await fs.readdir(directory)).toEqual(['sdlc-feature.yaml']);
+  });
+
   it('leaves the definition one file: a refusal writes no temporary, and a write answers the bytes on disk', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-write-'));
     const directory = path.join(root, '.openchamber/workflows');

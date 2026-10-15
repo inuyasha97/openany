@@ -1352,6 +1352,7 @@ export const dict: Record<I18nKey, string> = {
   'workflows.editor.discardClose': '버리고 닫기',
   'workflows.editor.newDefinition': '새 정의',
   'workflows.editor.idPlaceholder': 'workflow-id',
+  'workflows.editor.idInvalid': 'id는 파일 이름이 됩니다: 소문자, 숫자, 점, 하이픈을 쓰고 영소문자나 숫자로 시작하세요.',
   'workflows.editor.template': 'SDLC 템플릿',
   'workflows.editor.fromTemplate': 'SDLC 템플릿에서 시작',
   'contextRail.surface.pr.description': '현재 브랜치의 풀 리퀘스트를 생성, 검토, 병합',

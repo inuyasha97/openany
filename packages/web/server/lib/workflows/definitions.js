@@ -298,9 +298,13 @@ export const createWorkflowDefinitions = ({ fsPromises, path, projectPathFromId 
    * person would have lost the file they had.
    *
    * The text lands through a temporary in the same directory, so a reader sees
-   * the old file or the new one and never half of either. `expectedHash` is the
-   * hash of the text the caller read; a file someone else changed since then is
-   * refused rather than silently overwritten.
+   * the old file or the new one and never half of either. `expectedHash` carries
+   * what the caller expects to find where the definition goes: a string is the
+   * hash of the text it read, so a file someone else changed since then is
+   * refused rather than silently overwritten; `null` says the definition must not
+   * exist yet, which is an existence check rather than a hash comparison, so a
+   * name that is already taken — a file this process cannot so much as read
+   * included — is refused instead of replaced.
    */
   const write = async (projectId, workflowId, rawText, options = {}) => {
     if (typeof rawText !== 'string') throw new DefinitionError('invalid', 'the definition text is required');
@@ -313,7 +317,9 @@ export const createWorkflowDefinitions = ({ fsPromises, path, projectPathFromId 
       throw new DefinitionError('invalid', `the definition's id "${parsed.definition.id}" does not match ${workflowId}.yaml`);
     }
     const { directory, file, name } = await fileFor(projectId, workflowId);
-    if (options.expectedHash) {
+    if (options.expectedHash === null) {
+      if (await exists(file)) throw new DefinitionError('conflict', `${name} already exists`);
+    } else if (typeof options.expectedHash === 'string') {
       const current = await fsPromises.readFile(file, 'utf8').catch(() => null);
       if (current !== null && hashOf(current) !== options.expectedHash) {
         throw new DefinitionError('conflict', `${name} changed on disk since it was read`);

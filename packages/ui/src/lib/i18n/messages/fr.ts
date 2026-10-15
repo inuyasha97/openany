@@ -1164,6 +1164,7 @@ export const dict = {
   'workflows.editor.discardClose': 'Abandonner et fermer',
   'workflows.editor.newDefinition': 'Nouvelle définition',
   'workflows.editor.idPlaceholder': 'workflow-id',
+  'workflows.editor.idInvalid': 'L’id nomme le fichier : minuscules, chiffres, points et tirets, en commençant par une lettre ou un chiffre.',
   'workflows.editor.template': 'Modèle SDLC',
   'workflows.editor.fromTemplate': 'Partir du modèle SDLC',
   'contextRail.surface.pr.description': 'Créer, relire et fusionner la pull request de la branche actuelle',

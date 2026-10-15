@@ -29,11 +29,12 @@
  *
  * A definition that does not exist yet is the same pane with no file: it asks for
  * the id that names the file and offers the shipped template to start from. The
- * template is only ever copied onto a name that has no file — a save carries an
- * `expectedHash` no file can have until the first one is written — and once the
- * file exists the id is fixed and the template is no longer offered, because
- * renaming a definition is refused and copying over one that is there is not a
- * thing this screen should make easy.
+ * template is only ever copied onto a name that has no file — the first save of a
+ * new definition says so with `expectedHash: null`, which the route answers with
+ * an existence check, not a hash comparison — and once the file exists the id is
+ * fixed and the template is no longer offered, because renaming a definition is
+ * refused and copying over one that is there is not a thing this screen should
+ * make easy.
  */
 import { useEffect, useMemo, useState } from 'react';
 
@@ -69,15 +70,6 @@ export interface DefinitionEditorProps {
   /** Hands the pane back to the run detail. */
   onClose: () => void;
 }
-
-/**
- * The `expectedHash` a definition's first save carries. A new definition must not
- * overwrite a file that is already there — copying the template is legitimate
- * only for a name with no file yet — and no sha256 can be this string, so the
- * route's own guard refuses a file that exists (or that appeared between opening
- * the pane and saving) instead of replacing it.
- */
-const MUST_BE_ABSENT_HASH = 'absent';
 
 /**
  * The id shape `definitions.js` names a file by (`isWorkflowId`), so the pane can
@@ -195,6 +187,15 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
   // A new definition needs the id that names its file before anything is written,
   // and something to write; an edited one needs a change.
   const canSave = dirty && (!creating || idUsable);
+  /**
+   * Why the save and the template action are closed, when the reason is the id
+   * itself. A disabled `Button` is `pointer-events-none`
+   * (`components/ui/button.tsx`), so its own `title` never appears: the span
+   * around it is the hit target that carries the reason, as the delete button's
+   * does. An edited definition never reads the typed id, so the reason is only
+   * about the create pane.
+   */
+  const idReason = creating && !idUsable ? t('workflows.editor.idInvalid') : undefined;
 
   /** Puts the template in the buffer, named by the id it is given. */
   const seedTemplate = (targetId: string) => {
@@ -220,9 +221,11 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
     setBusy(true);
     setError(null);
     try {
-      // A definition with no file yet carries a hash no file can have, so a name
-      // that is already taken is refused by the route instead of overwritten.
-      const expectedHash = hash ?? (creating ? MUST_BE_ABSENT_HASH : undefined);
+      // A definition with no file yet says so with `null`: the route checks that
+      // no file exists rather than comparing hashes, so a name that is already
+      // taken — by a file this pane could not even read — is refused instead of
+      // replaced. An edited definition carries the hash it was read at.
+      const expectedHash = hash ?? (creating ? null : undefined);
       const written = await saveWorkflowDefinition(project.path, workflowId, text, expectedHash);
       setBaseline(text);
       // The next save compares against the text that is now on disk.
@@ -308,9 +311,13 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
             {t('workflows.editor.close')}
           </Button>
           {editable ? (
-            <Button size="xs" disabled={busy || !canSave} onClick={() => void save()}>
-              {t('workflows.editor.save')}
-            </Button>
+            /* The reason a closed save carries is the unusable id, on the same
+               hit-target span the delete button uses. */
+            <span title={idReason}>
+              <Button size="xs" disabled={busy || !canSave} onClick={() => void save()}>
+                {t('workflows.editor.save')}
+              </Button>
+            </span>
           ) : null}
         </span>
       </div>
@@ -318,7 +325,9 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           {/* The id is what names the file, so it is asked for before the buffer
               has anything to save — the header already shows the name it will
-              write. Nothing is offered for an id the route would refuse. */}
+              write. Nothing is offered for an id the route would refuse, and the
+              reason travels on the span because a disabled `Button` is
+              `pointer-events-none` and never shows its own `title`. */}
           <Input
             value={createId}
             onChange={(event) => applyCreateId(event.target.value)}
@@ -328,12 +337,16 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
             autoFocus
             disabled={busy}
           />
-          <Button size="xs" variant="outline" disabled={busy || !idUsable} onClick={() => seedTemplate(createId)}>
-            {t('workflows.editor.fromTemplate')}
-          </Button>
+          <span title={idReason}>
+            <Button size="xs" variant="outline" disabled={busy || !idUsable} onClick={() => seedTemplate(createId)}>
+              {t('workflows.editor.fromTemplate')}
+            </Button>
+          </span>
         </div>
       ) : null}
-      {editable && liveRun ? (
+      {/* The delete this explains is only offered for a definition with a file, so
+          the banner waits for one: a create pane has no Delete to be blocked. */}
+      {editable && hasFile && liveRun ? (
         <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
           {t('workflows.editor.deleteBlocked')}
         </p>

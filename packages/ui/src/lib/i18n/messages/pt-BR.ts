@@ -1352,6 +1352,7 @@ export const dict: Record<I18nKey, string> = {
   "workflows.editor.discardClose": "Descartar e fechar",
   "workflows.editor.newDefinition": "Nova definição",
   "workflows.editor.idPlaceholder": "workflow-id",
+  "workflows.editor.idInvalid": "O id nomeia o arquivo: minúsculas, dígitos, pontos e hífens, começando por uma letra ou um dígito.",
   "workflows.editor.template": "Modelo SDLC",
   "workflows.editor.fromTemplate": "Começar pelo modelo SDLC",
   "contextRail.surface.pr.description": "Crie, revise e faça merge do pull request do branch atual",

@@ -305,6 +305,40 @@ describe('workflow definition routes', () => {
     expect(fresh.status).toBe(200);
   });
 
+  it('reads `null` as "this definition must not exist yet": a file that is there is refused for that reason', async () => {
+    const { app, file } = await createDefinitionApp();
+    await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({ raw: SOURCE });
+
+    const clash = await request(app)
+      .put('/api/workflows/definitions/two-step')
+      .set(SCOPE)
+      .send({ raw: SOURCE.replace('version: 1', 'version: 2'), expectedHash: null });
+
+    expect(clash.status).toBe(409);
+    expect(clash.body.error).toBe('two-step.yaml already exists');
+    expect(await fs.readFile(file, 'utf8')).toBe(SOURCE);
+  });
+
+  it('creates what `null` says must not exist yet, and answers the bytes on disk', async () => {
+    const { app, file } = await createDefinitionApp();
+
+    const created = await request(app)
+      .put('/api/workflows/definitions/two-step')
+      .set(SCOPE)
+      .send({ raw: SOURCE, expectedHash: null });
+
+    expect(created.status).toBe(200);
+    expect(created.body.written).toMatchObject({ file: 'two-step.yaml', id: 'two-step' });
+    expect(await fs.readFile(file, 'utf8')).toBe(SOURCE);
+  });
+
+  it('hands `null` to the writer as the must-not-exist case rather than as an absent field', async () => {
+    const { app, calls } = createApp();
+    await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({ raw: 'id: two-step\n', expectedHash: null });
+
+    expect(calls).toContainEqual(['write', { projectId: 'proj-1', workflowId: 'two-step', raw: 'id: two-step\n', options: { expectedHash: null } }]);
+  });
+
   it('gives one definition back with the text it was written from', async () => {
     const { app } = await createDefinitionApp();
     const written = await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({ raw: SOURCE });

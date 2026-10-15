@@ -1352,6 +1352,7 @@ export const dict: Record<I18nKey, string> = {
   'workflows.editor.discardClose': '丢弃并关闭',
   'workflows.editor.newDefinition': '新建定义',
   'workflows.editor.idPlaceholder': 'workflow-id',
+  'workflows.editor.idInvalid': 'id 就是文件名：请使用小写字母、数字、点和连字符，并以字母或数字开头。',
   'workflows.editor.template': 'SDLC 模板',
   'workflows.editor.fromTemplate': '从 SDLC 模板开始',
   'contextRail.surface.pr.description': '创建、审查并合并当前分支的拉取请求',

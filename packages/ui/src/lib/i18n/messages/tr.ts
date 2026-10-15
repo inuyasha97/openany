@@ -1326,6 +1326,7 @@ export const dict = {
   'workflows.editor.discardClose': 'At ve kapat',
   'workflows.editor.newDefinition': 'Yeni tanım',
   'workflows.editor.idPlaceholder': 'workflow-id',
+  'workflows.editor.idInvalid': 'Kimlik dosyayı adlandırır: küçük harfler, rakamlar, nokta ve tire; bir harf ya da rakamla başlamalı.',
   'workflows.editor.template': 'SDLC şablonu',
   'workflows.editor.fromTemplate': 'SDLC şablonuyla başla',
   'contextRail.surface.pr.description': 'Geçerli branch\'in pull request\'ini oluştur, incele ve merge et',

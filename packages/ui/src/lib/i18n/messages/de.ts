@@ -3219,6 +3219,7 @@ export const dict = {
   'workflows.editor.discardClose': 'Verwerfen und schließen',
   'workflows.editor.newDefinition': 'Neue Definition',
   'workflows.editor.idPlaceholder': 'workflow-id',
+  'workflows.editor.idInvalid': 'Die ID benennt die Datei: Kleinbuchstaben, Ziffern, Punkte und Bindestriche, beginnend mit einem Buchstaben oder einer Ziffer.',
   'workflows.editor.template': 'SDLC-Vorlage',
   'workflows.editor.fromTemplate': 'Mit der SDLC-Vorlage beginnen',
   'contextRail.surface.pr.description': 'PR-Kontext',

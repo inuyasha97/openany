@@ -1625,6 +1625,7 @@ export const dict: Record<I18nKey, string> = {
   'workflows.editor.discardClose': 'Odrzuć i zamknij',
   'workflows.editor.newDefinition': 'Nowa definicja',
   'workflows.editor.idPlaceholder': 'workflow-id',
+  'workflows.editor.idInvalid': 'Identyfikator nazywa plik: małe litery, cyfry, kropki i myślniki, zaczynając od litery lub cyfry.',
   'workflows.editor.template': 'Szablon SDLC',
   'workflows.editor.fromTemplate': 'Zacznij od szablonu SDLC',
   'contextRail.surface.pr.description': 'Twórz, przeglądaj i scalaj pull request bieżącej gałęzi',

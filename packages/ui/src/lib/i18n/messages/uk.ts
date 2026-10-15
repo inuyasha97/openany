@@ -1352,6 +1352,7 @@ export const dict: Record<I18nKey, string> = {
   "workflows.editor.discardClose": "Відкинути й закрити",
   "workflows.editor.newDefinition": "Нове визначення",
   "workflows.editor.idPlaceholder": "workflow-id",
+  "workflows.editor.idInvalid": "Ідентифікатор називає файл: малі літери, цифри, крапки та дефіси, починаючи з літери або цифри.",
   "workflows.editor.template": "Шаблон SDLC",
   "workflows.editor.fromTemplate": "Почати зі шаблону SDLC",
   "contextRail.surface.pr.description": "Створюйте, переглядайте та зливайте pull request поточної гілки",

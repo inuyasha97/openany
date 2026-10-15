@@ -158,7 +158,12 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     try {
       const scope = scopeOf(req);
       if (!scope) return res.status(400).json({ error: 'x-opencode-directory is required' });
-      const expectedHash = typeof req.body?.expectedHash === 'string' && req.body.expectedHash ? req.body.expectedHash : undefined;
+      // `null` is not an absent field: it is the create case, and it has to reach
+      // the writer as itself rather than collapse into "no expectation". An empty
+      // string is no expectation, the way it is for a hash nobody read.
+      const expectedHash = req.body?.expectedHash === null
+        ? null
+        : (typeof req.body?.expectedHash === 'string' && req.body.expectedHash ? req.body.expectedHash : undefined);
       const written = await definitions.write(scope.projectId, req.params.workflowId, req.body?.raw, { expectedHash });
       return res.json({ written });
     } catch (error) {
