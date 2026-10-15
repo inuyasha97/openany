@@ -2803,6 +2803,7 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     next();
   });
 
+  // `normalizeDirectoryPath` is the realpath-ing normalizer the projects list uses.
   const { definitions, store, engine, resolveProjectId, projectPathFromId, normalizeDirectoryPath } = workflowsRuntime;
 
   /**
@@ -2816,11 +2817,13 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     const directory = directoryOf(req);
     if (!directory) return null;
     // The id has to be the one the app's own project list uses, and that list
-    // normalizes a path (realpath) before deriving it. Without this the same
-    // directory has two ids — `/tmp/x` and its realpath `/private/tmp/x` — so a
-    // screen reads one run file while its own writes land in another. The browser
-    // smoke caught exactly that: two run files for one run id, one `done` and one
-    // `waiting_confirm`.
+    // derives it from `normalizePathForPersistence` — the normalizer that also
+    // realpaths, which is what `sanitizeProjects` stores (`settings-normalization-runtime.js:53-77,148`).
+    // `normalizeDirectoryPath` alone only trims, so it would leave the defect.
+    // Without the realpath the same directory has two ids — `/tmp/x` and
+    // `/private/tmp/x` — and a screen reads one run file while its own writes land
+    // in another. The browser smoke caught exactly that: two run files for one run
+    // id, one `done` and one `waiting_confirm`.
     const normalized = normalizeDirectoryPath(directory);
     const projectId = resolveProjectId(normalized || directory);
     if (!projectId) return null;
@@ -3171,6 +3174,7 @@ const workflowRuntime = createWorkflowRuntime({
   projectsDirPath: OPENCHAMBER_PROJECTS_CONFIG_DIR,
   projectPathFromId,
   resolveProjectId: createProjectIdFromPath,
+  normalizeDirectoryPath: normalizePathForPersistence,
   getOmpRuntimeHost: async () => {
     const host = ompAgentRuntime?.getHost?.();
     return host ? await host : null;
