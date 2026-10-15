@@ -353,12 +353,22 @@ export interface WorkflowStepDefinition {
   confirm: 'human' | 'auto';
 }
 
+export interface WorkflowInput {
+  name: string;
+  description: string;
+  required: boolean;
+}
+
 export interface WorkflowDefinitionSummary {
   file: string;
   id: string | null;
   name: string | null;
   version: number | null;
   errors: Array<{ field: string; message: string }>;
+  /** The declared steps, for the definition diagram. */
+  steps: WorkflowStepDefinition[];
+  /** The declared inputs, so a screen can ask for the values the create route requires. */
+  inputs: WorkflowInput[];
 }
 
 /**
