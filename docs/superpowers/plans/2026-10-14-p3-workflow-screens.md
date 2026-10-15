@@ -938,6 +938,11 @@ In `packages/ui/src/lib/i18n/messages/en.ts`, add a `workflows` group in the sam
       checkpoint: 'Checkpoint',
       verifier: 'Checks',
       truncated: 'output cut at 64 KiB',
+      // The run list's delete confirmation; the dialog names the run and says
+      // that only the run file goes.
+      delete: 'Delete run',
+      deleteConfirm: 'This removes the run and its step history. Commits and artifacts stay in the project.',
+      deleteCancel: 'Cancel',
       timeout: 'timed out',
       exit: 'exit {code}',
       diffFailed: 'The diff could not be read',
@@ -1018,7 +1023,8 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
   const removeRun = useWorkflowStore((state) => state.removeRun);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const usable = definitions.filter((definition) => definition.definition !== null);
+  // `WorkflowDefinitionSummary` carries `id: string | null`, not the parsed definition.
+  const usable = definitions.filter((definition) => definition.id !== null);
 
   const start = async (workflowId: string) => {
     setBusy(true);
@@ -1076,8 +1082,8 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
                 </span>
                 <span className="block truncate text-[11px] text-muted-foreground">{run.cursor ?? run.runId.slice(0, 8)}</span>
               </button>
-              <Button size="xs" variant="ghost" disabled={busy} aria-label={t('workflows.step.cancelRun')} onClick={() => void remove(run.runId)}>
-                ×
+              <Button size="xs" variant="ghost" disabled={busy} aria-label={t('workflows.run.delete')} onClick={() => setPendingDelete(run.runId)}>
+                <Icon name="delete-bin" className="size-3.5" aria-hidden />
               </Button>
             </div>
           );
