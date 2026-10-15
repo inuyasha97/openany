@@ -27,6 +27,19 @@ beforeAll(async () => {
   git('commit', '-q', '-m', 'seed');
 });
 
+// The real service creates the checkout and the branch and the real service
+// removes them; only the readiness answer is overridden, so the leftover a
+// failed preparation must clean up is a real one and its teardown is real too.
+const gitAnswering = (status, created) => ({
+  createWorktree: async (...args) => {
+    const worktree = await gitService.createWorktree(...args);
+    created.push(worktree.path);
+    return worktree;
+  },
+  removeWorktree: gitService.removeWorktree,
+  getWorktreeBootstrapStatus: async () => status,
+});
+
 afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -66,6 +79,32 @@ describe('prepareSandbox', () => {
     await expect(prepareSandbox({ run: run(), projectPath: notARepo, git: gitService }))
       .rejects.toThrow();
     await fs.rm(notARepo, { recursive: true, force: true });
+  });
+
+  it('releases the checkout and the branch when the bootstrap fails', async () => {
+    const subject = run();
+    const created = [];
+    const git = gitAnswering({ status: 'failed', phase: 'directory-created', error: 'the checkout could not be populated' }, created);
+
+    await expect(prepareSandbox({ run: subject, projectPath: root, git }))
+      .rejects.toThrow('the worktree could not be prepared: the checkout could not be populated');
+
+    expect(created).toHaveLength(1);
+    await expect(fs.stat(created[0])).rejects.toThrow();
+    expect(execFileSync('git', ['branch', '--list', `omp/wf/${subject.runId}`], { cwd: root }).toString().trim()).toBe('');
+  });
+
+  it('releases the checkout and the branch when the checkout never becomes ready', async () => {
+    const subject = run();
+    const created = [];
+    const git = gitAnswering({ status: 'pending', phase: 'directory-created', error: null }, created);
+
+    await expect(prepareSandbox({ run: subject, projectPath: root, git, waitOptions: { timeoutMs: 50, pollMs: 10 } }))
+      .rejects.toThrow('timed out waiting for the worktree checkout');
+
+    expect(created).toHaveLength(1);
+    await expect(fs.stat(created[0])).rejects.toThrow();
+    expect(execFileSync('git', ['branch', '--list', `omp/wf/${subject.runId}`], { cwd: root }).toString().trim()).toBe('');
   });
 });
 

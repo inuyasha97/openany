@@ -23,18 +23,20 @@ const nameFor = (run) => `wf-${run.runId}`;
 // dependency install and is not what makes the checkout real.
 const BOOTSTRAP_TIMEOUT_MS = 60_000;
 const BOOTSTRAP_POLL_MS = 150;
-const waitForCheckout = async (directory, git) => {
-  const deadline = Date.now() + BOOTSTRAP_TIMEOUT_MS;
+// The deadline and the poll are parameters so a test can prove the timeout
+// branch without spending the real minute; the defaults are what a run gets.
+const waitForCheckout = async (directory, git, { timeoutMs = BOOTSTRAP_TIMEOUT_MS, pollMs = BOOTSTRAP_POLL_MS } = {}) => {
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     const status = await git.getWorktreeBootstrapStatus(directory);
     if (status?.status === 'failed') throw new Error(`the worktree could not be prepared: ${status.error || 'unknown error'}`);
     if (status?.status === 'ready' || status?.phase === 'git-ready' || status?.phase === 'setup-ready') return;
     if (Date.now() >= deadline) throw new Error('timed out waiting for the worktree checkout');
-    await new Promise((resolve) => setTimeout(resolve, BOOTSTRAP_POLL_MS));
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
 };
 
-export const prepareSandbox = async ({ run, projectPath, git }) => {
+export const prepareSandbox = async ({ run, projectPath, git, waitOptions = {} }) => {
   if (run.sandbox !== 'worktree') return { directory: projectPath, branch: null, created: false };
   if (run.worktreeBranch && run.directory && run.directory !== projectPath) {
     return { directory: run.directory, branch: run.worktreeBranch, created: false };
@@ -46,7 +48,23 @@ export const prepareSandbox = async ({ run, projectPath, git }) => {
   const created = await git.createWorktree(projectPath, { mode: 'new', worktreeName: nameFor(run), branchName: branchFor(run) });
   const directory = created?.path;
   if (!directory) throw new Error('the worktree was created without a directory');
-  await waitForCheckout(directory, git);
+  try {
+    await waitForCheckout(directory, git, waitOptions);
+  } catch (error) {
+    // A checkout that never finished preparing is not a sandbox. The run has
+    // recorded neither its directory nor its branch, so nothing would ever
+    // release them, and the branch name alone (`omp/wf/<runId>`) would refuse
+    // every later attempt with `Branch already exists`. Tear the checkout down
+    // here, branch included, and let the original failure be what the person
+    // sees: a release that fails is recoverable by hand, the prepare error is
+    // what explains the run.
+    try {
+      await git.removeWorktree(projectPath, { directory, deleteLocalBranch: true });
+    } catch {
+      // Deliberately swallowed so the prepare error is the one that surfaces.
+    }
+    throw error;
+  }
   return { directory, branch: created.branch ?? branchFor(run), created: true };
 };
 

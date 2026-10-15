@@ -141,10 +141,23 @@ export const createWorkflowEngine = ({
     if (!declared) throw new WorkflowError('not-found', `step ${stepId} is not declared by ${run.workflowId}`, 404);
     const step = assertStepIsOpen(findStep(run, stepId));
 
+    const { text, missing } = substituteInputs(declared.prompt, run.inputs ?? {});
+    if (missing.length > 0) {
+      step.status = 'blocked';
+      step.note = `missing input: ${missing.join(', ')}`;
+      run.status = 'waiting';
+      const saved = await store.write(projectId, run);
+      emit(saved);
+      return saved;
+    }
+
     // A run in `worktree` mode executes in its own checkout from its first step
     // on. A refusal blocks the step instead of falling back: running in the
     // project's working tree while the run says `worktree` is the opposite of
     // what the person asked for, and they would only learn it from the diff.
+    // This sits after the missing-input return: a step that is about to block
+    // for want of an input has nothing to run, and provisioning a checkout for
+    // it would leave a worktree and a branch the run never got to use.
     if (run.sandbox === 'worktree' && (!run.worktreeBranch || run.directory === projectPath)) {
       try {
         const prepared = await prepareSandbox({ run, projectPath, git: worktrees });
@@ -159,16 +172,6 @@ export const createWorkflowEngine = ({
         emit(saved);
         return saved;
       }
-    }
-
-    const { text, missing } = substituteInputs(declared.prompt, run.inputs ?? {});
-    if (missing.length > 0) {
-      step.status = 'blocked';
-      step.note = `missing input: ${missing.join(', ')}`;
-      run.status = 'waiting';
-      const saved = await store.write(projectId, run);
-      emit(saved);
-      return saved;
     }
 
     const bus = requireHost();

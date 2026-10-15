@@ -546,13 +546,17 @@ describe('the worktree sandbox', () => {
   // Every checkout the fake hands out lives under the same temp root the engine
   // fixtures use, so `afterEach` removes them too.
   const fakeWorktrees = (calls) => ({
-    getWorktreeBootstrapStatus: async () => ({ status: 'ready', phase: 'setup-ready', error: null }),
+    getWorktreeBootstrapStatus: async () => calls.bootstrap ?? { status: 'ready', phase: 'setup-ready', error: null },
     createWorktree: async (directory, input) => {
       if (calls.fail) throw new Error(calls.fail);
       calls.create.push({ directory, input });
       const checkout = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-engine-wt-'));
       roots.push(checkout);
       return { path: checkout, branch: input.branchName };
+    },
+    removeWorktree: async (directory, input) => {
+      calls.remove.push({ directory, input });
+      await fs.rm(input.directory, { recursive: true, force: true });
     },
   });
 
@@ -624,5 +628,41 @@ describe('the worktree sandbox', () => {
       status: 'blocked',
       note: 'the run could not get its own worktree: not a git repository',
     });
+  });
+
+  it('releases the checkout when its bootstrap fails, so the run is not wedged', async () => {
+    const calls = { create: [], remove: [], bootstrap: { status: 'failed', phase: 'directory-created', error: 'the checkout could not be populated' } };
+    const worktrees = fakeWorktrees(calls);
+    const created = [];
+    const create = worktrees.createWorktree;
+    worktrees.createWorktree = async (...args) => {
+      const worktree = await create(...args);
+      created.push(worktree.path);
+      return worktree;
+    };
+    const { engine, store, run, root } = await buildEngine({ overrides: { worktrees } });
+    await store.write('proj-1', { ...run, sandbox: 'worktree' });
+
+    const result = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+
+    // The original failure is what the step records.
+    expect(result.steps[0].status).toBe('blocked');
+    expect(result.steps[0].note).toBe('the run could not get its own worktree: the worktree could not be prepared: the checkout could not be populated');
+    // The orphan and its branch are released, so a retry is not refused by
+    // `Branch already exists`.
+    expect(calls.remove).toEqual([{ directory: root, input: { directory: created[0], deleteLocalBranch: true } }]);
+    await expect(fs.stat(created[0])).rejects.toThrow();
+  });
+
+  it('provisions no checkout for a step blocked on a missing input', async () => {
+    const calls = { create: [] };
+    const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+    await store.write('proj-1', { ...run, sandbox: 'worktree', inputs: {} });
+
+    const result = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+
+    expect(result.steps[0].status).toBe('blocked');
+    expect(result.steps[0].note).toBe('missing input: request');
+    expect(calls.create).toHaveLength(0);
   });
 });
