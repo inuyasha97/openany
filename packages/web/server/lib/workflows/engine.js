@@ -84,7 +84,7 @@ export const createWorkflowEngine = ({
 
   const emit = (run) => {
     try {
-      broadcast({ type: 'openchamber:workflow', properties: { runId: run.runId, projectId: run.projectId, status: run.status, cursor: run.cursor, steps: run.steps.map((step) => ({ id: step.id, status: step.status })) } });
+      broadcast({ type: 'openchamber:workflow', properties: { runId: run.runId, projectId: run.projectId, status: run.status, cursor: run.cursor, worktreeReleasedAt: run.worktreeReleasedAt ?? null, steps: run.steps.map((step) => ({ id: step.id, status: step.status })) } });
     } catch (error) {
       logger.warn?.('[workflows] broadcast failed', error?.message ?? error);
     }
@@ -430,8 +430,19 @@ export const createWorkflowEngine = ({
      * because it is still writing into that checkout — and because `waiting` may
      * still be answered, which would start a fresh attempt in a directory this
      * call had just removed.
+     *
+     * It takes the project's lock for the same reason `cancelRun` refuses while
+     * one is held: this writes the whole run. During the first step's
+     * provisioning window the run on disk still reads `idle` — `attemptStep`
+     * records `directory`/`worktreeBranch` before it flips the status — so
+     * without the lock a release landing there would pass the status guard,
+     * remove the checkout the step is about to open a session in, and stamp the
+     * run; the engine would then create a session whose `cwd` is gone and the
+     * next write would overwrite the stamp, leaving `prepareSandbox` to reuse
+     * the dead path. Holding the lock refuses that release `busy`, and the lock
+     * it holds while removing a checkout refuses the step actions too.
      */
-    releaseSandbox: async ({ projectId, projectPath, runId }) => {
+    releaseSandbox: ({ projectId, projectPath, runId }) => withLock(projectId, async () => {
       const run = await loadRun(projectId, runId);
       if (run.status === 'running' || run.status === 'waiting') {
         throw new WorkflowError('conflict', `run ${runId} is still running`, 409);
@@ -446,7 +457,7 @@ export const createWorkflowEngine = ({
       const saved = await store.write(projectId, run);
       emit(saved);
       return saved;
-    },
+    }),
 
     reconcile: () => reconcileRuns({
       store,

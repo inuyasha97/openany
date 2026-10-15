@@ -22,6 +22,8 @@ export type WorkflowRunUpdatedEvent = {
   projectId: string;
   status: 'idle' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
   cursor: string | null;
+  /** Present once a checkout has been released; absent when the frame does not speak about it. */
+  worktreeReleasedAt?: number | null;
   steps: Array<{ id: string; status: WorkflowStepStatus }>;
 };
 
@@ -474,6 +476,13 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
       projectId,
       status,
       cursor: typeof properties?.cursor === 'string' ? properties.cursor : null,
+      // A release is the one fact this summary carries beyond a step's status.
+      // It is omitted from the event when the frame does not name it, so a frame
+      // that says nothing about a release cannot clear one the client already
+      // knows.
+      ...(typeof properties?.worktreeReleasedAt === 'number' || properties?.worktreeReleasedAt === null
+        ? { worktreeReleasedAt: properties.worktreeReleasedAt }
+        : {}),
       // The frame is a summary. A step whose status this client does not know
       // keeps its last known value rather than being reset to a guess.
       steps: rawSteps.flatMap((step) => (

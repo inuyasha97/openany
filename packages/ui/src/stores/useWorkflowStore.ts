@@ -20,6 +20,12 @@ export interface WorkflowRunFrame {
   projectId: string;
   status: WorkflowRun['status'];
   cursor: string | null;
+  /**
+   * When a run's checkout was released. Optional: a frame that does not name it
+   * is not a statement that the checkout is back, so it leaves the run's value
+   * alone.
+   */
+  worktreeReleasedAt?: number | null;
   steps: Array<{ id: string; status: WorkflowStepStatus }>;
 }
 
@@ -48,6 +54,9 @@ const patchRun = (run: WorkflowRun, frame: WorkflowRunFrame): WorkflowRun => ({
   ...run,
   status: frame.status,
   cursor: frame.cursor,
+  // Only a frame that names a release moves the run's own value: a summary that
+  // says nothing about it is not a statement that the checkout came back.
+  ...(frame.worktreeReleasedAt === undefined ? {} : { worktreeReleasedAt: frame.worktreeReleasedAt }),
   steps: run.steps.map((step) => {
     const framed = frame.steps.find((candidate) => candidate.id === step.id);
     return framed && framed.status !== step.status ? { ...step, status: framed.status } : step;
@@ -138,6 +147,7 @@ export const subscribeWorkflowFrames = (): (() => void) => subscribeOpenchamberE
     projectId: event.projectId,
     status: event.status,
     cursor: event.cursor,
+    worktreeReleasedAt: event.worktreeReleasedAt,
     steps: event.steps,
   });
 });

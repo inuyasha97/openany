@@ -260,4 +260,32 @@ describe('openchamber events', () => {
     expect(steps).toEqual([{ id: 'spec', status: 'waiting_confirm' }]);
     unsubscribe();
   });
+
+  test('carries a released checkout through the workflow frame, and omits one the frame does not name', async () => {
+    const { subscribeOpenchamberEvents } = await import('./openchamberEvents');
+    const events: unknown[] = [];
+    const unsubscribe = subscribeOpenchamberEvents((event) => events.push(event));
+    const source = MockEventSource.instances[0];
+
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'openchamber:workflow',
+        properties: { runId: 'r1', projectId: 'path_proj', status: 'done', cursor: null, worktreeReleasedAt: 42, steps: [] },
+      }),
+    });
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'openchamber:workflow',
+        properties: { runId: 'r1', projectId: 'path_proj', status: 'done', cursor: null, steps: [] },
+      }),
+    });
+
+    expect(events).toEqual([
+      { type: 'workflow-run-updated', runId: 'r1', projectId: 'path_proj', status: 'done', cursor: null, worktreeReleasedAt: 42, steps: [] },
+      // The second frame says nothing about a release, so the event says nothing
+      // either; a client keeps the value it already has.
+      { type: 'workflow-run-updated', runId: 'r1', projectId: 'path_proj', status: 'done', cursor: null, steps: [] },
+    ]);
+    unsubscribe();
+  });
 });

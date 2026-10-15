@@ -1,21 +1,32 @@
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 
 /**
  * The client is replaced through `mock.module`, the way the stores' own tests do
  * it (`stores/messageQueueStore.test.ts:6`). Each queue holds the answers for the
  * next calls, so a test can hand back data, an error, or a promise it releases
  * later.
+ *
+ * The replacement is process-global, so it is also what the other suite that
+ * imports this module sees. It therefore keeps every real export and only
+ * answers a call the queues have an entry for; a call with nothing queued falls
+ * through to the real client, which is what `workflowsApi.test.ts` exercises.
  */
+const real = { ...(await import('@/lib/workflowsApi')) };
+// A plain copy, not the live namespace: after `mock.module` the namespace's own
+// properties are the replacement, so reading the real readers off it lazily
+// inside the factory would answer with the mock and recurse.
+
 const runsQueue: Array<() => unknown> = [];
 const definitionsQueue: Array<() => unknown> = [];
-const take = async (queue: Array<() => unknown>) => {
+const take = async (queue: Array<() => unknown>, fallback: () => Promise<unknown>) => {
   const next = queue.shift();
-  return next ? await next() : [];
+  return next ? await next() : fallback();
 };
 
 mock.module('@/lib/workflowsApi', () => ({
-  fetchWorkflowRuns: () => take(runsQueue),
-  fetchWorkflowDefinitions: () => take(definitionsQueue),
+  ...real,
+  fetchWorkflowRuns: (directory: string) => take(runsQueue, () => real.fetchWorkflowRuns(directory)),
+  fetchWorkflowDefinitions: (directory: string) => take(definitionsQueue, () => real.fetchWorkflowDefinitions(directory)),
 }));
 
 const { useWorkflowStore } = await import('./useWorkflowStore');
@@ -38,6 +49,13 @@ beforeEach(() => {
   runsQueue.length = 0;
   definitionsQueue.length = 0;
   useWorkflowStore.setState({ entries: {}, pendingFrames: {} });
+});
+
+// Nothing queued may outlive this file: a leftover here would answer a real
+// call `workflowsApi.test.ts` makes through the same process-global mock.
+afterEach(() => {
+  runsQueue.length = 0;
+  definitionsQueue.length = 0;
 });
 
 describe('load', () => {
@@ -148,5 +166,25 @@ describe('applyRunFrame', () => {
   it('ignores a frame for a project this store has not loaded', () => {
     useWorkflowStore.getState().applyRunFrame({ runId: 'r9', projectId: 'other', status: 'running', cursor: null, steps: [] });
     expect(useWorkflowStore.getState().entries).toEqual({});
+  });
+
+  it('carries a release the frame names into the run in the entry', async () => {
+    runsQueue.push(() => [run({ sandbox: 'worktree', worktreeBranch: 'omp/wf/r1' })]);
+    definitionsQueue.push(() => []);
+    await useWorkflowStore.getState().load(project);
+
+    useWorkflowStore.getState().applyRunFrame({ runId: 'r1', projectId: 'path_proj', status: 'done', cursor: null, worktreeReleasedAt: 42, steps: [] });
+
+    expect(useWorkflowStore.getState().getEntry(project).runs[0].worktreeReleasedAt).toBe(42);
+  });
+
+  it('leaves a release in place when a frame does not name it', async () => {
+    runsQueue.push(() => [run({ sandbox: 'worktree', worktreeBranch: 'omp/wf/r1', worktreeReleasedAt: 42 })]);
+    definitionsQueue.push(() => []);
+    await useWorkflowStore.getState().load(project);
+
+    useWorkflowStore.getState().applyRunFrame({ runId: 'r1', projectId: 'path_proj', status: 'done', cursor: null, steps: [] });
+
+    expect(useWorkflowStore.getState().getEntry(project).runs[0].worktreeReleasedAt).toBe(42);
   });
 });

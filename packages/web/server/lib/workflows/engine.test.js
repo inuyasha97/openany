@@ -694,6 +694,40 @@ describe('the worktree sandbox', () => {
       expect(calls.remove).toEqual([]);
     });
 
+    it('refuses while a step holds the project, so it cannot remove the step\'s checkout', async () => {
+      const calls = { create: [], remove: [] };
+      let release = () => {};
+      const gate = new Promise((resolve) => { release = resolve; });
+      let enteredProvisioning = () => {};
+      const provisioning = new Promise((resolve) => { enteredProvisioning = resolve; });
+      const host = {
+        createSession: async () => { enteredProvisioning(); await gate; return { id: 'session-1' }; },
+        prompt: async () => true,
+        getSessionStatus: async () => ({ busy: false }),
+        listSessions: async () => [],
+        renameSession: async () => {},
+        setModel: async () => {},
+        setAutoAccept: async () => {},
+      };
+      const { engine, store, run, root } = await buildEngine({
+        overrides: { worktrees: fakeWorktrees(calls), host, runChecks: async () => ({ ok: true, artifacts: [], commands: [] }) },
+      });
+      await store.write('proj-1', { ...run, sandbox: 'worktree' });
+      const first = engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+      // The step is mid-provisioning: it has written the checkout to the run file
+      // — the status there still reads `idle` — and holds the project's lock.
+      // Without that lock a release landing here would pass the status guard and
+      // remove the checkout the step is about to open a session in.
+      await provisioning;
+      expect((await store.read('proj-1', run.runId))).toMatchObject({ status: 'idle', worktreeBranch: `omp/wf/${run.runId}` });
+      await expect(engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId }))
+        .rejects.toMatchObject({ code: 'busy', status: 409 });
+      expect(calls.remove).toEqual([]);
+      expect((await store.read('proj-1', run.runId)).worktreeReleasedAt).toBeUndefined();
+      release();
+      await first;
+    });
+
     it('is a no-op for a run that never took a checkout', async () => {
       const calls = { create: [], remove: [] };
       const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
