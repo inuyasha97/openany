@@ -1402,7 +1402,7 @@ export const RunDetail = ({ run, project, definition }: RunDetailProps) => {
           ? (definition
             ? <WorkflowDiagram summary={definition} />
             : <div className="flex-1 p-3 text-xs text-muted-foreground">{t('workflows.empty.loading')}</div>)
-          : (step ? <StepPane run={full} step={step} project={project} /> : null)}
+          : (step ? <StepPane key={step.id} run={full} step={step} project={project} /> : null)}
       </div>
     </div>
   );
@@ -1632,14 +1632,22 @@ git commit -m "feat(workflows): show a step's evidence"
 The engine refuses three classes of action with `conflict`, so the bar must not offer them: any action on a run whose status is `done`, `failed` or `cancelled`; `run` and `prompt` on a step that is `done` or `skipped` (a settled step); and `confirm` on a step whose last attempt is not `completed`. Compute them once:
 
 ```tsx
-const TERMINAL_RUN_STATUSES = new Set(['done', 'failed', 'cancelled']);
-const SETTLED_STEP_STATUSES = new Set(['done', 'skipped']);
-const runIsOpen = !TERMINAL_RUN_STATUSES.has(run.status);
-const stepIsSettled = SETTLED_STEP_STATUSES.has(step.status);
+const TERMINAL_RUN_STATUSES: Partial<Record<WorkflowRun['status'], true>> = { done: true, failed: true, cancelled: true };
+const SETTLED_STEP_STATUSES: Partial<Record<WorkflowStepStatus, true>> = { done: true, skipped: true };
+const runIsOpen = TERMINAL_RUN_STATUSES[run.status] !== true;
+const stepIsSettled = SETTLED_STEP_STATUSES[step.status] === true;
 const attemptSettled = step.attempts.at(-1)?.status === 'completed';
 ```
 
-Then gate the buttons: `run`/`prompt` need `runIsOpen && !stepIsSettled`; `runAll`/`cancel`/`verify` need `runIsOpen`; `confirm` needs `attemptSettled` (a step left `interrupted` by a restart whose turn was still running keeps `attemptSettled` false, and its note says so). A disabled button carries the reason in its `title`, because a control that refuses silently reads as a bug.
+Then gate the buttons, matching what the engine actually refuses (`packages/web/server/lib/workflows/engine.js`):
+
+- `run`: `runIsOpen && !stepIsSettled`. The engine refuses a terminal run and a settled step.
+- `runAll`, `cancel`, `verify`: `runIsOpen`.
+- `confirmDone`: `attemptSettled` — the engine only accepts a `completed` attempt for `done`.
+- `confirmNotDone` and `skip`: `runIsOpen` only. The engine requires a completed attempt **only** for `done`, and a step can be blocked before it ever had an attempt (a missing input, for example), so gating these two on `attemptSettled` leaves such a step with no working control at all.
+- The prompt box appears for `waiting_confirm`, `needs_work`, `blocked` **and `interrupted`**: a step the restart left interrupted still holds its session, and the person's choices there are the same as at any other stop.
+
+A disabled control carries its reason, but a disabled `Button` is `pointer-events-none` (`components/ui/button.tsx:53`), so its own `title` never shows. Wrap the disabled control in a `<span title={reason}>`, which is the hit target that can. Every control also gets an `aria-label`, and the prompt textarea gets one too (the `workflows.step.prompt` key).
 
 ```tsx
 /**
