@@ -276,10 +276,15 @@ describe('SDLC template', () => {
     expect(ids).toEqual(['spec', 'plan', 'implement', 'verify', 'bring-back']);
   });
 
-  it('gives every step either a verifier or a confirm gate', () => {
-    const autoSteps = [...SDLC_FEATURE_TEMPLATE.matchAll(/confirm: auto/g)].length;
-    const verifierBlocks = [...SDLC_FEATURE_TEMPLATE.matchAll(/verify:/g)].length;
-    expect(autoSteps).toBeLessThanOrEqual(verifierBlocks);
+  it('declares no confirm field, which the schema refuses', () => {
+    // A step is done only when a person confirms it, so the field is gone from
+    // the schema and a template carrying it would not load at all.
+    expect(SDLC_FEATURE_TEMPLATE).not.toMatch(/confirm:/);
+  });
+
+  it('gives every step that produces something a verifier', () => {
+    const verifyBlocks = [...SDLC_FEATURE_TEMPLATE.matchAll(/verify:/g)].length;
+    expect(verifyBlocks).toBeGreaterThanOrEqual(3);   // spec, plan and verify
   });
 
   it('names the inputs it asks for', () => {
@@ -301,8 +306,9 @@ Expected: FAIL, `Failed to resolve import "./templates"`.
 /**
  * The SDLC workflow the app can start a person from.
  *
- * Every step that runs unattended carries a verifier, and every step that does
- * not stops for a person. The last step brings the work back, because a run in
+ * Every step stops for a person, because a step is done only when a person
+ * confirms it; the steps that produce a file carry a verifier so the stop has
+ * evidence beside it. The last step brings the work back, because a run in
  * worktree mode leaves a branch behind on purpose.
  */
 export const SDLC_FEATURE_TEMPLATE = `id: sdlc-feature
@@ -318,7 +324,6 @@ steps:
     title: Design the change
     prompt: "Design {{request}} and write the design to docs/superpowers/specs/."
     session: new
-    confirm: human
     verify:
       artifacts:
         - glob: "docs/superpowers/specs/*-design.md"
@@ -328,7 +333,6 @@ steps:
     title: Write the implementation plan
     prompt: "Read the approved design in this session and write the implementation plan to docs/superpowers/plans/."
     session: reuse
-    confirm: human
     verify:
       artifacts: ["docs/superpowers/plans/*.md"]
 
@@ -336,13 +340,11 @@ steps:
     title: Implement the plan
     prompt: "Execute the plan you just wrote, one task at a time, committing as it says."
     session: reuse
-    confirm: human
 
   - id: verify
     title: Verify the branch
     prompt: "Run the checks the plan names and report what failed."
     session: reuse
-    confirm: human
     verify:
       commands:
         - run: "bun run type-check:web"
@@ -352,7 +354,6 @@ steps:
     title: Bring the work back
     prompt: "Summarize what changed, list the commits, and say what a reviewer should look at first."
     session: reuse
-    confirm: human
 `;
 ```
 
