@@ -38,9 +38,14 @@
 **Interfaces:**
 - Consumes: `parseDefinition` (engine plan Task 1).
 - Produces:
-  - `definitions.write(projectId, workflowId, rawText, { expectedHash }) -> Promise<{ file, id, hash }>` and `definitions.remove(projectId, workflowId)`
-  - `PUT /api/workflows/definitions/:workflowId` with `{ raw: string, expectedHash?: string }` and `DELETE /api/workflows/definitions/:workflowId`
-  - `saveWorkflowDefinition(directory, workflowId, raw, expectedHash?)` and `deleteWorkflowDefinition(directory, workflowId)` in the UI client.
+  - `definitions.write(projectId, workflowId, rawText, { expectedHash }) -> Promise<{ file, id, hash }>`, `definitions.remove(projectId, workflowId)`, and `definitions.readSource(projectId, workflowId) -> Promise<{ raw, hash } | null>`
+  - `PUT /api/workflows/definitions/:workflowId` with `{ raw: string, expectedHash?: string }`, `DELETE /api/workflows/definitions/:workflowId`, and `GET /api/workflows/definitions/:workflowId -> { definition, raw, hash }`
+  - `saveWorkflowDefinition(directory, workflowId, raw, expectedHash?)`, `deleteWorkflowDefinition(directory, workflowId)` and `fetchWorkflowDefinitionSource(directory, workflowId)` in the UI client.
+
+Two facts the snippets below assume and the code does not yet have:
+
+- `definitions.js` does not import `crypto`; the hash helper needs `import { createHash } from 'node:crypto'` at the top.
+- `list` and `read` return parsed data only — `read` answers the *definition object* and is what the create-run route consumes, so its shape must not change. The editor's raw text comes from the new `readSource`/`GET` route, and `list`'s summaries gain `hash` beside `file` so a screen can pass `expectedHash` back. `readSource` reads the file once and returns the text with its hash, and answers `null` for a missing or unreadable file.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -115,7 +120,7 @@ Expected: FAIL, `local.write is not a function`.
       }
     }
     await fsPromises.mkdir(directory, { recursive: true });
-    const temporary = `${file}.${process.pid}.tmp`;
+    const temporary = `${file}.${randomUUID()}.tmp`;
     await fsPromises.writeFile(temporary, rawText, 'utf8');
     await fsPromises.rename(temporary, file);
     return { file: `${workflowId}.yaml`, id: workflowId, hash: hashOf(rawText) };
@@ -134,6 +139,13 @@ Expected: FAIL, `local.write is not a function`.
 ```
 
 `list` and `read` gain `hash` alongside `file` in their summaries so the UI can pass `expectedHash` back; add the same field to `WorkflowDefinitionSummary` in `workflowsApi.ts`.
+
+`node:crypto` is imported for `createHash` and `randomUUID`: the temporary is named per write, because two overlapping writes of one definition must not share a temporary file — the second `writeFile` opens with flag `w` and truncates, and this path awaits between `writeFile` and `rename`, so a shared name lets the shorter body cut the longer one and the second `rename` fail `ENOENT`.
+
+Two known non-atomicities, deliberately left as they are, so they are not mistaken for oversights:
+
+1. `expectedHash` against a file that no longer exists **recreates** it. The guard only refuses when a file is there and differs (`readFile(...).catch(() => null)` makes a missing file `null`), so a window whose editor holds a file another window deleted wins silently. That is deliberate — a re-create after an out-of-band removal is legitimate — and the guard is inherently a check-then-rename, not one atomic step.
+2. `list` reads `.yaml` and `.yml`, and every write path resolves through the same preference (`.yaml` first), so one id cannot produce two files through the app. The only state where the two diverge is hand-made: a `.yaml` that does not parse beside a `.yml` that does. In that state `read` serves the valid `.yml` while the editor edits the broken `.yaml`.
 
 - [ ] **Step 4: Add the routes and their tests**
 
@@ -227,14 +239,33 @@ export const DefinitionEditor = ({ project, summary, raw, onSaved }: DefinitionE
       </div>
       {error ? <p role="status" className="px-3 py-2 text-xs text-destructive">{error}</p> : null}
       <div className="min-h-0 flex-1">
-        <CodeMirrorEditor value={text} language="yaml" onChange={setText} />
+        <CodeMirrorEditor value={text} onChange={setText} className="h-full" extensions={editorExtensions} />
       </div>
     </div>
   );
 };
 ```
 
-Check `CodeMirrorEditor`'s actual props (`value`, `onChange`, and how it selects a language) in `packages/ui/src/components/ui/CodeMirrorEditor.tsx` and use those names; do not add a prop the component does not have.
+Check `CodeMirrorEditor`'s actual props before writing it: it takes `value`, `onChange`, `className`, `extensions` and friends, and it has **no** language prop. YAML highlighting and the app's editor colours come from the extension list, the way `packages/ui/src/components/views/PlanView.tsx:375-385` builds it:
+
+```tsx
+import { createFlexokiCodeMirrorTheme } from '@/lib/codemirror/flexokiTheme';
+import { languageByExtension } from '@/lib/codemirror/languageByExtension';
+import { useUIStore } from '@/stores/useUIStore';
+
+const theme = useUIStore((state) => state.theme);
+const editorFontSize = useUIStore((state) => state.editorFontSize);
+const editorExtensions = useMemo(() => {
+  const extensions = [createFlexokiCodeMirrorTheme(theme, { fontSize: editorFontSize })];
+  const language = languageByExtension(`${summary.id ?? 'definition'}.yaml`);
+  if (language) extensions.push(language);
+  return extensions;
+}, [theme, editorFontSize, summary.id]);
+```
+
+The buffer's `raw` comes from `fetchWorkflowDefinitionSource(project.path, summary.id)` when the editor opens — the summary carries no text. Until that read answers, render the panel's own loading text rather than an empty editor, and if the read fails show the failure beside the file name instead of an empty buffer, because an empty buffer that a person then saves is how a working definition gets erased.
+
+`summary.hash` is what the save passes as `expectedHash`; after a successful save, replace it with the hash the route answers so the next save compares against the text that is now on disk.
 
 - [ ] **Step 2: Add the strings**
 
@@ -267,7 +298,7 @@ git commit -m "feat(workflows): edit a definition in the app"
 
 ```ts
 // packages/ui/src/lib/workflows/templates.test.ts
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { SDLC_FEATURE_TEMPLATE } from './templates';
 
 describe('SDLC template', () => {

@@ -233,3 +233,43 @@ describe('readSource and remove', () => {
     expect(await local.remove('proj-1', 'sdlc-feature')).toBe(false);
   });
 });
+
+describe('concurrent writes', () => {
+  it('gives each write its own temporary, so the file is one of the bodies and the surviving save is not stale', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-concurrent-'));
+    const directory = path.join(root, '.openchamber/workflows');
+    const first = valid.replace('version: 3', 'version: 7');
+    const second = valid.replace('name: SDLC, feature work', 'name: SDLC, feature work, edited in another window');
+
+    // Holds one write between its writeFile and its rename so the other runs
+    // entirely inside that window: the interleaving a double-click, or a second
+    // window saving the same definition, produces — made deterministic.
+    let writes = 0;
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    const gatedFs = {
+      ...fs,
+      writeFile: async (file, data, options) => {
+        await fs.writeFile(file, data, options);
+        writes += 1;
+        if (writes === 1) await held;
+        else release();
+      },
+    };
+    const local = createWorkflowDefinitions({ fsPromises: gatedFs, path, projectPathFromId: () => root });
+
+    const [a, b] = await Promise.all([
+      local.write('proj-1', 'sdlc-feature', first),
+      local.write('proj-1', 'sdlc-feature', second),
+    ]);
+
+    const onDisk = await fs.readFile(path.join(directory, 'sdlc-feature.yaml'), 'utf8');
+    expect([first, second]).toContain(onDisk);
+    const winner = onDisk === first ? a : b;
+    expect(winner.hash).toBe(createHash('sha256').update(onDisk, 'utf8').digest('hex'));
+    // The save whose bytes survived is not refused as stale by its own hash.
+    await expect(local.write('proj-1', 'sdlc-feature', onDisk, { expectedHash: winner.hash }))
+      .resolves.toMatchObject({ hash: winner.hash });
+    expect(await fs.readdir(directory)).toEqual(['sdlc-feature.yaml']);
+  });
+});

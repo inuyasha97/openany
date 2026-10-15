@@ -5,7 +5,7 @@
  * failure is reported as `{ field, message }` rather than thrown, so a broken
  * file shows up in the screens instead of disappearing from the list.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { parse as parseYaml } from 'yaml';
 
 const WORKFLOW_DIR = '.openchamber/workflows';
@@ -320,7 +320,10 @@ export const createWorkflowDefinitions = ({ fsPromises, path, projectPathFromId 
       }
     }
     await fsPromises.mkdir(directory, { recursive: true });
-    const temporary = `${file}.${process.pid}.tmp`;
+    // One temporary per write: two overlapping writes of the same definition
+    // must not share a name, or the second `writeFile` (flag `w`, truncating)
+    // could cut what the first wrote while this path awaits before the rename.
+    const temporary = `${file}.${randomUUID()}.tmp`;
     try {
       await fsPromises.writeFile(temporary, rawText, 'utf8');
       await fsPromises.rename(temporary, file);
