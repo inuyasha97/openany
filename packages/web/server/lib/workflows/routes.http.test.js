@@ -29,6 +29,9 @@ const createApp = (overrides = {}) => {
     },
     resolveProjectId: () => 'proj-1',
     projectPathFromId: () => '/tmp/proj',
+    // Mirrors `createWorkflowRuntime`'s default: the identity until a caller
+    // injects a canonicalizing normalizer.
+    normalizeDirectoryPath: (value) => value,
     ...overrides,
   };
   const app = express();
@@ -77,6 +80,18 @@ describe('workflow routes', () => {
     const { app } = createApp();
     const response = await request(app).get('/api/workflows/runs').set(SCOPE);
     expect(response.headers['cache-control']).toBe('no-store');
+  });
+
+  it('normalizes a directory before deriving the project id, so a symlink and its realpath name one project', async () => {
+    const seen = [];
+    const { app } = createApp({
+      normalizeDirectoryPath: (value) => (value === '/tmp/link/proj' ? '/tmp/real/proj' : value),
+      resolveProjectId: (directory) => { seen.push(directory); return `id:${directory}`; },
+    });
+    await request(app).get('/api/workflows/runs').set({ 'x-opencode-directory': '/tmp/link/proj' });
+    await request(app).get('/api/workflows/runs').set({ 'x-opencode-directory': '/tmp/real/proj' });
+    expect(seen).toEqual(['/tmp/real/proj', '/tmp/real/proj']);
+    expect(new Set(seen).size).toBe(1);
   });
 
   it('answers 400 when the project header is missing', async () => {

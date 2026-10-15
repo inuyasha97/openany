@@ -969,6 +969,12 @@ const workflowRuntime = createWorkflowRuntime({
   projectsDirPath: OPENCHAMBER_PROJECTS_CONFIG_DIR,
   projectPathFromId,
   resolveProjectId: createProjectIdFromPath,
+  // A workflow id has to come from the canonical path the projects list stores.
+  // `normalizeDirectoryPath` alone only trims, so a symlinked directory would
+  // name two projects and one run id would land in two files; the persistence
+  // normalizer is the one that also realpaths, which is what `sanitizeProjects`
+  // derives its paths from (`settings-normalization-runtime.js:148`).
+  normalizeDirectoryPath: normalizePathForPersistence,
   getOmpRuntimeHost: async () => {
     const host = ompAgentRuntime?.getHost?.();
     return host ? await host : null;

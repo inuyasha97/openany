@@ -19,6 +19,11 @@ export const createWorkflowRuntime = ({
   projectsDirPath,
   projectPathFromId,
   resolveProjectId,
+  // Canonicalizes a directory before its project id is derived, so a symlinked
+  // path and its realpath name one project rather than two. Defaults to the
+  // identity for tests; the server passes the same normalizer the projects list
+  // uses to store its paths.
+  normalizeDirectoryPath = (value) => value,
   getOmpRuntimeHost,
   setSessionAutoAccept,
   // The projects the restart sweep walks, supplied by the server from the same
@@ -76,6 +81,7 @@ export const createWorkflowRuntime = ({
     engine,
     resolveProjectId,
     projectPathFromId,
+    normalizeDirectoryPath,
     routes: registerWorkflowRoutes,
   };
 };

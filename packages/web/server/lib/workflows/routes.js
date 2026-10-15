@@ -46,7 +46,7 @@ const directoryOf = (req) => {
 };
 
 export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
-  const { definitions, store, engine, resolveProjectId, projectPathFromId } = workflowsRuntime;
+  const { definitions, store, engine, resolveProjectId, projectPathFromId, normalizeDirectoryPath } = workflowsRuntime;
 
   // The browser smoke caught this as a real staleness: without a `Cache-Control`,
   // a reload revalidated a run read and the browser drew the `304` body it had
@@ -64,11 +64,18 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
    * (`createProjectIdFromPath`), and back into the checkout path that id
    * encodes. A request naming a directory that is not an open project gets no
    * scope rather than a guessed one.
+   *
+   * The header is normalized first, because the projects list stores a
+   * realpathed path: without it a directory that is a symlink names two ids —
+   * `/tmp/x` and its realpath `/private/tmp/x` — and the same run id ends up in
+   * two files, one advanced by one caller and one read by another. The browser
+   * smoke saw exactly that: the page read `/private/tmp/...` while a scripted
+   * client had advanced the run under `/tmp/...`.
    */
   const scopeOf = (req) => {
     const directory = directoryOf(req);
     if (!directory) return null;
-    const projectId = resolveProjectId(directory);
+    const projectId = resolveProjectId(normalizeDirectoryPath(directory));
     if (!projectId) return null;
     const projectPath = projectPathFromId(projectId);
     return projectPath ? { projectId, projectPath } : null;
