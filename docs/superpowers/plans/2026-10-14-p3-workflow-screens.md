@@ -1753,42 +1753,49 @@ git commit -m "feat(workflows): answer a step from its session"
 - Modify: `packages/ui/src/components/views/workflows/RunDetail.tsx` (a tab for the definition)
 
 **Interfaces:**
-- Consumes: `renderMermaidSVG` from `beautiful-mermaid` (already used at `packages/ui/src/components/chat/MessageBody/MarkdownRendererImpl.tsx:3`), Task 1's `fetchWorkflowDefinitions`.
-- Produces: `<WorkflowDiagram definition />`, a read-only drawing of the declared steps, plus the validation errors of a definition that does not load.
+- Consumes: `SimpleMarkdownRenderer` (`@/components/chat/MarkdownRenderer`), the definitions summary Task 0 extended with `steps`.
+- Produces: `<WorkflowDiagram summary />`, a read-only drawing of the declared steps, plus the validation errors of a definition that does not load.
 
 - [ ] **Step 1: Write the diagram**
+
+The app already renders mermaid: a fenced ```mermaid block inside `SimpleMarkdownRenderer` goes through `MarkdownRendererImpl`'s decorate context, which builds theme-aware colours from the current theme (`MarkdownRendererImpl.tsx:775-785`), caches the render and honours the user's ASCII/SVG preference. `PlanView.tsx:984` is the precedent for using that renderer in a view. So this component builds the mermaid source and hands it over; it does not render SVG itself, does not import `beautiful-mermaid`, and does not use `dangerouslySetInnerHTML`.
 
 ```tsx
 // packages/ui/src/components/views/workflows/WorkflowDiagram.tsx
 /**
  * The declared workflow as a diagram.
  *
- * Mermaid renders the whole SVG again on every call, so this shows the
- * definition, which does not change, and never the live status. Live status is
- * the timeline's job.
+ * The source is a mermaid fence handed to the app's markdown renderer, so the
+ * diagram follows the theme, the user's mermaid mode and the render cache the
+ * chat already uses. It shows the definition, which does not change, and never
+ * the live status: that is the timeline's job.
  */
 import { useMemo } from 'react';
 
-import { renderMermaidSVG } from 'beautiful-mermaid';
+import { SimpleMarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { useI18n } from '@/lib/i18n';
 import type { WorkflowDefinitionSummary, WorkflowStepDefinition } from '@/lib/workflowsApi';
 
 export interface WorkflowDiagramProps {
   summary: WorkflowDefinitionSummary;
-  steps: WorkflowStepDefinition[];
 }
 
-export const WorkflowDiagram = ({ summary, steps }: WorkflowDiagramProps) => {
+const mermaidSource = (steps: WorkflowStepDefinition[]) => {
+  const lines = ['flowchart TD'];
+  steps.forEach((step, index) => {
+    const label = `${step.id}${step.confirm === 'auto' ? ' (auto)' : ''}`;
+    lines.push(`  s${index}["${label}"]`);
+    if (index > 0) lines.push(`  s${index - 1} --> s${index}`);
+  });
+  return lines.join('\n');
+};
+
+export const WorkflowDiagram = ({ summary }: WorkflowDiagramProps) => {
   const { t } = useI18n();
-  const svg = useMemo(() => {
-    const lines = ['flowchart TD'];
-    steps.forEach((step, index) => {
-      const label = `${step.id}${step.confirm === 'auto' ? ' (auto)' : ''}`;
-      lines.push(`  s${index}["${label}"]`);
-      if (index > 0) lines.push(`  s${index - 1} --> s${index}`);
-    });
-    return renderMermaidSVG(lines.join('\n'), { bg: 'transparent' });
-  }, [steps]);
+  const content = useMemo(
+    () => (summary.steps.length > 0 ? `\`\`\`mermaid\n${mermaidSource(summary.steps)}\n\`\`\`` : ''),
+    [summary.steps],
+  );
 
   if (summary.errors.length > 0) {
     return (
@@ -1803,11 +1810,15 @@ export const WorkflowDiagram = ({ summary, steps }: WorkflowDiagramProps) => {
     );
   }
 
-  return <div className="p-3 [&_svg]:h-auto [&_svg]:w-full" dangerouslySetInnerHTML={{ __html: svg }} />;
+  if (!content) {
+    return <div className="p-3 text-xs text-muted-foreground">{t('workflows.definition.diagram')}</div>;
+  }
+
+  return <SimpleMarkdownRenderer content={content} className="typography-markdown-body" enableFileReferences={false} />;
 };
 ```
 
-`renderMermaidSVG` output is generated from the definition, not from user HTML, and the definition comes from the project's own files. Confirm the signature against `MarkdownRendererImpl.tsx` before writing it; if the renderer is asynchronous there, follow that call shape.
+The step ids a definition may carry are restricted to lowercase words and dashes by the parser, so nothing a person typed can reach the fence as markup.
 
 - [ ] **Step 2: Add the tab**
 
