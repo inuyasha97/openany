@@ -49,15 +49,19 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
   const TERMINAL_RUN_STATUSES: Partial<Record<WorkflowRunStatus, true>> = { done: true, failed: true, cancelled: true };
   const SETTLED_STEP_STATUSES: Partial<Record<WorkflowStepStatus, true>> = { done: true, skipped: true };
   const runIsOpen = TERMINAL_RUN_STATUSES[run.status] !== true;
-  const stepIsSettled = SETTLED_STEP_STATUSES[step.status] !== true;
+  const stepIsSettled = SETTLED_STEP_STATUSES[step.status] === true;
   const attemptSettled = step.attempts.at(-1)?.status === 'completed';
 
-  // A gated control carries the reason it is refused in its `title`, because a
-  // control that refuses silently reads as a bug. The reason is the localized
-  // status of whatever blocks the action, so the bar introduces no new strings.
+  // A gated control carries the reason it is refused, because a control that
+  // refuses silently reads as a bug. A disabled `Button` is `pointer-events-none`
+  // (`components/ui/button.tsx`), so its own `title` never appears in a browser;
+  // each control is therefore wrapped in a `<span title={reason}>`, which is the
+  // hit target that can show it. The reason is the localized status of whatever
+  // blocks the action, so the bar introduces no new strings.
   const runClosedTitle = runIsOpen ? undefined : describeRunStatus(run.status, t).label;
   const stepSettledTitle = stepIsSettled ? status.label : undefined;
   const attemptUnsettledTitle = attemptSettled ? undefined : status.label;
+  const noAttemptsTitle = step.attempts.length === 0 ? t('workflows.step.status.pending') : undefined;
 
   const act = async (action: () => Promise<WorkflowRun>) => {
     setBusy(true);
@@ -87,92 +91,115 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
         </p>
       ) : null}
       <div className="flex flex-wrap gap-1">
-        <Button
-          size="xs"
-          disabled={busy || !runIsOpen || stepIsSettled || step.status === 'running'}
+        <span
+          className="inline-flex"
           title={runClosedTitle ?? stepSettledTitle ?? (step.status === 'running' ? status.label : undefined)}
-          onClick={() => void act(() => runWorkflowStep(project.path, run.runId, step.id))}
         >
-          {t('workflows.step.run')}
-        </Button>
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={busy || !runIsOpen}
-          title={runClosedTitle}
-          onClick={() => void act(() => runWorkflow(project.path, run.runId))}
-        >
-          {t('workflows.step.runAll')}
-        </Button>
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={busy || !runIsOpen || step.attempts.length === 0}
-          title={runClosedTitle}
-          onClick={() => void act(() => verifyWorkflowStep(project.path, run.runId, step.id))}
-        >
-          {t('workflows.step.verify')}
-        </Button>
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={busy || !runIsOpen}
-          title={runClosedTitle}
-          onClick={() => void act(() => cancelWorkflowRun(project.path, run.runId))}
-        >
-          {t('workflows.step.cancelRun')}
-        </Button>
+          <Button
+            size="xs"
+            aria-label={t('workflows.step.run')}
+            disabled={busy || !runIsOpen || stepIsSettled || step.status === 'running'}
+            onClick={() => void act(() => runWorkflowStep(project.path, run.runId, step.id))}
+          >
+            {t('workflows.step.run')}
+          </Button>
+        </span>
+        <span className="inline-flex" title={runClosedTitle}>
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-label={t('workflows.step.runAll')}
+            disabled={busy || !runIsOpen}
+            onClick={() => void act(() => runWorkflow(project.path, run.runId))}
+          >
+            {t('workflows.step.runAll')}
+          </Button>
+        </span>
+        <span className="inline-flex" title={runClosedTitle ?? noAttemptsTitle}>
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-label={t('workflows.step.verify')}
+            disabled={busy || !runIsOpen || step.attempts.length === 0}
+            onClick={() => void act(() => verifyWorkflowStep(project.path, run.runId, step.id))}
+          >
+            {t('workflows.step.verify')}
+          </Button>
+        </span>
+        <span className="inline-flex" title={runClosedTitle}>
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-label={t('workflows.step.cancelRun')}
+            disabled={busy || !runIsOpen}
+            onClick={() => void act(() => cancelWorkflowRun(project.path, run.runId))}
+          >
+            {t('workflows.step.cancelRun')}
+          </Button>
+        </span>
       </div>
-      {step.status === 'waiting_confirm' || step.status === 'needs_work' || step.status === 'blocked' ? (
+      {step.status === 'waiting_confirm' ||
+      step.status === 'needs_work' ||
+      step.status === 'blocked' ||
+      step.status === 'interrupted' ? (
         <div className="flex flex-col gap-1">
           <textarea
             className="min-h-16 rounded border border-border bg-transparent p-1.5 text-xs"
             placeholder={t('workflows.step.promptPlaceholder')}
+            aria-label={t('workflows.step.prompt')}
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
           />
           <div className="flex flex-wrap gap-1">
-            <Button
-              size="xs"
-              disabled={busy || !runIsOpen || stepIsSettled || prompt.trim().length === 0}
-              title={runClosedTitle ?? stepSettledTitle}
-              onClick={() =>
-                void act(async () => {
-                  const next = await promptWorkflowStep(project.path, run.runId, step.id, prompt.trim());
-                  setPrompt('');
-                  return next;
-                })
-              }
-            >
-              {t('workflows.step.prompt')}
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={busy || !runIsOpen || !attemptSettled}
-              title={runClosedTitle ?? attemptUnsettledTitle}
-              onClick={() => void act(() => confirmWorkflowStep(project.path, run.runId, step.id, 'done'))}
-            >
-              {t('workflows.step.confirmDone')}
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={busy || !runIsOpen || !attemptSettled}
-              title={runClosedTitle ?? attemptUnsettledTitle}
-              onClick={() => void act(() => confirmWorkflowStep(project.path, run.runId, step.id, 'not_done'))}
-            >
-              {t('workflows.step.confirmNotDone')}
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={busy || !runIsOpen || !attemptSettled}
-              title={runClosedTitle ?? attemptUnsettledTitle}
-              onClick={() => void act(() => confirmWorkflowStep(project.path, run.runId, step.id, 'skip'))}
-            >
-              {t('workflows.step.skip')}
-            </Button>
+            <span className="inline-flex" title={runClosedTitle ?? stepSettledTitle}>
+              <Button
+                size="xs"
+                aria-label={t('workflows.step.prompt')}
+                disabled={busy || !runIsOpen || stepIsSettled || prompt.trim().length === 0}
+                onClick={() =>
+                  void act(async () => {
+                    const next = await promptWorkflowStep(project.path, run.runId, step.id, prompt.trim());
+                    setPrompt('');
+                    return next;
+                  })
+                }
+              >
+                {t('workflows.step.prompt')}
+              </Button>
+            </span>
+            <span className="inline-flex" title={runClosedTitle ?? attemptUnsettledTitle}>
+              <Button
+                size="xs"
+                variant="ghost"
+                aria-label={t('workflows.step.confirmDone')}
+                disabled={busy || !runIsOpen || !attemptSettled}
+                onClick={() => void act(() => confirmWorkflowStep(project.path, run.runId, step.id, 'done'))}
+              >
+                {t('workflows.step.confirmDone')}
+              </Button>
+            </span>
+            <span className="inline-flex" title={runClosedTitle}>
+              <Button
+                size="xs"
+                variant="ghost"
+                aria-label={t('workflows.step.confirmNotDone')}
+                disabled={busy || !runIsOpen}
+                onClick={() => void act(() => confirmWorkflowStep(project.path, run.runId, step.id, 'not_done'))}
+              >
+                {t('workflows.step.confirmNotDone')}
+              </Button>
+            </span>
+            <span className="inline-flex" title={runClosedTitle}>
+              <Button
+                size="xs"
+                variant="ghost"
+                aria-label={t('workflows.step.skip')}
+                disabled={busy || !runIsOpen}
+                onClick={() => void act(() => confirmWorkflowStep(project.path, run.runId, step.id, 'skip'))}
+              >
+                {t('workflows.step.skip')}
+              </Button>
+            </span>
           </div>
         </div>
       ) : null}

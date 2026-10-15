@@ -98,7 +98,7 @@ export const RunDetail = ({ run, project, definition }: RunDetailProps) => {
           ? (definition
             ? <WorkflowDiagram summary={definition} />
             : <div className="flex-1 p-3 text-xs text-muted-foreground">{t('workflows.empty.loading')}</div>)
-          : (step ? <StepPane run={full} step={step} project={project} /> : null)}
+          : (step ? <StepPane key={step.id} run={full} step={step} project={project} /> : null)}
       </div>
     </div>
   );
