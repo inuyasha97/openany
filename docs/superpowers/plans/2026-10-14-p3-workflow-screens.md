@@ -863,9 +863,14 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   const load = useWorkflowStore((state) => state.load);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
+  // Depend on the id and the path, not on the owner object: the owner is rebuilt
+  // whenever the project list or the worktree topology changes, and a re-run
+  // would issue both reads again and wipe an error that is on screen.
+  const projectId = project?.id;
+  const projectPath = project?.path;
   useEffect(() => {
-    if (project) void load(project);
-  }, [project?.id, load]);
+    if (projectId && projectPath) void load({ id: projectId, path: projectPath });
+  }, [projectId, projectPath, load]);
 
   const selected = useMemo(
     () => entry?.runs.find((run) => run.runId === selectedRunId) ?? entry?.runs[0] ?? null,
@@ -881,7 +886,10 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   }
   // The store's `EMPTY` entry is truthy with no runs and no error, so a project
   // that has simply not been read yet would paint "No run yet" for a frame.
-  if (!entry?.loaded && !entry?.error) {
+  // `error` is a string: an empty one is still an error, so the test is against
+  // `null` rather than falsiness, or a failure with no message would read as
+  // "still loading" forever.
+  if (!entry?.loaded && entry?.error === null) {
     return <Empty text={t('workflows.empty.loading')} />;
   }
 
