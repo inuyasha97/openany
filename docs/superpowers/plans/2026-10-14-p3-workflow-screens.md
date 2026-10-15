@@ -702,29 +702,57 @@ export type WorkflowRunUpdatedEvent = {
 };
 ```
 
-Add it to the `Listener` union, and add a branch next to the `openchamber:scheduled-task-ran` branch (line 433):
+Add it to the `Listener` union, and add a branch next to the `openchamber:scheduled-task-ran` branch. Two details the first draft of this plan got wrong and the implementation had to correct:
+
+- the branch is wrapped in its own `if (envelope.type === 'openchamber:workflow') { … }` block, because an early-return form would redeclare the consts the scheduled-task branch below already declares in the same scope;
+- a step status this client does not recognise is dropped rather than guessed, which needs a local guard:
 
 ```ts
-  if (envelope.type !== 'openchamber:workflow') {
+const WORKFLOW_STEP_STATUSES: Record<WorkflowStepStatus, true> = {
+  pending: true,
+  running: true,
+  waiting_confirm: true,
+  needs_work: true,
+  done: true,
+  failed: true,
+  skipped: true,
+  blocked: true,
+  interrupted: true,
+};
+
+const isWorkflowStepStatus = (value: unknown): value is WorkflowStepStatus =>
+  typeof value === 'string' && value in WORKFLOW_STEP_STATUSES;
+```
+
+```ts
+  if (envelope.type === 'openchamber:workflow') {
+    const properties = getEventProperties(envelope.properties);
+    const runId = typeof properties?.runId === 'string' ? properties.runId : '';
+    const projectId = typeof properties?.projectId === 'string' ? properties.projectId : '';
+    if (!runId || !projectId) return;
+    const rawSteps = Array.isArray(properties?.steps) ? properties.steps : [];
+    const rawStatus = properties?.status;
+    const status = rawStatus === 'idle' || rawStatus === 'running' || rawStatus === 'waiting' || rawStatus === 'done' || rawStatus === 'failed' || rawStatus === 'cancelled'
+      ? rawStatus
+      : 'running';
+    const nextEvent: WorkflowRunUpdatedEvent = {
+      type: 'workflow-run-updated',
+      runId,
+      projectId,
+      status,
+      cursor: typeof properties?.cursor === 'string' ? properties.cursor : null,
+      // The frame is a summary. A step whose status this client does not know
+      // keeps its last known value rather than being reset to a guess.
+      steps: rawSteps.flatMap((step) => (
+        Boolean(step) && typeof step.id === 'string' && isWorkflowStepStatus(step.status)
+          ? [{ id: String(step.id), status: step.status }]
+          : []
+      )),
+    };
+    for (const listener of listeners) {
+      listener(nextEvent);
+    }
     return;
-  }
-  const properties = getEventProperties(envelope.properties);
-  const runId = typeof properties?.runId === 'string' ? properties.runId : '';
-  const projectId = typeof properties?.projectId === 'string' ? properties.projectId : '';
-  if (!runId || !projectId) return;
-  const rawSteps = Array.isArray(properties?.steps) ? properties.steps : [];
-  const nextEvent: WorkflowRunUpdatedEvent = {
-    type: 'workflow-run-updated',
-    runId,
-    projectId,
-    status: (properties?.status as WorkflowRunUpdatedEvent['status']) ?? 'running',
-    cursor: typeof properties?.cursor === 'string' ? properties.cursor : null,
-    steps: rawSteps
-      .filter((step): step is { id: string; status: string } => Boolean(step) && typeof (step as { id?: unknown }).id === 'string')
-      .map((step) => ({ id: step.id, status: String(step.status) })),
-  };
-  for (const listener of listeners) {
-    listener(nextEvent);
   }
 ```
 
