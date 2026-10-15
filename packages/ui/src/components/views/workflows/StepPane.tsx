@@ -43,10 +43,10 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
   const [prompt, setPrompt] = useState('');
 
   // The engine refuses three classes of action with `conflict` (409): any action
-  // aimed at a run that has already finished, `run`/`prompt` on a step that is
-  // already settled, and `confirm` on a step whose last attempt never completed.
-  // The bar computes the same three facts once, so it never offers a button the
-  // server would refuse.
+  // aimed at a run that has already finished; `run`, `prompt` and `verify` on a
+  // step that is already settled; and `confirm` on a step whose last attempt
+  // never completed. The bar computes the same three facts once, so it never
+  // offers a button the server would refuse.
   const TERMINAL_RUN_STATUSES: Partial<Record<WorkflowRunStatus, true>> = { done: true, failed: true, cancelled: true };
   const SETTLED_STEP_STATUSES: Partial<Record<WorkflowStepStatus, true>> = { done: true, skipped: true };
   const runIsOpen = TERMINAL_RUN_STATUSES[run.status] !== true;
@@ -116,12 +116,12 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
             {t('workflows.step.runAll')}
           </Button>
         </span>
-        <span className="inline-flex" title={runClosedTitle ?? noAttemptsTitle}>
+        <span className="inline-flex" title={runClosedTitle ?? stepSettledTitle ?? noAttemptsTitle}>
           <Button
             size="xs"
             variant="ghost"
             aria-label={t('workflows.step.verify')}
-            disabled={busy || !runIsOpen || step.attempts.length === 0}
+            disabled={busy || !runIsOpen || stepIsSettled || step.attempts.length === 0}
             onClick={() => void act(() => verifyWorkflowStep(project.path, run.runId, step.id))}
           >
             {t('workflows.step.verify')}

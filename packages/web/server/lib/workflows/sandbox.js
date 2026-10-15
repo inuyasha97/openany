@@ -10,6 +10,8 @@
  * tree, because a person who asked for isolation would be getting the opposite
  * while the screen said `worktree`.
  */
+import { WorkflowError } from './engine.js';
+
 const branchFor = (run) => `omp/wf/${run.runId}`;
 const nameFor = (run) => `wf-${run.runId}`;
 
@@ -68,9 +70,37 @@ export const prepareSandbox = async ({ run, projectPath, git, waitOptions = {} }
   return { directory, branch: created.branch ?? branchFor(run), created: true };
 };
 
+/**
+ * The paths a run's checkout still holds uncommitted, or none when it is clean.
+ *
+ * A read that fails says nothing about the checkout, and the removal below
+ * reports its own failure, so a failed read is not treated as dirt: a checkout
+ * whose directory a person already deleted must still be releasable.
+ */
+const uncommittedPaths = async (git, directory) => {
+  try {
+    const status = await git.getStatus(directory);
+    if (status?.isClean !== false) return [];
+    return (status.files ?? []).map((file) => file.path).filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+
 export const releaseSandbox = async ({ run, projectPath, git }) => {
   if (run.sandbox !== 'worktree' || !run.worktreeBranch || !run.directory || run.directory === projectPath) {
     return { removed: false };
+  }
+  // The engine writes no commit, so a step whose prompt asked for none has left
+  // its output only in this checkout — and the removal below deletes the
+  // directory. Refusing while it is dirty, and naming the paths, is what keeps a
+  // release from deleting work no commit preserved; the person commits or
+  // discards them and asks again.
+  const dirty = await uncommittedPaths(git, run.directory);
+  if (dirty.length > 0) {
+    const shown = dirty.slice(0, 20);
+    const more = dirty.length - shown.length;
+    throw new WorkflowError('conflict', `the run's checkout has uncommitted changes; commit or discard them before releasing the checkout: ${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`, 409);
   }
   // `removeWorktree(projectPath, { directory })`: the first argument is the
   // project the worktree belongs to, the second names the checkout to remove

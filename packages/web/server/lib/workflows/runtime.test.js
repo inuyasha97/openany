@@ -9,6 +9,7 @@ vi.mock('../git/index.js', () => ({
   createWorktree: vi.fn(),
   removeWorktree: vi.fn(),
   getWorktreeBootstrapStatus: vi.fn(),
+  getStatus: vi.fn(),
 }));
 import * as gitIndex from '../git/index.js';
 import { createWorkflowRuntime } from './runtime.js';
@@ -116,6 +117,7 @@ describe('releasing a checkout', () => {
   it('hands the runtime\'s instance disposer to the removal, so the folder is not locked', async () => {
     gitIndex.removeWorktree.mockClear();
     gitIndex.removeWorktree.mockResolvedValue(true);
+    gitIndex.getStatus.mockResolvedValue({ isClean: true, files: [] });
     const disposeWorktreeInstance = vi.fn(async () => {});
     const runtime = await createRuntime({ disposeWorktreeInstance });
     const projectPath = runtime.projectPathFromId('proj-1');
@@ -148,5 +150,37 @@ describe('releasing a checkout', () => {
       deleteLocalBranch: false,
       disposeInstance: disposeWorktreeInstance,
     });
+  });
+
+  it('refuses when the lazily-loaded status says the checkout is dirty', async () => {
+    gitIndex.removeWorktree.mockClear();
+    gitIndex.getStatus.mockReset();
+    gitIndex.getStatus.mockResolvedValue({ isClean: false, files: [{ path: 'out/one.md' }] });
+    const runtime = await createRuntime();
+    const projectPath = runtime.projectPathFromId('proj-1');
+    const runId = '44444444-2222-4333-8444-555555555555';
+    const directory = path.join(projectPath, 'checkout');
+    await runtime.store.create({
+      runId,
+      projectId: 'proj-1',
+      directory,
+      workflowId: 'a',
+      workflowVersion: 1,
+      workflowHash: 'h',
+      inputs: {},
+      status: 'done',
+      cursor: 'first',
+      sandbox: 'worktree',
+      worktreeBranch: `omp/wf/${runId}`,
+      createdAt: 1,
+      steps: [],
+    });
+
+    await expect(runtime.engine.releaseSandbox({ projectId: 'proj-1', projectPath, runId }))
+      .rejects.toMatchObject({ code: 'conflict', status: 409, message: expect.stringContaining('out/one.md') });
+
+    // The status read went through the lazy loader, and nothing was removed.
+    expect(gitIndex.getStatus).toHaveBeenCalledWith(directory);
+    expect(gitIndex.removeWorktree).not.toHaveBeenCalled();
   });
 });

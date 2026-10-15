@@ -526,6 +526,47 @@ describe('verifyStep', () => {
     expect(verified.steps[0].note).toBe(note);
   });
 
+  it('refuses a settled step and leaves the digest the person confirmed alone', async () => {
+    const { engine, store, run, runId } = await buildEngine();
+    const confirmed = { ok: true, artifacts: [{ glob: 'out/*.md', exists: true, path: 'out/one.md', sha256: 'confirmed' }], commands: [] };
+    await store.write(run.projectId, {
+      ...run,
+      status: 'waiting',
+      steps: run.steps.map((step) => (step.id === 'first'
+        ? { ...step, status: 'done', attempts: [{ index: 0, sessionId: 'session-1', prompt: 'x', startedAt: 1, endedAt: 2, status: 'completed', turn: 'completed', verify: confirmed, error: null }] }
+        : step)),
+    });
+
+    await expect(engine.verifyStep({ projectId: 'proj-1', runId, stepId: 'first' }))
+      .rejects.toMatchObject({ code: 'conflict', status: 409 });
+
+    // The baseline the restart sweep compares against is not rewritten.
+    const saved = await store.read('proj-1', runId);
+    expect(saved.steps[0].status).toBe('done');
+    expect(saved.steps[0].attempts[0].verify).toEqual(confirmed);
+  });
+
+  it('refuses a skipped step too', async () => {
+    const { engine, store, run, runId } = await buildEngine();
+    await store.write(run.projectId, {
+      ...run,
+      status: 'waiting',
+      steps: run.steps.map((step) => (step.id === 'first'
+        ? { ...step, status: 'skipped', attempts: [{ index: 0, sessionId: 'session-1', prompt: 'x', startedAt: 1, endedAt: 2, status: 'completed', turn: 'completed', verify: { ok: true, artifacts: [], commands: [] }, error: null }] }
+        : step)),
+    });
+
+    await expect(engine.verifyStep({ projectId: 'proj-1', runId, stepId: 'first' }))
+      .rejects.toMatchObject({ code: 'conflict', status: 409 });
+  });
+
+  it('still re-runs the checks on a step waiting for a person', async () => {
+    const { engine, root, runId } = await buildEngine();
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    const verified = await engine.verifyStep({ projectId: 'proj-1', runId, stepId: 'first' });
+    expect(verified.steps[0].status).toBe('needs_work');
+  });
+
   it('moves a waiting step back to needs_work when the verifier fails', async () => {
     const { engine, store, run, runId } = await buildEngine();
     await store.write(run.projectId, {
@@ -546,6 +587,12 @@ describe('the worktree sandbox', () => {
   // fixtures use, so `afterEach` removes them too.
   const fakeWorktrees = (calls) => ({
     getWorktreeBootstrapStatus: async () => calls.bootstrap ?? { status: 'ready', phase: 'setup-ready', error: null },
+    // The release guard reads the checkout's status before removing it; the
+    // default is a clean checkout, which is what every pre-guard case needs.
+    getStatus: async (directory) => {
+      calls.statusReads = [...(calls.statusReads ?? []), directory];
+      return calls.status ?? { isClean: true, files: [] };
+    },
     createWorktree: async (directory, input) => {
       if (calls.fail) throw new Error(calls.fail);
       calls.create.push({ directory, input });
@@ -678,6 +725,41 @@ describe('the worktree sandbox', () => {
       expect(released.worktreeReleasedAt).toBe(42);
       await expect(fs.stat(finished.directory)).rejects.toThrow();
       expect(await store.read('proj-1', run.runId)).toMatchObject({ worktreeReleasedAt: 42 });
+    });
+
+    it('refuses to release a checkout that still holds uncommitted work, naming the paths', async () => {
+      const calls = { create: [], remove: [] };
+      const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+      await store.write('proj-1', { ...run, sandbox: 'worktree' });
+      const started = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+      const finished = await store.write('proj-1', { ...started, status: 'done' });
+      // The step's prompt asked for no commit, so its output lives only here.
+      calls.status = { isClean: false, files: [{ path: 'out/one.md' }, { path: 'notes.txt' }] };
+
+      await expect(engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId }))
+        .rejects.toMatchObject({ code: 'conflict', status: 409, message: expect.stringContaining('out/one.md') });
+      await expect(engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId }))
+        .rejects.toMatchObject({ message: expect.stringContaining('notes.txt') });
+
+      // The checkout is read, not removed, and the run is not stamped released.
+      expect(calls.statusReads).toEqual([finished.directory, finished.directory]);
+      expect(calls.remove).toEqual([]);
+      expect((await store.read('proj-1', run.runId)).worktreeReleasedAt).toBeUndefined();
+      expect(await fs.stat(finished.directory).then(() => true)).toBe(true);
+    });
+
+    it('releases a checkout whose work is committed', async () => {
+      const calls = { create: [], remove: [] };
+      const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+      await store.write('proj-1', { ...run, sandbox: 'worktree' });
+      const started = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+      const finished = await store.write('proj-1', { ...started, status: 'done' });
+      calls.status = { isClean: true, files: [] };
+
+      const released = await engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId });
+
+      expect(released.worktreeReleasedAt).toBe(42);
+      expect(calls.remove).toEqual([{ directory: root, input: { directory: finished.directory, deleteLocalBranch: false } }]);
     });
 
     it('refuses while the run is still running or waiting on a person', async () => {

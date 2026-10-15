@@ -102,7 +102,7 @@ In the `lists definitions for a project directory` case, the fixture's `definiti
       definitions: {
         list: async () => [{
           file: 'a.yaml', id: 'a', name: 'A', version: 1, errors: [],
-          definition: { id: 'a', name: 'A', version: 1, inputs: [], steps: [{ id: 'first', title: 'First', prompt: 'x', session: 'new', permissions: 'ask', verify: { artifacts: [], commands: [] }, confirm: 'human' }] },
+          definition: { id: 'a', name: 'A', version: 1, inputs: [], steps: [{ id: 'first', title: 'First', prompt: 'x', session: 'new', permissions: 'ask', verify: { artifacts: [], commands: [] } }] },
         }],
         read: async () => null,
       },
@@ -342,7 +342,6 @@ export interface WorkflowStepDefinition {
   session: 'new' | 'reuse';
   permissions: 'ask' | 'auto';
   verify: { artifacts: Array<{ glob: string; hash: boolean }>; commands: Array<{ run: string; expectExit: number; timeoutMs: number }> };
-  confirm: 'human' | 'auto';
 }
 
 export interface WorkflowInput {
@@ -1501,7 +1500,7 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
 
 const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'][number]['verify']> }) => {
   const { t } = useI18n();
-  // A step may declare no checks at all (`confirm: human` with no verifier), and
+  // A step may declare no checks at all (a verifier-less step), and
   // the engine records an empty verdict for it. A heading over an empty list
   // reads as a bug, so the block simply is not there.
   if (!verify.error && verify.artifacts.length === 0 && verify.commands.length === 0) return null;
@@ -1843,7 +1842,7 @@ export interface WorkflowDiagramProps {
 const mermaidSource = (steps: WorkflowStepDefinition[]) => {
   const lines = ['flowchart TD'];
   steps.forEach((step, index) => {
-    const label = `${step.id}${step.confirm === 'auto' ? ' (auto)' : ''}`;
+    const label = step.id;
     lines.push(`  s${index}["${label}"]`);
     if (index > 0) lines.push(`  s${index - 1} --> s${index}`);
   });

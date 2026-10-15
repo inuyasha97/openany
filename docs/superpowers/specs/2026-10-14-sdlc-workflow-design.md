@@ -180,8 +180,14 @@ Field notes:
   screen shows what ran instead of what a model said about it.
 - `prompt` is the only place that can ask for a commit: **a step's work is
   committed only if that step's prompt asks the agent to commit it.** The engine
-  never commits, stages or adds, in either sandbox mode, so nothing else in the
-  definition can put a person's uncommitted work into a commit.
+  never commits, stages or adds, in either sandbox mode — but that says nothing
+  about the prompt, which runs inside the run's directory. In `working-tree` mode
+  that directory *is* the person's own checkout, so a prompt that asks for
+  `git add -A` can carry the person's uncommitted and untracked work into its
+  commit, on the branch they have checked out, after which `git status` reads
+  clean and nothing on screen says so. A prompt author writing for
+  `working-tree` must avoid staging paths they did not produce. (Hazard named in
+  `docs/superpowers/plans/2026-10-14-p4-worktree-sandbox.md:34`, focus 6.)
 - `confirm` is gone from the schema. A definition that still declares it is a
   load error whose message says why: a step becomes `done` only when a person
   confirms it, and no verifier result can do that on their behalf.

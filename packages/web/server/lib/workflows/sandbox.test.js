@@ -118,6 +118,27 @@ describe('releaseSandbox', () => {
     expect(execFileSync('git', ['branch', '--list', prepared.branch], { cwd: root }).toString()).toContain(prepared.branch);
   });
 
+  it('refuses to release a checkout that still holds uncommitted work, naming the paths', async () => {
+    const subject = run();
+    const prepared = await prepareSandbox({ run: subject, projectPath: root, git: gitService });
+    const preparedRun = { ...subject, directory: prepared.directory, worktreeBranch: prepared.branch };
+    // A step whose prompt asked for no commit leaves its output only here.
+    await fs.writeFile(path.join(prepared.directory, 'step-output.txt'), 'uncommitted');
+
+    await expect(releaseSandbox({ run: preparedRun, projectPath: root, git: gitService }))
+      .rejects.toMatchObject({ name: 'WorkflowError', code: 'conflict', status: 409, message: expect.stringContaining('step-output.txt') });
+
+    // The checkout and the branch are still there for the person to act on.
+    expect(await fs.readFile(path.join(prepared.directory, 'step-output.txt'), 'utf8')).toBe('uncommitted');
+    expect(execFileSync('git', ['branch', '--list', prepared.branch], { cwd: root }).toString()).toContain(prepared.branch);
+
+    // Once the work is committed, the release goes through.
+    execFileSync('git', ['add', 'step-output.txt'], { cwd: prepared.directory });
+    execFileSync('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=T', 'commit', '-q', '-m', 'step output'], { cwd: prepared.directory });
+    expect(await releaseSandbox({ run: preparedRun, projectPath: root, git: gitService })).toEqual({ removed: true });
+    await expect(fs.stat(prepared.directory)).rejects.toThrow();
+  });
+
   it('does nothing for a run that has no worktree', async () => {
     expect(await releaseSandbox({ run: { ...run(), directory: root }, projectPath: root, git: gitService })).toEqual({ removed: false });
   });

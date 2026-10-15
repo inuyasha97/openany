@@ -382,7 +382,13 @@ export const createWorkflowEngine = ({
       const run = assertRunIsOpen(await loadRun(projectId, runId));
       const definition = await loadStepDefinition(projectId, run);
       const declared = definition.steps.find((entry) => entry.id === stepId);
-      const step = findStep(run, stepId);
+      // Re-running the checks on a settled step would rewrite the `attempts.at(-1).verify`
+      // the restart sweep compares against — replacing the digest the person
+      // confirmed with the file's current one, so a later change would compare
+      // equal and never flag. A settled step's record is closed; re-running the
+      // checks stays available where the answer still matters (`waiting_confirm`,
+      // `needs_work`).
+      const step = assertStepIsOpen(findStep(run, stepId));
       const attempt = step.attempts.at(-1);
       if (!declared || !attempt) throw new WorkflowError('conflict', `step ${stepId} has not run yet`, 409);
       attempt.verify = await runChecks({ step: declared, directory: run.directory });
@@ -420,6 +426,11 @@ export const createWorkflowEngine = ({
      * because it is still writing into that checkout — and because `waiting` may
      * still be answered, which would start a fresh attempt in a directory this
      * call had just removed.
+     *
+     * A dirty checkout is refused too: the engine writes no commit, so a step
+     * whose prompt asked for none has left its output only there, and removing
+     * the directory would delete the only copy. The refusal names the paths, so
+     * the person commits or discards them and asks again.
      *
      * It takes the project's lock for the same reason `cancelRun` refuses while
      * one is held: this writes the whole run. During the first step's

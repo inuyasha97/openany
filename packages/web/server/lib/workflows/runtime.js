@@ -56,6 +56,9 @@ export const createWorkflowRuntime = ({
     removeWorktree: async (projectPath, input) =>
       (await import('../git/index.js')).removeWorktree(projectPath, { ...input, disposeInstance: disposeWorktreeInstance }),
     getWorktreeBootstrapStatus: async (...args) => (await import('../git/index.js')).getWorktreeBootstrapStatus(...args),
+    // The release guard asks the checkout whether it is clean before removing
+    // it, so `getStatus` is loaded on the same lazy path as the rest.
+    getStatus: async (...args) => (await import('../git/index.js')).getStatus(...args),
   };
 
   const requireHost = async () => {
