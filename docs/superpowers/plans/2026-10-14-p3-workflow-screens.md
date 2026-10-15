@@ -872,17 +872,23 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
     [entry?.runs, selectedRunId],
   );
 
-  if (!project) {
+  // A chat-draft or chats-root directory resolves to a synthetic owner that is
+  // not a project (`useProjectContextOwner`), and a project id is `path_…`; the
+  // surface has nothing to read for either, so it shows the no-project state
+  // instead of asking the routes for a directory that is not a checkout.
+  if (!project || !project.id.startsWith('path_')) {
     return <Empty text={t('workflows.empty.noProject')} />;
   }
-  if (entry?.loading && !entry.loaded) {
+  // The store's `EMPTY` entry is truthy with no runs and no error, so a project
+  // that has simply not been read yet would paint "No run yet" for a frame.
+  if (!entry?.loaded && !entry?.error) {
     return <Empty text={t('workflows.empty.loading')} />;
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {entry?.error ? (
-        <div role="status" className="border-b border-border bg-destructive/10 px-3 py-2 text-xs text-destructive">
+        <div role="alert" className="border-b border-border bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {t('workflows.error.readFailed')}: {entry.error}
         </div>
       ) : null}
@@ -909,7 +915,9 @@ const Empty = ({ text }: { text: string }) => (
   <div className="flex h-full flex-1 items-center justify-center p-4 text-xs text-muted-foreground">{text}</div>
 );
 
-export default WorkflowsView;
+// No default export: the panel imports the named one through the chunk-recovery
+// wrapper, so a second binding would be dead weight.
+
 ```
 
 - [ ] **Step 4: Add the English strings**
