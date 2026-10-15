@@ -19,7 +19,9 @@
 - The `sandbox` field is additive: a definition without it means `worktree` after this plan, and `working-tree` before it. Every run records the mode it actually used, so an old run keeps reading the way it ran.
 - A run in `worktree` mode never writes to the project's working tree. A step whose worktree could not be created is `blocked` with the git error recorded; it does not fall back to the working tree.
 - Removing a worktree is always an explicit action on a finished run. Nothing deletes a directory on its own, and no route deletes a session.
-- Focused test command: `bun run --cwd packages/web test -- server/lib/workflows/<file>.test.js`. Syntax check: `node --check <file>`.
+- Focused test command: `bun run --cwd packages/web test -- server/lib/workflows/<file>.test.js`. That is the package's own runner (`vitest run`); `bun test` is **not** the server runner — it hangs `commands.test.js` past its 5s per-test timeout and reports a failure vitest does not have. Syntax check: `node --check <file>`.
+- `store.write` takes the project as well as the run: `store.write(projectId, run)`. The one-argument form this plan was first written with no longer exists.
+- The worktree service is loaded lazily, the way `packages/web/server/lib/git/routes.js:11-19` does it (`await import('./index.js')` on first use). `packages/web/server/lib/git/service.js` is 6000 lines and must not be pulled in at server boot; the engine takes the worktree functions as an injected dependency so tests can pass a fake.
 - `AGENTS.md` forbids git commands unless the maintainer asked. The maintainer asked for this plan to be executed, so the commit steps below are the only git commands an executor runs. Tests that need a repository create their own temporary one, the way `packages/web/server/lib/git/service.test.js:1-45` does.
 
 ## Review Focus
@@ -28,6 +30,7 @@
 2. Two runs of the same project must not collide on one branch or one worktree path. Owner: Task 2.
 3. A definition that says `worktree` on a project with uncommitted changes must not move or lose those changes. Owner: Task 2.
 4. Measured cost: a worktree that needs a fresh dependency install is slow, and the default ships only with a number attached. Owner: Task 4.
+5. A step's session is created with the worktree as its `cwd`, which is what makes the isolation real — and it means the chat banner, which resolves a project from the session's directory, will not find the run for a `worktree` step. That is the same class as the open banner item plan 2 handed over; record it in Task 4's evidence rather than papering over it here. Owner: Task 4.
 
 ---
 
@@ -63,7 +66,11 @@ Expected: FAIL, `sandbox` is `undefined`.
 
 - [ ] **Step 3: Implement**
 
-Add `'sandbox'` to `DEFINITION_FIELDS`, validate the two values, and return `sandbox: raw.sandbox === 'working-tree' ? 'working-tree' : 'worktree'` in the definition. In the create-run route, replace the hardcoded `sandbox: 'working-tree'` with `sandbox: definition.sandbox`. In `workflowsApi.ts`, add `sandbox: 'worktree' | 'working-tree'` to `WorkflowDefinitionSummary` and the step definition types.
+Add `'sandbox'` to `DEFINITION_FIELDS` (`packages/web/server/lib/workflows/definitions.js:13`), reject anything other than the two values with exactly `{ field: 'sandbox', message: 'must be "worktree" or "working-tree"' }`, and return `sandbox: raw.sandbox === 'working-tree' ? 'working-tree' : 'worktree'` in the definition.
+
+In the create-run route, replace the hardcoded `sandbox: 'working-tree'` (`packages/web/server/lib/workflows/routes.js:157`) with `sandbox: definition.sandbox`. That single line is what makes the default real: every run records the mode it is using, so an old run keeps reading the way it ran.
+
+In `packages/ui/src/lib/workflowsApi.ts`, add `sandbox: 'worktree' | 'working-tree'` to `WorkflowDefinitionSummary`, and tighten `WorkflowRun.sandbox` from `string` (`:86`) to the same union so the screen cannot compare against a mode that does not exist.
 
 - [ ] **Step 4: Run both suites**
 
@@ -202,61 +209,79 @@ Expected: FAIL, `Failed to resolve import "./sandbox.js"`.
  * tree, because a person who asked for isolation would be getting the opposite
  * while the screen said `worktree`.
  */
-import path from 'node:path';
-
-const WORKTREE_ROOT_SUFFIX = '-worktrees';
-
 const branchFor = (run) => `omp/wf/${run.runId}`;
-
-const directoryFor = (projectPath, run) => path.join(path.dirname(projectPath), `${path.basename(projectPath)}${WORKTREE_ROOT_SUFFIX}`, run.runId);
+const nameFor = (run) => `wf-${run.runId}`;
 
 export const prepareSandbox = async ({ run, projectPath, git }) => {
   if (run.sandbox !== 'worktree') return { directory: projectPath, branch: null, created: false };
   if (run.worktreeBranch && run.directory && run.directory !== projectPath) {
     return { directory: run.directory, branch: run.worktreeBranch, created: false };
   }
-  const branch = branchFor(run);
-  const directory = directoryFor(projectPath, run);
-  // `createWorktree` is the same call the worktree routes use; copy its input
-  // keys from `packages/web/server/lib/git/routes.js` rather than inventing new
-  // ones, and pass the branch name and the target directory it expects.
-  await git.createWorktree(projectPath, { mode: 'new', branchName: branch, directory });
-  return { directory, branch, created: true };
+  // `createWorktree(projectPath, input)` decides the directory itself, under the
+  // app's worktree root, from the name it is handed: it takes no target path
+  // (`packages/web/server/lib/git/service.js:4967`, `resolveCandidateDirectory`).
+  // The `path` it returns is the run's directory from here on.
+  const created = await git.createWorktree(projectPath, { mode: 'new', worktreeName: nameFor(run), branchName: branchFor(run) });
+  const directory = created?.path;
+  if (!directory) throw new Error('the worktree was created without a directory');
+  return { directory, branch: created.branch ?? branchFor(run), created: true };
 };
 
 export const releaseSandbox = async ({ run, projectPath, git }) => {
   if (run.sandbox !== 'worktree' || !run.worktreeBranch || !run.directory || run.directory === projectPath) {
     return { removed: false };
   }
+  // `removeWorktree(projectPath, { directory })`: the first argument is the
+  // project the worktree belongs to, the second names the checkout to remove
+  // (`service.js:5118`). The branch is deliberately left behind.
   await git.removeWorktree(projectPath, { directory: run.directory, deleteLocalBranch: false });
   return { removed: true };
 };
 ```
 
-Before writing the call, read the worktree creation handler in `packages/web/server/lib/git/routes.js` and use its exact input keys and its expected target-directory shape; the field names above are placeholders for that read, and the test in Step 1 is what proves the read was right.
+The Step 1 test must release every worktree it creates, not only the ones in the release cases: the service puts them under the app's own worktree root (outside the temp project), so a test that leaves them behind litters a directory the suite does not own. Add a `releaseSandbox` call to the "different directory for every run" case, and after `afterAll` nothing may remain under that root.
+
+A refusal is a rejection: `createWorktree` throws when the directory is not a repository (through `resolveWorktreeProjectContext`) and when the worktree cannot be attached, which is what the Step 1 test's last case pins.
 
 - [ ] **Step 4: Prepare the sandbox from the engine**
 
-In `engine.js`, at the top of `attemptStep`, after the definition is resolved:
+In `engine.js`, in `attemptStep`, after `const step = assertStepIsOpen(findStep(run, stepId));` (`engine.js:137`):
 
 ```js
+    // A run in `worktree` mode executes in its own checkout from its first step
+    // on. A refusal blocks the step instead of falling back: running in the
+    // project's working tree while the run says `worktree` is the opposite of
+    // what the person asked for, and they would only learn it from the diff.
     if (run.sandbox === 'worktree' && (!run.worktreeBranch || run.directory === projectPath)) {
       try {
-        const prepared = await prepareSandbox({ run, projectPath, git: gitForWorktrees });
+        const prepared = await prepareSandbox({ run, projectPath, git: worktrees });
         run.directory = prepared.directory;
         run.worktreeBranch = prepared.branch;
-        await store.write(run);
+        emit(await store.write(projectId, run));
       } catch (error) {
         step.status = 'blocked';
         step.note = `the run could not get its own worktree: ${error?.message ?? error}`;
-        const saved = await store.write(run);
+        run.status = 'waiting';
+        const saved = await store.write(projectId, run);
         emit(saved);
         return saved;
       }
     }
 ```
 
-`gitForWorktrees` is a new engine dependency, passed by `runtime.js` as the git service. Do the block after `const step = findStep(run, stepId)` so the blocked reason lands on the step the person clicked.
+Then make `run.directory` the single place the execution path is read. The `projectPath` argument is the project the run was created from, and it stops being where the run executes the moment a worktree exists. Three call sites move: `createSession({ cwd: run.directory })` (`:151`), `setAutoAccept(sessionId, true, run.directory)` (`:162`), and `runPromptInSession`'s `projectPath` parameter, which exists only for auto-accept (`:185`) — drop the parameter from `runPromptInSession` and from its two callers (`:169`, `:357`) and read `run.directory` inside. Verifiers and checkpoints already read `run.directory` (`:244`, `:264`, `:369`), so no other line moves.
+
+`worktrees` is a new engine dependency, injected by `runtime.js` as a lazy loader so the 6000-line git service is not imported at server boot:
+
+```js
+  // runtime.js, beside the engine's other dependencies
+  worktrees: {
+    createWorktree: async (...args) => (await import('../git/index.js')).createWorktree(...args),
+    removeWorktree: async (...args) => (await import('../git/index.js')).removeWorktree(...args),
+  },
+```
+
+Tests inject a fake instead. The engine and resume fixtures already carry `sandbox: 'working-tree'` (`engine.test.js:52`, `resume.test.js:23`), because plan 1 mirrored the run shape the create route wrote, so they keep exercising the non-worktree path unchanged. A new engine case for the worktree path needs its own fixture with `sandbox: 'worktree'` and the injected fake.
 
 - [ ] **Step 5: Run the engine and sandbox suites**
 
@@ -264,7 +289,7 @@ In `engine.js`, at the top of `attemptStep`, after the definition is resolved:
 bun run --cwd packages/web test -- server/lib/workflows
 ```
 
-Expected: PASS. The engine tests use `sandbox: 'working-tree'` runs, so they keep exercising the non-worktree path unchanged.
+Expected: PASS. The engine and resume fixtures already carry `sandbox: 'working-tree'`, so they keep exercising the non-worktree path unchanged; `sandbox.test.js` is the only place that drives the real worktree service.
 
 - [ ] **Step 6: Commit**
 
@@ -299,7 +324,11 @@ git commit -m "feat(workflows): give a run its own worktree"
 
 - [ ] **Step 2: Implement the route and the engine method**
 
-`engine.releaseSandbox` loads the run, refuses when its status is `running` or `waiting` (a person may still answer a step), calls `releaseSandbox`, records `worktreeReleasedAt` on the run, and writes it. The route mirrors the other run actions, and the screen shows the action only when the run is `done`, `failed` or `cancelled` and has a `worktreeBranch`.
+`engine.releaseSandbox` loads the run (`loadRun(projectId, runId)`), refuses when its status is `running` or `waiting` — a person may still answer a step — calls `releaseSandbox`, records `worktreeReleasedAt` on the run and writes it with `store.write(projectId, run)`.
+
+The route follows the existing action family exactly (`routes.js:191-234`): `app.post('/api/workflows/runs/:runId/sandbox/release', parseJsonBody, withProject(...))`, with `runIdOf(req, res)` first and `engine.releaseSandbox({ projectId, projectPath, runId })` as the body. It inherits the `no-store` middleware and the project scope from that family; do not add a second scope resolver.
+
+On the client: `releaseWorkflowSandbox(directory, runId)` in `packages/ui/src/lib/workflowsApi.ts` next to the other run actions, a store action that replaces the run with the answer, and the control in `packages/ui/src/components/views/workflows/RunDetail.tsx` — shown only when the run is `done`, `failed` or `cancelled` **and** `run.worktreeBranch` is set, labelled `t('workflows.step.releaseWorktree')`. Every new key goes into all thirteen dictionaries (`packages/ui/src/lib/i18n/messages/*.ts`); `messages.test.ts` is what proves parity.
 
 - [ ] **Step 3: Run the suites**
 
