@@ -142,10 +142,11 @@ Expected: FAIL, `local.write is not a function`.
 
 `node:crypto` is imported for `createHash` and `randomUUID`: the temporary is named per write, because two overlapping writes of one definition must not share a temporary file — the second `writeFile` opens with flag `w` and truncates, and this path awaits between `writeFile` and `rename`, so a shared name lets the shorter body cut the longer one and the second `rename` fail `ENOENT`.
 
-Two known non-atomicities, deliberately left as they are, so they are not mistaken for oversights:
+Three known non-atomicities, deliberately left as they are, so they are not mistaken for oversights:
 
 1. `expectedHash` against a file that no longer exists **recreates** it. The guard only refuses when a file is there and differs (`readFile(...).catch(() => null)` makes a missing file `null`), so a window whose editor holds a file another window deleted wins silently. That is deliberate — a re-create after an out-of-band removal is legitimate — and the guard is inherently a check-then-rename, not one atomic step.
 2. `list` reads `.yaml` and `.yml`, and every write path resolves through the same preference (`.yaml` first), so one id cannot produce two files through the app. The only state where the two diverge is hand-made: a `.yaml` that does not parse beside a `.yml` that does. In that state `read` serves the valid `.yml` while the editor edits the broken `.yaml`.
+3. The Delete action this task adds makes "another window removed it" a state the app can reach, and an editor left open on that definition still holds its text: a save from it passes `expectedHash` against a file that is gone, and the guard for a missing file is "no expectation" — so the window that still has the editor open re-creates the definition the other window deleted. That is the same deliberate behaviour as (1), reaching a state the screen now makes easy to hit; a person who deletes a definition in one window and saves it in another has asked for the file back.
 
 - [ ] **Step 4: Add the routes and their tests**
 
@@ -171,7 +172,7 @@ git commit -m "feat(workflows): write a definition through a validating route"
 
 **Files:**
 - Create: `packages/ui/src/components/views/workflows/DefinitionEditor.tsx`
-- Modify: `packages/ui/src/components/views/workflows/WorkflowsView.tsx` (an action to open it), `packages/ui/src/components/views/workflows/WorkflowDiagram.tsx` (switch between diagram and editor)
+- Modify: `packages/ui/src/components/views/workflows/WorkflowsView.tsx` (an action to open it), `packages/ui/src/components/views/workflows/WorkflowDiagram.tsx` (switch between diagram and editor), `packages/ui/src/components/views/workflows/RunList.tsx` (the pencil that opens a definition's YAML), `packages/ui/src/components/views/workflows/RunDetail.tsx` (the diagram's own edit action)
 - Modify: the 13 locale files
 
 **Interfaces:**
@@ -251,16 +252,21 @@ Check `CodeMirrorEditor`'s actual props before writing it: it takes `value`, `on
 ```tsx
 import { createFlexokiCodeMirrorTheme } from '@/lib/codemirror/flexokiTheme';
 import { languageByExtension } from '@/lib/codemirror/languageByExtension';
+import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { useUIStore } from '@/stores/useUIStore';
 
-const theme = useUIStore((state) => state.theme);
+// `useUIStore.theme` is the `'light' | 'dark' | 'system'` preference, not a
+// `Theme`; the editor's colours come from the resolved theme.
+const { currentTheme } = useThemeSystem();
 const editorFontSize = useUIStore((state) => state.editorFontSize);
 const editorExtensions = useMemo(() => {
-  const extensions = [createFlexokiCodeMirrorTheme(theme, { fontSize: editorFontSize })];
-  const language = languageByExtension(`${summary.id ?? 'definition'}.yaml`);
+  const extensions = [createFlexokiCodeMirrorTheme(currentTheme, { fontSize: editorFontSize })];
+  // The file's own name, not the id the body declares: the two may differ, and
+  // the extension is what picks the language.
+  const language = languageByExtension(`${workflowId}.yaml`);
   if (language) extensions.push(language);
   return extensions;
-}, [theme, editorFontSize, summary.id]);
+}, [currentTheme, editorFontSize, workflowId]);
 ```
 
 The buffer's `raw` comes from `fetchWorkflowDefinitionSource(project.path, summary.id)` when the editor opens — the summary carries no text. Until that read answers, render the panel's own loading text rather than an empty editor, and if the read fails show the failure beside the file name instead of an empty buffer, because an empty buffer that a person then saves is how a working definition gets erased.

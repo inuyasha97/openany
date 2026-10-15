@@ -54,4 +54,20 @@ describe('liveRunForDefinition', () => {
   it('answers null when the project has no run at all', () => {
     expect(liveRunForDefinition([], 'two-step')).toBeNull();
   });
+
+  it('keys on the id a definition declares, not on the name of its file', () => {
+    // `alpha.yaml` declaring `id: beta`: the engine resolves a run of `beta` to
+    // this definition, so the run of `beta` is the one the file belongs to.
+    const live = run({ runId: 'r-beta', workflowId: 'beta', status: 'running' });
+    expect(liveRunForDefinition([live], 'beta')?.runId).toBe('r-beta');
+    // A run that happens to be named after the file is another definition's: the
+    // file's name plays no part in what a run resolves to.
+    expect(liveRunForDefinition([run({ workflowId: 'alpha', status: 'running' })], 'beta')).toBeNull();
+  });
+
+  it('answers null for a definition that declares no id', () => {
+    // A file that does not parse declares nothing, and `definitions.read` needs a
+    // parsed definition, so no run resolves to it.
+    expect(liveRunForDefinition([run({ workflowId: 'two-step', status: 'running' })], null)).toBeNull();
+  });
 });

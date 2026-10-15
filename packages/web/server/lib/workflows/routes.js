@@ -115,6 +115,32 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     return null;
   };
 
+  /**
+   * The name of the file a definition id points at, and the id that file
+   * declares. Read from the file's own name (`readSource`), which is what a
+   * delete names and what a save writes back to.
+   */
+  const definitionOnDisk = async (projectId, workflowId) => {
+    const source = await definitions.readSource(projectId, workflowId);
+    if (!source) return null;
+    const parsed = parseDefinition(source.raw, { file: source.file });
+    return { file: source.file, declaredId: parsed.ok ? parsed.definition.id : null };
+  };
+
+  /**
+   * The rule the refusals below share, stated once so they and the screen
+   * (`packages/ui/src/lib/workflows/liveRun.ts`) agree on it: a run resolves to
+   * the *definition* whose declared `id` — the `id:` in the body, never the file
+   * name — equals the run's `workflowId`, because that is how
+   * `engine.js`'s `loadStepDefinition` reads it through `definitions.read`. So
+   * `alpha.yaml` declaring `id: beta` is the definition a run of `beta` resolves
+   * to, and a file that does not parse declares no id, which no run resolves to.
+   */
+  const liveRunForDefinition = (runs, declaredId) => {
+    if (declaredId === null) return null;
+    return runs.find((candidate) => candidate.workflowId === declaredId && !TERMINAL_RUN_STATUSES.has(candidate.status)) ?? null;
+  };
+
   app.get('/api/workflows/definitions', async (req, res) => {
     try {
       const scope = scopeOf(req);
@@ -153,6 +179,12 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
   /**
    * Write one definition. The parser and the id check live in the definitions
    * module and refuse with their own reason, which is what the person reads.
+   *
+   * A save that would move the id a file declares is refused while a run still
+   * resolves that id, naming the run: the engine looks a run's definition up by
+   * that id, so the run could not move once the file declares another. The body
+   * is parsed here only to tell that case from the save the module refuses anyway
+   * for an id that is not the one being written.
    */
   app.put('/api/workflows/definitions/:workflowId', parseJsonBody, async (req, res) => {
     try {
@@ -160,11 +192,34 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
       if (!scope) return res.status(400).json({ error: 'x-opencode-directory is required' });
       // `null` is not an absent field: it is the create case, and it has to reach
       // the writer as itself rather than collapse into "no expectation". An empty
-      // string is no expectation, the way it is for a hash nobody read.
-      const expectedHash = req.body?.expectedHash === null
-        ? null
-        : (typeof req.body?.expectedHash === 'string' && req.body.expectedHash ? req.body.expectedHash : undefined);
-      const written = await definitions.write(scope.projectId, req.params.workflowId, req.body?.raw, { expectedHash });
+      // string is no expectation, the way it is for a hash nobody read. Anything
+      // else — a number, `false`, an object — would collapse into that same "no
+      // expectation" branch, which is the unconditional overwrite this route
+      // exists to prevent, so it is refused instead of guessed at.
+      const expectedHashField = req.body?.expectedHash;
+      if (expectedHashField !== undefined && expectedHashField !== null && typeof expectedHashField !== 'string') {
+        return res.status(400).json({ error: 'expectedHash must be a string or null' });
+      }
+      const expectedHash = expectedHashField === undefined || expectedHashField === '' ? undefined : expectedHashField;
+      const workflowId = req.params.workflowId;
+      // A save keeps the id a file declares equal to its own name (`write` refuses
+      // anything else), so the one way a save can move a declared id is a file
+      // that declares another one — and that moves the definition out from under a
+      // live run, which resolves it by the declared id. The write would otherwise
+      // succeed, so this is refused before it, naming the run.
+      const onDisk = await definitionOnDisk(scope.projectId, workflowId);
+      if (onDisk !== null && onDisk.declaredId !== null && onDisk.declaredId !== workflowId) {
+        const parsed = typeof req.body?.raw === 'string' ? parseDefinition(req.body.raw, { file: `${workflowId}.yaml` }) : { ok: false };
+        if (parsed.ok && parsed.definition.id === workflowId) {
+          const live = liveRunForDefinition(await store.list(scope.projectId), onDisk.declaredId);
+          if (live) {
+            return res.status(409).json({
+              error: `run ${live.runId} has not finished and resolves ${onDisk.file} by the id it declares, "${onDisk.declaredId}", so saving it as "${workflowId}" would strand that run: finish or delete that run first`,
+            });
+          }
+        }
+      }
+      const written = await definitions.write(scope.projectId, workflowId, req.body?.raw, { expectedHash });
       return res.json({ written });
     } catch (error) {
       return respondWithError(res, error, 'Failed to write the workflow definition');
@@ -178,17 +233,25 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
    * (`loadStepDefinition`), so a run that has not stopped for good cannot move
    * once its file is gone. That delete is therefore refused, naming the run that
    * holds it, rather than stranding the run in silence.
+   *
+   * The run holds the *definition* the file declares, not the file's name: a run
+   * of `beta` holds `alpha.yaml` when that file declares `id: beta`, so the guard
+   * is keyed on the declared id (`liveRunForDefinition`) and this delete is about
+   * that id rather than the one in the URL.
    */
   app.delete('/api/workflows/definitions/:workflowId', async (req, res) => {
     try {
       const scope = scopeOf(req);
       if (!scope) return res.status(400).json({ error: 'x-opencode-directory is required' });
       const workflowId = req.params.workflowId;
-      const runs = await store.list(scope.projectId);
-      const live = runs.find((candidate) => candidate.workflowId === workflowId && !TERMINAL_RUN_STATUSES.has(candidate.status));
+      // The file this name points at, and the id it declares: a run resolves the
+      // definition by the declared id, so that is what this delete is about, and
+      // not the name the caller handed in.
+      const onDisk = await definitionOnDisk(scope.projectId, workflowId);
+      const live = onDisk === null ? null : liveRunForDefinition(await store.list(scope.projectId), onDisk.declaredId);
       if (live) {
         return res.status(409).json({
-          error: `run ${live.runId} has not finished, so ${workflowId}.yaml cannot be deleted: finish or delete that run first`,
+          error: `run ${live.runId} has not finished, so ${onDisk.file} cannot be deleted: finish or delete that run first`,
         });
       }
       const removed = await definitions.remove(scope.projectId, workflowId);

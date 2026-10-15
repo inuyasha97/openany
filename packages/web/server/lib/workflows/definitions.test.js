@@ -136,6 +136,24 @@ describe('write', () => {
     await expect(fs.stat(path.join(root, '.openchamber/workflows/two-step.yaml'))).rejects.toThrow();
   });
 
+  it('refuses an id that would name a file outside the workflows directory, and creates nothing', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-traversal-'));
+    const local = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId: () => root });
+
+    for (const workflowId of ['../../evil', 'nested/evil', '..', '..%2Fevil']) {
+      // The write is refused whatever refuses it — the parser rejects the id in
+      // the body before the file name is ever joined — and nothing is created.
+      await expect(local.write('proj-1', workflowId, valid.replace('id: sdlc-feature', `id: ${workflowId}`)))
+        .rejects.toThrow();
+      // Both of these refuse the name itself, which is the guard that keeps the
+      // join from happening at all.
+      await expect(local.readSource('proj-1', workflowId)).resolves.toBeNull();
+      await expect(local.remove('proj-1', workflowId)).rejects.toThrow(/invalid workflow id/);
+    }
+    // Neither the workflows directory nor a file beside the project was created.
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
   it('refuses a body whose id is not the id being written', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-write-'));
     const local = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId: () => root });

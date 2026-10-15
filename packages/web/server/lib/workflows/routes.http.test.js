@@ -394,6 +394,77 @@ describe('workflow definition routes', () => {
     await expect(fs.stat(file)).rejects.toThrow();
   });
 
+  // `alpha.yaml` declaring `id: beta` is a hand-made file, and one the screen can
+  // open. A run of `beta` resolves *this* file, whatever it is called, so both the
+  // delete of the file and a save that would change what it declares are keyed on
+  // the id declared in the body rather than on the name in the URL.
+  const createMismatchedIdApp = async (status = 'waiting') => {
+    const live = { ...run, runId: '99999999-2222-4333-8444-555555555555', workflowId: 'beta', status };
+    const store = { list: async () => [live], read: async () => live, create: async (value) => value, remove: async () => true };
+    const app = await createDefinitionApp({ store });
+    const directory = path.join(app.root, '.openchamber/workflows');
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, 'alpha.yaml'), SOURCE.replace('id: two-step', 'id: beta'));
+    return { ...app, file: path.join(directory, 'alpha.yaml') };
+  };
+
+  it('refuses to delete a file whose name is not the id a live run resolves it by', async () => {
+    const { app, file } = await createMismatchedIdApp();
+
+    const response = await request(app).delete('/api/workflows/definitions/alpha').set(SCOPE);
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toContain('99999999-2222-4333-8444-555555555555');
+    expect(response.body.error).toContain('alpha.yaml');
+    expect(await fs.readFile(file, 'utf8')).toContain('id: beta');
+  });
+
+  it('refuses a save that would move the declared id out from under a live run, and names the run', async () => {
+    const { app, file } = await createMismatchedIdApp();
+
+    // Saving the file as the id its name is would repair it for this screen and
+    // strand the run: the engine can no longer resolve the id it holds.
+    const response = await request(app)
+      .put('/api/workflows/definitions/alpha')
+      .set(SCOPE)
+      .send({ raw: SOURCE.replace('id: two-step', 'id: alpha') });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toContain('99999999-2222-4333-8444-555555555555');
+    expect(response.body.error).toContain('"beta"');
+    expect(await fs.readFile(file, 'utf8')).toContain('id: beta');
+  });
+
+  it('leaves the module\'s own id refusal in place for a body that keeps the other id', async () => {
+    // The guard above is only about a save that would *change* the declared id: a
+    // body that keeps declaring `beta` is refused for the reason it always was.
+    const { app, file } = await createMismatchedIdApp();
+
+    const response = await request(app)
+      .put('/api/workflows/definitions/alpha')
+      .set(SCOPE)
+      .send({ raw: SOURCE.replace('id: two-step', 'id: beta') });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/id "beta" does not match/);
+    expect(await fs.readFile(file, 'utf8')).toContain('id: beta');
+  });
+
+  it('deletes the mismatched file, and saves over it, once the run has finished', async () => {
+    const { app, file } = await createMismatchedIdApp('done');
+
+    const repair = await request(app)
+      .put('/api/workflows/definitions/alpha')
+      .set(SCOPE)
+      .send({ raw: SOURCE.replace('id: two-step', 'id: alpha') });
+    expect(repair.status).toBe(200);
+    expect(await fs.readFile(file, 'utf8')).toContain('id: alpha');
+
+    const gone = await request(app).delete('/api/workflows/definitions/alpha').set(SCOPE);
+    expect(gone.body).toEqual({ removed: true });
+    await expect(fs.stat(file)).rejects.toThrow();
+  });
+
   it('refuses a write with no text in it', async () => {
     const { app, file } = await createDefinitionApp();
     const response = await request(app).put('/api/workflows/definitions/two-step').set(SCOPE).send({});
@@ -401,6 +472,41 @@ describe('workflow definition routes', () => {
     expect(response.status).toBe(400);
     expect(response.body.error).toBe('the definition text is required');
     await expect(fs.stat(file)).rejects.toThrow();
+  });
+
+  it('refuses an expectedHash that is neither a string nor null, instead of reading it as no expectation', async () => {
+    // "no expectation" is the unconditional overwrite this route exists to
+    // prevent, so a value that is not a hash is a caller bug, not a green light.
+    const { app, file } = await createDefinitionApp();
+    for (const expectedHash of [7, false, { hash: 'x' }, []]) {
+      const response = await request(app)
+        .put('/api/workflows/definitions/two-step')
+        .set(SCOPE)
+        .send({ raw: SOURCE, expectedHash });
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe('expectedHash must be a string or null');
+    }
+    await expect(fs.stat(file)).rejects.toThrow();
+  });
+
+  it('refuses an id that names a file outside the workflows directory, and writes nothing', async () => {
+    const { app, root } = await createDefinitionApp();
+    const response = await request(app)
+      .put('/api/workflows/definitions/..%2F..%2Fevil')
+      .set(SCOPE)
+      .send({ raw: SOURCE, expectedHash: null });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('../../evil');
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
+  it('refuses a delete of an id that names a file outside the workflows directory', async () => {
+    const { app } = await createDefinitionApp();
+    const response = await request(app).delete('/api/workflows/definitions/..%2F..%2Fevil').set(SCOPE);
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/invalid workflow id/);
   });
 
   it('asks for a project directory on every definition route', async () => {

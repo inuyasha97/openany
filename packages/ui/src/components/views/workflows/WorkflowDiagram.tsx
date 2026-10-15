@@ -7,9 +7,11 @@
  * chat already uses. It shows the definition, which does not change, and never
  * the live status: that is the timeline's job.
  *
- * A definition that does not load is shown as its errors rather than as no
- * diagram, and the edit action stays beside them: repairing the file is what a
- * person does next.
+ * A definition the run detail hands this pane is one that parsed, because it is
+ * resolved by the run's declared id and a file that does not parse declares none;
+ * such a file is listed by its name in the run list, and opened for repair from
+ * there. The errors branch below is what a summary carrying errors renders if one
+ * ever arrives: the errors beat an empty diagram.
  */
 import { useMemo } from 'react';
 

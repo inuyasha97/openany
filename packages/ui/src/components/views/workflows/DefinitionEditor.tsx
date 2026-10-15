@@ -23,6 +23,12 @@
  * exactly the text a person is still reconciling, and the close is the only exit
  * from that state.
  *
+ * Closing is not the only way out: the list's `+` and pencils stay live while
+ * this pane is mounted, so switching to another definition would unmount it over
+ * whatever was typed. The parent hands that switch down (`pendingSwitch`) instead
+ * of applying it, and this pane answers it with the same question the close asks,
+ * because the buffer it would take is the same one.
+ *
  * Deleting is refused while a run of the project has not finished with this
  * definition: the engine re-reads the file on every advance, so the run could
  * never move again.
@@ -69,6 +75,15 @@ export interface DefinitionEditorProps {
   summary: WorkflowDefinitionSummary | null;
   /** Hands the pane back to the run detail. */
   onClose: () => void;
+  /**
+   * True while a switch to another definition is waiting on this pane's answer.
+   * The parent lists the definitions and owns what is being edited, so it cannot
+   * know whether the buffer here holds unsaved text; it hands the switch down and
+   * this pane resolves it, over the buffer that would go with it.
+   */
+  pendingSwitch: boolean;
+  /** Answers that switch: `true` discards this buffer and lets it through. */
+  onSwitchResolved: (discard: boolean) => void;
 }
 
 /**
@@ -88,7 +103,7 @@ const namedLine = (message: string): number | null => {
   return match ? Number(match[1]) : null;
 };
 
-export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditorProps) => {
+export const DefinitionEditor = ({ project, summary, onClose, pendingSwitch, onSwitchResolved }: DefinitionEditorProps) => {
   const { t } = useI18n();
   const { currentTheme } = useThemeSystem();
   const editorFontSize = useUIStore((state) => state.editorFontSize);
@@ -110,9 +125,15 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
   // same name, so a body that declares another id is still refused truthfully
   // rather than being read from a path the person did not point at.
   const workflowId = summary !== null && !creating ? summary.file.replace(/\.ya?ml$/i, '') : createId;
+  // The id the definition declares — what a run of this definition holds, because
+  // the engine resolves a run through `definitions.read`, which matches the id in
+  // the body and never the file name (`lib/workflows/liveRun.ts`). A name this
+  // pane has written declares its own name (the route refuses any other); before
+  // that, the summary carries the id the file was listed with.
+  const declaredId = writtenFile !== null ? workflowId : summary?.id ?? null;
   // The engine re-reads this file on every advance, so a run that has not
   // finished needs it on disk. The delete waits for that run, and says why.
-  const liveRun = liveRunForDefinition(runs, workflowId);
+  const liveRun = liveRunForDefinition(runs, declaredId);
 
   const [text, setText] = useState('');
   /** The text as it is on disk: what "unsaved" is measured against. */
@@ -133,6 +154,16 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
     // and the template action is what gives it text. Nothing is read, so nothing
     // can be reported as a read failure.
     if (summary === null || creating) return;
+    // A file whose name is not a workflow id cannot be read, saved or deleted
+    // through the routes at all: they name a file by the id, and refuse that name
+    // before they read the body. It exists, so it is not the create state either —
+    // a pane that offered an id field and a template over it could never write
+    // them. The name is the problem, and the person fixes it on disk.
+    if (!isWorkflowId(workflowId)) {
+      setReading(false);
+      setReadFailure(t('workflows.editor.nameInvalid', { file: summary.file }));
+      return;
+    }
     let cancelled = false;
     setReading(true);
     setReadFailure(null);
@@ -168,7 +199,7 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
     return () => {
       cancelled = true;
     };
-  }, [creating, summary, project.path, workflowId]);
+  }, [creating, summary, project.path, workflowId, t]);
 
   const editorExtensions = useMemo(() => {
     const extensions = [createFlexokiCodeMirrorTheme(currentTheme, { fontSize: editorFontSize })];
@@ -178,6 +209,13 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
   }, [currentTheme, editorFontSize, workflowId]);
 
   const dirty = baseline !== null && text !== baseline;
+  /**
+   * Everything an exit would take with it: the buffer, and in the create pane the
+   * id a person has typed, which names the file this pane would write. Only the
+   * exits use it — the save keys on `dirty` alone, because an empty buffer with an
+   * id is not a definition and Save must not write one.
+   */
+  const unsaved = dirty || (creating && createId.trim() !== '');
   const failedLine = error === null ? null : namedLine(error);
   const idUsable = isWorkflowId(createId);
   /** The name the write uses: the file being edited, the id a person typed, or what the save wrote. */
@@ -265,18 +303,49 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
   const hasFile = writtenFile !== null || (summary !== null && !creating);
 
   /**
-   * Closing asks when the buffer holds text the file does not. The close stays
+   * Closing asks when the pane holds something a person typed. The close stays
    * available either way: after a refused save the buffer's hash is deliberately
    * not advanced, so the close is the only exit, and it must not be the one that
    * throws the edit away without asking.
    */
   const requestClose = () => {
-    if (!dirty) {
+    if (!unsaved) {
       onClose();
       return;
     }
     setError(null);
     setConfirmClose(true);
+  };
+
+  /**
+   * The parent's switch is this pane's other exit, and it asks the same question
+   * the close does: the buffer is a person's text, and unmounting this pane over
+   * it is exactly what the guard exists to prevent. A clean buffer has nothing to
+   * lose, so the switch goes through.
+   */
+  useEffect(() => {
+    if (!pendingSwitch) return;
+    if (unsaved) {
+      setConfirmClose(true);
+      return;
+    }
+    onSwitchResolved(true);
+  }, [pendingSwitch, unsaved, onSwitchResolved]);
+
+  /** Discards the buffer: the close the person confirmed, or the switch it was asked for. */
+  const discardEdits = () => {
+    setConfirmClose(false);
+    if (pendingSwitch) {
+      onSwitchResolved(true);
+      return;
+    }
+    onClose();
+  };
+
+  /** Keeps the buffer: the dialog is dismissed and a switch waiting on it is answered with "no". */
+  const keepEditing = () => {
+    setConfirmClose(false);
+    if (pendingSwitch) onSwitchResolved(false);
   };
 
   return (
@@ -414,7 +483,7 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={confirmClose} onOpenChange={(open) => { if (!open) setConfirmClose(false); }}>
+      <Dialog open={confirmClose} onOpenChange={(open) => { if (!open) keepEditing(); }}>
         <DialogContent showCloseButton={false} className="max-w-sm gap-5">
           <DialogHeader>
             <DialogTitle>{t('workflows.editor.discard')}</DialogTitle>
@@ -424,14 +493,14 @@ export const DefinitionEditor = ({ project, summary, onClose }: DefinitionEditor
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => setConfirmClose(false)}>
+            <Button variant="ghost" size="sm" onClick={keepEditing}>
               {t('workflows.editor.discardCancel')}
             </Button>
             {/* Not disabled by `busy`: a save in flight is exactly when a person
                 changes their mind, and the close must be able to answer a
                 refusal, so the way out stays open. */}
-            <Button variant="destructive" size="sm" onClick={onClose}>
-              {t('workflows.editor.discardClose')}
+            <Button variant="destructive" size="sm" onClick={discardEdits}>
+              {t(pendingSwitch ? 'workflows.editor.discardSwitch' : 'workflows.editor.discardClose')}
             </Button>
           </DialogFooter>
         </DialogContent>

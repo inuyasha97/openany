@@ -20,6 +20,9 @@ export interface WorkflowsViewProps {
   project: ProjectRef | null;
 }
 
+/** What the editor is being asked to make room for, held until it answers. */
+type PendingSwitch = { creating: true } | { creating: false; definition: WorkflowDefinitionSummary };
+
 export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   const { t } = useI18n();
   // Keyed on the id and the path, never on the owner object: `useProjectContextOwner`
@@ -38,16 +41,44 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
   // The editor for a definition that does not exist yet. It is what opens the
   // template: a new definition is a file named by the id a person gives it.
   const [creating, setCreating] = useState(false);
+  // A `+` or a pencil is a switch away from whatever the editor holds, and the
+  // guard for that lives in the editor, with the buffer it protects. So the
+  // parent does not replace the editor's state: it hands the switch down and the
+  // editor applies it over a clean buffer or asks first over a dirty one, with
+  // the same words its own close asks with.
+  const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null);
 
-  const openDefinition = (definition: WorkflowDefinitionSummary) => {
+  const applySwitch = (next: PendingSwitch) => {
+    if (next.creating) {
+      setEditing(null);
+      setCreating(true);
+      return;
+    }
     setCreating(false);
-    setEditing(definition);
+    setEditing(next.definition);
   };
 
-  const newDefinition = () => {
-    setEditing(null);
-    setCreating(true);
+  const requestSwitch = (next: PendingSwitch) => {
+    // With no editor mounted there is no buffer to lose: the switch is the whole
+    // change.
+    if (creating || editing !== null) {
+      setPendingSwitch(next);
+      return;
+    }
+    applySwitch(next);
   };
+
+  const resolveSwitch = (discard: boolean) => {
+    const next = pendingSwitch;
+    setPendingSwitch(null);
+    // A "no" from a pane that has already been unmounted must not undo the switch
+    // the pane before it let through.
+    if (discard && next) applySwitch(next);
+  };
+
+  const openDefinition = (definition: WorkflowDefinitionSummary) => requestSwitch({ creating: false, definition });
+
+  const newDefinition = () => requestSwitch({ creating: true });
 
   // `path_…` is the real project-id shape (`createProjectIdFromPath`); anything
   // else is a synthetic owner, so there is nothing to read for it.
@@ -113,11 +144,25 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
         {creating ? (
           /* No `summary`: the definition has no file yet, and the pane asks for the
              id and the template it should start from. */
-          <DefinitionEditor key="new" project={project} summary={null} onClose={() => setCreating(false)} />
+          <DefinitionEditor
+            key="new"
+            project={project}
+            summary={null}
+            onClose={() => setCreating(false)}
+            pendingSwitch={pendingSwitch !== null}
+            onSwitchResolved={resolveSwitch}
+          />
         ) : editing ? (
           /* Keyed on the file, so opening another definition reads its text
              instead of carrying the previous buffer into it. */
-          <DefinitionEditor key={editing.file} project={project} summary={editing} onClose={() => setEditing(null)} />
+          <DefinitionEditor
+            key={editing.file}
+            project={project}
+            summary={editing}
+            onClose={() => setEditing(null)}
+            pendingSwitch={pendingSwitch !== null}
+            onSwitchResolved={resolveSwitch}
+          />
         ) : selected ? (
           <RunDetail
             run={selected}

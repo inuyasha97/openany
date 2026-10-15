@@ -13,7 +13,9 @@
  *
  * Each definition carries both actions a person takes on it: start a run, and
  * open its YAML in the editor. The second one lives here because a definition
- * with no run at all would otherwise be visible and unusable.
+ * with no run at all would otherwise be visible and unusable. A file that does
+ * not parse carries the second one only — it declares no workflow to start a run
+ * of — and that is the repair path for it.
  */
 import { useState } from 'react';
 
@@ -50,8 +52,8 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
   // The definition whose start is being set up, once it declares inputs.
   const [startFor, setStartFor] = useState<WorkflowDefinitionSummary | null>(null);
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
-  // `WorkflowDefinitionSummary` carries `id: string | null`, not the parsed definition.
-  const usable = definitions.filter((definition) => definition.id !== null);
+  // A row with no `id` is a file that does not parse: there is no declared
+  // workflow to start a run of, but it is still a file this screen can open.
   const missingRequired = startFor
     ? startFor.inputs.some((input) => input.required && !(inputValues[input.name] ?? '').trim())
     : false;
@@ -129,14 +131,24 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
           >
             <Icon name="add" className="size-3.5" aria-hidden />
           </Button>
-          {usable.map((definition) => (
+          {definitions.map((definition) => (
             <span key={definition.file} className="flex items-center">
-              <Button size="xs" variant="ghost" disabled={busy} onClick={() => beginStart(definition)}>
-                {definition.name ?? definition.id}
-                {/* The mode the run will execute in, before one exists: rendered the
-                    way a run's own header renders it (`RunDetail.tsx`), raw. */}
-                {definition.sandbox ? <span className="text-[11px] text-muted-foreground">{definition.sandbox}</span> : null}
-              </Button>
+              {definition.id === null ? (
+                /* A file that does not parse declares no workflow, so there is no
+                   run to start from it. It is still a file on disk, and the edit
+                   action beside it is the repair: the pane shows the text as it
+                   is, and the save validates it. */
+                <span className="px-1 font-mono text-xs text-muted-foreground" title={t('workflows.definition.invalid')}>
+                  {definition.file}
+                </span>
+              ) : (
+                <Button size="xs" variant="ghost" disabled={busy} onClick={() => beginStart(definition)}>
+                  {definition.name ?? definition.id}
+                  {/* The mode the run will execute in, before one exists: rendered the
+                      way a run's own header renders it (`RunDetail.tsx`), raw. */}
+                  {definition.sandbox ? <span className="text-[11px] text-muted-foreground">{definition.sandbox}</span> : null}
+                </Button>
+              )}
               {/* Every listed definition opens its YAML, whether or not a run of
                   it exists: the diagram's own edit action is reachable only
                   through a selected run. */}
@@ -145,7 +157,7 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
                 variant="ghost"
                 disabled={busy}
                 title={t('workflows.editor.open')}
-                aria-label={`${t('workflows.editor.open')}: ${definition.name ?? definition.id}`}
+                aria-label={`${t('workflows.editor.open')}: ${definition.name ?? definition.id ?? definition.file}`}
                 onClick={() => onEditDefinition(definition)}
               >
                 <Icon name="edit" className="size-3.5" aria-hidden />
