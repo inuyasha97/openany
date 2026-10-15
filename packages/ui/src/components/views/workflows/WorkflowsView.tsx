@@ -50,6 +50,10 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
     [entry?.definitions, selected],
   );
 
+  // A run the loaded list does not declare has no definition to draw: the detail
+  // tells that apart from the definitions still being read.
+  const definitionsLoaded = entry?.loaded === true;
+
   // A chat-draft or chats-root directory resolves to a synthetic owner that is
   // not a project (`useProjectContextOwner`), and a project id is `path_…`; the
   // surface has nothing to read for either, so it shows the no-project state
@@ -86,7 +90,7 @@ export const WorkflowsView = ({ project }: WorkflowsViewProps) => {
           project={project}
         />
         {selected ? (
-          <RunDetail run={selected} project={project} definition={definition} />
+          <RunDetail run={selected} project={project} definition={definition} definitionsLoaded={definitionsLoaded} />
         ) : (
           <Empty text={t('workflows.empty.selectRun')} />
         )}

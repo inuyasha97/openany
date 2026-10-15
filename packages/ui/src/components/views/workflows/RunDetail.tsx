@@ -23,9 +23,15 @@ export interface RunDetailProps {
   project: ProjectRef;
   /** The declared workflow, for the diagram tab; `null` while it does not load. */
   definition: WorkflowDefinitionSummary | null;
+  /**
+   * False until the project's definitions have been read. A run whose definition
+   * is still missing after that has none to show, which is a different state from
+   * one whose list is still on its way.
+   */
+  definitionsLoaded: boolean;
 }
 
-export const RunDetail = ({ run, project, definition }: RunDetailProps) => {
+export const RunDetail = ({ run, project, definition, definitionsLoaded }: RunDetailProps) => {
   const [tab, setTab] = useState<'steps' | 'definition'>('steps');
   const { t } = useI18n();
   const [full, setFull] = useState<WorkflowRun>(run);
@@ -97,8 +103,21 @@ export const RunDetail = ({ run, project, definition }: RunDetailProps) => {
         {tab === 'definition'
           ? (definition
             ? <WorkflowDiagram summary={definition} />
-            : <div className="flex-1 p-3 text-xs text-muted-foreground">{t('workflows.empty.loading')}</div>)
-          : (step ? <StepPane key={step.id} run={full} step={step} project={project} /> : null)}
+            : (
+              /* The definitions are read; a run missing from that list declares a
+                 workflow the project no longer has, so it does not load. */
+              <div className={cn('flex-1 p-3 text-xs', definitionsLoaded ? 'text-destructive' : 'text-muted-foreground')}>
+                {t(definitionsLoaded ? 'workflows.definition.invalid' : 'workflows.empty.loading')}
+              </div>
+            ))
+          : (step
+            ? (
+              /* Keyed on the run as well as the step: two runs of one workflow
+                 share their step ids, so a pane keyed on the step alone would
+                 carry a prompt typed for one run's step into the other's box. */
+              <StepPane key={`${full.runId}:${step.id}`} run={full} step={step} project={project} />
+            )
+            : null)}
       </div>
     </div>
   );
