@@ -252,6 +252,8 @@ export interface WorkflowVerifyCommandResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /** True when either stream was cut at the engine's 64 KiB cap. */
+  truncated: boolean;
   durationMs: number;
   ok: boolean;
 }
@@ -268,6 +270,8 @@ export interface WorkflowVerifyResult {
   ok: boolean;
   artifacts: WorkflowVerifyArtifactResult[];
   commands: WorkflowVerifyCommandResult[];
+  /** Present when the artifact inspection itself failed; every pattern then reads unmatched. */
+  error?: string;
 }
 
 export interface WorkflowCheckpoint {
@@ -331,8 +335,20 @@ export interface WorkflowDefinitionSummary {
   errors: Array<{ field: string; message: string }>;
 }
 
+/**
+ * Every route is scoped by the `x-opencode-directory` header, and `runtimeFetch`'s
+ * `directory` option is NOT that header: it only decides which isolated space a
+ * request belongs to (`lib/runtime-fetch.ts:111-121`). The header has to be set
+ * here, the way the other scoped clients do it
+ * (`lib/contextFileOpenGuard.ts:58`, `lib/guests/files.ts:87`). `runtimeFetch`
+ * percent-encodes the value and adds `x-opencode-directory-encoding: uri` when the
+ * path is not Latin-1-safe, which is exactly what the routes decode for.
+ */
 const request = async <T>(path: string, directory: string, init: RequestInit = {}): Promise<T> => {
-  const response = await runtimeFetch(path, { directory, ...init });
+  const response = await runtimeFetch(path, {
+    ...init,
+    headers: { 'x-opencode-directory': directory, ...(init.headers ?? {}) },
+  });
   const body = await response.json().catch(() => null) as (T & { error?: string }) | null;
   if (!response.ok) {
     throw new WorkflowRequestError(body?.error ?? `The request failed with ${response.status}`, response.status);
@@ -412,7 +428,7 @@ git commit -m "feat(workflows): client for the workflow routes"
 **Files:**
 - Create: `packages/ui/src/stores/useWorkflowStore.ts`
 - Test: `packages/ui/src/stores/useWorkflowStore.test.ts`
-- Modify: `packages/ui/src/lib/openchamberEvents.ts` (add the frame type and the branch)
+- Modify: `packages/ui/src/lib/openchamberEvents.ts` (add the frame type and the branch). This is the control-stream listener that already carries `openchamber:scheduled-task-ran`; `packages/ui/src/sync/event-pipeline.ts` is a different path (the agent-runtime bridge) and must not be edited for this frame.
 
 **Interfaces:**
 - Consumes: Task 1's client, `subscribeOpenchamberEvents` (`@/lib/openchamberEvents:524`), the frame `openchamber:workflow` the engine broadcasts.
@@ -715,7 +731,7 @@ In `lib/surfaces/modes.ts`, add `'workflows'` to `BUILT_IN_CONTEXT_PANEL_MODES`.
     descriptionKey: 'contextRail.surface.workflows.description',
     defaultWidthFraction: 0.45,
     mode: 'workflows',
-    icon: 'list-check',
+    icon: 'list-check-2',
     labelKey: 'contextPanel.mode.workflows',
     // Always available: a project with no workflow yet needs the way in to the
     // definition directory, which a `has-content` rule would hide.
@@ -856,6 +872,7 @@ In `packages/ui/src/lib/i18n/messages/en.ts`, add a `workflows` group in the sam
       attempts: 'Attempts',
       checkpoint: 'Checkpoint',
       verifier: 'Checks',
+      truncated: 'output cut at 64 KiB',
       session: 'Session',
       openTranscript: 'Open the transcript',
       diff: 'See the changes',
@@ -1374,6 +1391,7 @@ const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'
   return (
     <div className="mt-2 border-t border-border pt-2">
       <h5 className="text-[11px] font-medium text-muted-foreground">{t('workflows.step.verifier')}</h5>
+      {verify.error ? <p className="mt-1 text-[11px] text-destructive">{verify.error}</p> : null}
       <ul className="mt-1 flex flex-col gap-1">
         {verify.artifacts.map((artifact) => (
           <li key={`${artifact.glob}:${artifact.path ?? 'none'}`} className="flex items-center gap-2 text-[11px]">
@@ -1391,6 +1409,7 @@ const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'
                 {command.timedOut ? 'timeout' : `exit ${command.exitCode ?? '—'}`} · {(command.durationMs / 1000).toFixed(1)}s
               </span>
             </div>
+            {command.truncated ? <span className="ml-1 text-muted-foreground">({t('workflows.step.truncated')})</span> : null}
             {command.stdout ? <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground">{command.stdout}</pre> : null}
             {command.stderr ? <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[11px] text-destructive">{command.stderr}</pre> : null}
           </li>
@@ -1471,6 +1490,18 @@ git commit -m "feat(workflows): show a step's evidence"
 - Produces: the four actions from the spec (run the step, run until the next stop, send another prompt, confirm not done / done / skip), the re-verify action, cancel, plus the in-flight rules.
 
 - [ ] **Step 1: Add the action bar**
+
+The engine refuses three classes of action with `conflict`, so the bar must not offer them: any action on a run whose status is `done`, `failed` or `cancelled`; `run` and `prompt` on a step that is `done` or `skipped` (a settled step); and `confirm` on a step whose last attempt is not `completed`. Compute them once:
+
+```tsx
+const TERMINAL_RUN_STATUSES = new Set(['done', 'failed', 'cancelled']);
+const SETTLED_STEP_STATUSES = new Set(['done', 'skipped']);
+const runIsOpen = !TERMINAL_RUN_STATUSES.has(run.status);
+const stepIsSettled = SETTLED_STEP_STATUSES.has(step.status);
+const attemptSettled = step.attempts.at(-1)?.status === 'completed';
+```
+
+Then gate the buttons: `run`/`prompt` need `runIsOpen && !stepIsSettled`; `runAll`/`cancel`/`verify` need `runIsOpen`; `confirm` needs `attemptSettled` (a step left `interrupted` by a restart whose turn was still running keeps `attemptSettled` false, and its note says so). A disabled button carries the reason in its `title`, because a control that refuses silently reads as a bug.
 
 ```tsx
 /**
