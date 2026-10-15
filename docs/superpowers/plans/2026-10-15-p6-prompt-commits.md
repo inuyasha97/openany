@@ -109,6 +109,7 @@ git commit -m "feat(workflows)!: a step is done when a person says so, and the e
 **Files:**
 - Modify: `packages/web/server/lib/workflows/verifiers.js` + `verifiers.test.js` (`verifyCheckpoint` becomes `recheckArtifacts`)
 - Modify: `packages/web/server/lib/workflows/resume.js` + `resume.test.js`
+- Modify: `packages/web/server/lib/workflows/engine.js` + `engine.test.js` (`CHECKPOINT_NOTE_PREFIX` at `engine.js:36` is the literal `checkpoint no longer matches`, and `engine.js:395` keeps a checked step's note only when it starts with that string, which `engine.test.js:508-523` pins — the constant, its use and that test move with the new wording, or a `verifyStep` on a step the sweep blocked silently overwrites the reason)
 
 **Interfaces:**
 - Consumes: Task 1's step shape (no `checkpoint`).
