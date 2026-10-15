@@ -6,6 +6,7 @@ import { getAllSyncSessions } from '@/sync/sync-refs';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
+import { subscribeWorkflowFrames } from '@/stores/useWorkflowStore';
 import { buildSessionBootstrapDemands } from './sessionBootstrapDemands';
 import { buildKnownSessionDirectories } from './sessionListDirectories';
 import { useAuthoritativeSessionCleanup } from './useAuthoritativeSessionCleanup';
@@ -92,4 +93,11 @@ export const useSessionListSync = ({
     hasAuthoritativeGlobalSessions,
     sessions: cleanupSessions,
   });
+
+  // Workflow runs arrive as frames on the same control stream the session list
+  // follows, so they are subscribed here rather than at a second point. The
+  // store drops a frame for a project it has never loaded, and the chat banner
+  // and the workflows surface each load their own project, so one app-wide
+  // subscription keeps every project's cached runs live.
+  React.useEffect(() => subscribeWorkflowFrames(), []);
 };
