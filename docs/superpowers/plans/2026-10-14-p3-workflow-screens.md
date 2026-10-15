@@ -1067,7 +1067,7 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
             >
               <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelect(run.runId)}>
                 <span className="flex items-center gap-1.5 text-xs">
-                  <status.icon className={status.className} aria-hidden />
+                  <Icon name={status.icon} className={status.className} aria-hidden />
                   <span className="truncate">{run.workflowId}</span>
                   <span className="text-muted-foreground">{status.label}</span>
                 </span>
@@ -1400,7 +1400,7 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
-          <status.icon className={cn(status.className, step.status === 'running' && 'animate-spin')} aria-hidden />
+          <Icon name={status.icon} className={cn(status.className, step.status === 'running' && 'animate-spin')} aria-hidden />
           <span className="text-sm font-medium">{step.id}</span>
           <span className="text-xs text-muted-foreground">{status.label}</span>
         </div>
@@ -1457,7 +1457,7 @@ const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'
       <ul className="mt-1 flex flex-col gap-1">
         {verify.artifacts.map((artifact) => (
           <li key={`${artifact.glob}:${artifact.path ?? 'none'}`} className="flex items-center gap-2 text-[11px]">
-            <span className={artifact.exists ? 'text-emerald-500' : 'text-destructive'}>{artifact.exists ? '✓' : '✗'}</span>
+            <span className={artifact.exists ? 'text-chart-2' : 'text-destructive'}>{artifact.exists ? '✓' : '✗'}</span>
             <span className="truncate font-mono">{artifact.path ?? artifact.glob}</span>
             {!artifact.exists ? <span className="text-muted-foreground">{t('workflows.step.verifier')}: {artifact.glob}</span> : null}
           </li>
@@ -1465,7 +1465,7 @@ const VerifierBlock = ({ verify }: { verify: NonNullable<WorkflowStep['attempts'
         {verify.commands.map((command) => (
           <li key={command.run} className="text-[11px]">
             <div className="flex items-center gap-2">
-              <span className={command.ok ? 'text-emerald-500' : 'text-destructive'}>{command.ok ? '✓' : '✗'}</span>
+              <span className={command.ok ? 'text-chart-2' : 'text-destructive'}>{command.ok ? '✓' : '✗'}</span>
               <span className="truncate font-mono">{command.run}</span>
               <span className="ml-auto text-muted-foreground">
                 {command.timedOut ? 'timeout' : `exit ${command.exitCode ?? '—'}`} · {(command.durationMs / 1000).toFixed(1)}s
@@ -1495,14 +1495,16 @@ Add to the same file:
  */
 const CheckpointDiff = ({ directory, commit }: { directory: string; commit: string }) => {
   const { t } = useI18n();
-  const [files, setFiles] = useState<Array<{ path: string; additions: number; deletions: number }> | null>(null);
+  const [files, setFiles] = useState<Array<{ path: string; insertions: number; deletions: number }> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     void runtimeFetch(`/api/git/commit-files?directory=${encodeURIComponent(directory)}&hash=${encodeURIComponent(commit)}`, { directory })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`The diff could not be read (${response.status})`))))
-      .then((body: { files?: Array<{ path: string; additions: number; deletions: number }> }) => { if (!cancelled) setFiles(body.files ?? []); })
+      // `GET /api/git/commit-files` answers `{ files: [{ path, insertions, deletions, changeType }] }`
+      // (`lib/git/service.js:5640-5677`); the field is `insertions`, not `additions`.
+      .then((body: { files?: Array<{ path: string; insertions: number; deletions: number }> }) => { if (!cancelled) setFiles(body.files ?? []); })
       .catch((failure: unknown) => { if (!cancelled) setError(failure instanceof Error ? failure.message : t('workflows.error.readFailed')); });
     return () => { cancelled = true; };
   }, [directory, commit, t]);
@@ -1514,7 +1516,7 @@ const CheckpointDiff = ({ directory, commit }: { directory: string; commit: stri
       {files.map((file) => (
         <li key={file.path} className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
           <span className="min-w-0 flex-1 truncate">{file.path}</span>
-          <span className="text-emerald-500">+{file.additions}</span>
+          <span className="text-chart-2">+{file.insertions}</span>
           <span className="text-destructive">-{file.deletions}</span>
         </li>
       ))}
