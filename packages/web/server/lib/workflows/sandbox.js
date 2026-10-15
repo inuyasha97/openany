@@ -73,17 +73,23 @@ export const prepareSandbox = async ({ run, projectPath, git, waitOptions = {} }
 /**
  * The paths a run's checkout still holds uncommitted, or none when it is clean.
  *
- * A read that fails says nothing about the checkout, and the removal below
- * reports its own failure, so a failed read is not treated as dirt: a checkout
- * whose directory a person already deleted must still be releasable.
+ * A checkout that is gone cannot hold work, and the removal below reports its
+ * own failure, so a missing repository is not treated as dirt: a checkout whose
+ * directory a person already deleted must still be releasable. Any other failed
+ * read says nothing about the work in there, so releasing on it could delete
+ * what no commit preserved — the guard refuses instead.
  */
 const uncommittedPaths = async (git, directory) => {
   try {
     const status = await git.getStatus(directory);
     if (status?.isClean !== false) return [];
     return (status.files ?? []).map((file) => file.path).filter(Boolean);
-  } catch {
-    return [];
+  } catch (error) {
+    // A checkout that is gone cannot hold work, and the removal below reports
+    // its own failure; any other failed read says nothing about the work in
+    // there, so releasing on it could delete what no commit preserved.
+    if (/not a git repository/i.test(String(error?.message ?? error))) return [];
+    throw new WorkflowError('conflict', `the run's checkout could not be read, so it was not released: ${error?.message ?? error}`, 409);
   }
 };
 

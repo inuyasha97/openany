@@ -139,6 +139,39 @@ describe('releaseSandbox', () => {
     await expect(fs.stat(prepared.directory)).rejects.toThrow();
   });
 
+  it('refuses to release when the checkout status cannot be read, and removes nothing', async () => {
+    const subject = run();
+    const prepared = await prepareSandbox({ run: subject, projectPath: root, git: gitService });
+    const preparedRun = { ...subject, directory: prepared.directory, worktreeBranch: prepared.branch };
+    const removals = [];
+    const git = {
+      getStatus: async () => { throw new Error('the status read failed'); },
+      removeWorktree: async (...args) => { removals.push(args); return gitService.removeWorktree(...args); },
+    };
+
+    // The read failed for a reason other than a missing checkout, so it says
+    // nothing about the work in there and the release must refuse.
+    await expect(releaseSandbox({ run: preparedRun, projectPath: root, git }))
+      .rejects.toMatchObject({ name: 'WorkflowError', code: 'conflict', status: 409, message: expect.stringContaining('could not be read') });
+
+    expect(removals).toEqual([]);
+    expect(await fs.stat(prepared.directory)).toBeTruthy();
+  });
+
+  it('releases when the status read fails because the checkout is gone', async () => {
+    const subject = run();
+    const prepared = await prepareSandbox({ run: subject, projectPath: root, git: gitService });
+    const preparedRun = { ...subject, directory: prepared.directory, worktreeBranch: prepared.branch };
+    const git = {
+      getStatus: async () => { throw new Error('fatal: not a git repository (or any of the parent directories): .git'); },
+      removeWorktree: gitService.removeWorktree,
+    };
+
+    // A checkout that is gone cannot hold work, so the removal proceeds.
+    expect(await releaseSandbox({ run: preparedRun, projectPath: root, git })).toEqual({ removed: true });
+    await expect(fs.stat(prepared.directory)).rejects.toThrow();
+  });
+
   it('does nothing for a run that has no worktree', async () => {
     expect(await releaseSandbox({ run: { ...run(), directory: root }, projectPath: root, git: gitService })).toEqual({ removed: false });
   });
