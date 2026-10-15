@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/i18n';
 import { resolveProjectForSessionDirectory } from '@/lib/projectResolution';
 import type { ProjectRef } from '@/lib/projectContextApi';
-import { confirmWorkflowStep, type WorkflowRun, type WorkflowStep } from '@/lib/workflowsApi';
+import { confirmWorkflowStep, fetchWorkflowRun, type WorkflowRun, type WorkflowStep } from '@/lib/workflowsApi';
 import { describeRunStatus, describeStepStatus } from '@/lib/workflows/status';
 import { cn } from '@/lib/utils';
 import { useProjectsStore } from '@/stores/useProjectsStore';
@@ -35,26 +35,26 @@ export interface WorkflowStepBannerProps {
 type FoundStep = { run: WorkflowRun; step: WorkflowStep };
 
 /**
- * The step whose attempt ran in this session.
+ * The step that is live in this session.
  *
- * The engine either gives each attempt its own session or reuses the step's
- * previous one, so a session can only belong to one step; a session held by a
- * step's *latest* attempt wins over one held only by an earlier attempt, because
- * a later attempt means the session is no longer what the step is working in.
+ * A `session: reuse` step continues the session of the nearest preceding
+ * attempt, so two steps can name the same session: the earlier one keeps the id
+ * in its finished attempt while the later one is working in it. The run's own
+ * cursor names the step that is live, so it wins; without a cursor the last
+ * match wins, because later steps in a run are the ones a session moves forward
+ * into.
  */
 const findStepInSession = (entry: { runs: WorkflowRun[] }, sessionId: string | null): FoundStep | null => {
   if (!sessionId) return null;
-  let earlierAttempt: FoundStep | null = null;
+  let last: FoundStep | null = null;
   for (const run of entry.runs) {
     for (const step of run.steps) {
-      const attempts = step.attempts;
-      if (attempts.at(-1)?.sessionId === sessionId) return { run, step };
-      if (attempts.some((attempt) => attempt.sessionId === sessionId)) {
-        earlierAttempt ??= { run, step };
-      }
+      if (step.attempts.at(-1)?.sessionId !== sessionId) continue;
+      if (run.cursor === step.id) return { run, step };
+      last = { run, step };
     }
   }
-  return earlierAttempt;
+  return last;
 };
 
 export const WorkflowStepBanner = React.memo(({ sessionId, directory }: WorkflowStepBannerProps) => {
@@ -84,6 +84,33 @@ export const WorkflowStepBanner = React.memo(({ sessionId, directory }: Workflow
   }, [error, load, loaded, loading, project]);
 
   const found = React.useMemo(() => findStepInSession(entry, sessionId), [entry, sessionId]);
+  const projectId = project?.id ?? null;
+  const projectPath = project?.path ?? null;
+  const runId = found?.run.runId ?? null;
+  const stepId = found?.step.id ?? null;
+  const stepStatus = found?.step.status ?? null;
+  const attemptStatus = found?.step.attempts.at(-1)?.status ?? null;
+  const needsAnswer = stepStatus === 'waiting_confirm' || stepStatus === 'needs_work' || stepStatus === 'blocked' || stepStatus === 'interrupted';
+
+  // A frame carries each step's status and nothing else (`useWorkflowStore`'s
+  // `patchRun`), so a step that reached a stop after this project was loaded
+  // still shows its last attempt as `running`, and the confirm would stay
+  // disabled forever. One read of that run settles it. The dependencies are
+  // primitives on purpose: one read per step and status, not one per frame.
+  React.useEffect(() => {
+    if (!needsAnswer || projectId === null || projectPath === null || runId === null || stepId === null) return;
+    if (attemptStatus === 'completed') return;
+    let cancelled = false;
+    void fetchWorkflowRun(projectPath, runId)
+      .then((next) => { if (!cancelled) setRun({ id: projectId }, next); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [attemptStatus, needsAnswer, projectId, projectPath, runId, setRun, stepId, stepStatus]);
+
+  // A refusal belongs to the step the person answered, not to whatever session
+  // they look at next.
+  React.useEffect(() => { setActionError(null); }, [sessionId]);
+
   if (!project || !found) return null;
 
   const status = describeStepStatus(found.step.status, t);
@@ -91,8 +118,7 @@ export const WorkflowStepBanner = React.memo(({ sessionId, directory }: Workflow
   // engine refuses a confirm on (`packages/web/server/lib/workflows/engine.js`),
   // so the button is gated on them and carries why it is gated.
   const runIsOpen = found.run.status !== 'done' && found.run.status !== 'failed' && found.run.status !== 'cancelled';
-  const attemptSettled = found.step.attempts.at(-1)?.status === 'completed';
-  const needsAnswer = found.step.status === 'waiting_confirm' || found.step.status === 'needs_work' || found.step.status === 'blocked';
+  const attemptSettled = attemptStatus === 'completed';
   const refusedTitle = runIsOpen ? (attemptSettled ? undefined : status.label) : describeRunStatus(found.run.status, t).label;
 
   const confirm = async () => {

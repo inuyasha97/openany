@@ -21,6 +21,8 @@ type LifecycleState = {
   listener: ((event: Event) => void) | null;
   subscriptions: number;
   unsubscriptions: number;
+  workflowSubscriptions: number;
+  workflowUnsubscriptions: number;
 };
 const state: LifecycleState = {
   demands: [],
@@ -31,6 +33,8 @@ const state: LifecycleState = {
   listener: null,
   subscriptions: 0,
   unsubscriptions: 0,
+  workflowSubscriptions: 0,
+  workflowUnsubscriptions: 0,
 };
 const childStores = {
   setBootstrapDemand: (owner: string, demands: Array<{ directory: string }>) => {
@@ -70,6 +74,18 @@ mock.module('./useAuthoritativeSessionCleanup', () => ({
     });
   },
 }));
+// The hook subscribes to workflow frames as well. That subscription speaks to
+// the same control stream, so it is replaced here: otherwise it would overwrite
+// `state.listener` and its own registrations would be counted as this hook's,
+// and the counts below would be about two different subscribers at once.
+mock.module('@/stores/useWorkflowStore', () => ({
+  subscribeWorkflowFrames: () => {
+    state.workflowSubscriptions += 1;
+    return () => {
+      state.workflowUnsubscriptions += 1;
+    };
+  },
+}));
 
 const { useSessionListSync } = await import('./useSessionListSync');
 
@@ -99,6 +115,8 @@ describe('useSessionListSync', () => {
     state.listener = null;
     state.subscriptions = 0;
     state.unsubscriptions = 0;
+    state.workflowSubscriptions = 0;
+    state.workflowUnsubscriptions = 0;
     dom = installHookTestDom();
     root = createRoot(dom.container);
     useProjectsStore.setState({ projects, activeProjectId: 'project' });
@@ -121,6 +139,9 @@ describe('useSessionListSync', () => {
     expect(state.demands[0]?.directories).toEqual(['/project']);
     expect(state.directoryRefreshes).toEqual([]);
     expect(state.subscriptions).toBe(1);
+    // The workflow frames share the control stream but are their own subscriber,
+    // registered once for the life of the hook.
+    expect(state.workflowSubscriptions).toBe(1);
     expect(state.cleanupInputs.at(-1)).toEqual({ enabled: true, hasAuthoritativeGlobalSessions: true, sessionCount: 0, sessions: [] });
   });
 
@@ -144,6 +165,7 @@ describe('useSessionListSync', () => {
     const owner = state.demands[0]?.owner;
     act(() => root.unmount());
     expect(state.unsubscriptions).toBe(1);
+    expect(state.workflowUnsubscriptions).toBe(1);
     expect(state.clearedOwners).toEqual([owner]);
   });
 
@@ -162,6 +184,8 @@ describe('useSessionListSync', () => {
     expect(state.globalRefreshes).toBe(0);
     expect(state.subscriptions).toBe(2);
     expect(state.unsubscriptions).toBe(1);
+    expect(state.workflowSubscriptions).toBe(2);
+    expect(state.workflowUnsubscriptions).toBe(1);
   });
 
   test('cancels a pending control-event refresh before a layout remount', async () => {
