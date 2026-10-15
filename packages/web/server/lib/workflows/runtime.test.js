@@ -1,7 +1,16 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The removal path loads the git service lazily; the mock stands in for it so a
+// release can be observed without a repository.
+vi.mock('../git/index.js', () => ({
+  createWorktree: vi.fn(),
+  removeWorktree: vi.fn(),
+  getWorktreeBootstrapStatus: vi.fn(),
+}));
+import * as gitIndex from '../git/index.js';
 import { createWorkflowRuntime } from './runtime.js';
 
 const createRuntime = async (overrides = {}) => {
@@ -100,5 +109,44 @@ describe('createWorkflowRuntime', () => {
     const run = await runtime.engine.startStep({ projectId: 'proj-1', projectPath, runId, stepId: 'first' });
     expect(run.steps[0].status).toBe('waiting_confirm');
     expect(run.steps[0].attempts[0]).toMatchObject({ status: 'completed', verify: { ok: true } });
+  });
+});
+
+describe('releasing a checkout', () => {
+  it('hands the runtime\'s instance disposer to the removal, so the folder is not locked', async () => {
+    gitIndex.removeWorktree.mockClear();
+    gitIndex.removeWorktree.mockResolvedValue(true);
+    const disposeWorktreeInstance = vi.fn(async () => {});
+    const runtime = await createRuntime({ disposeWorktreeInstance });
+    const projectPath = runtime.projectPathFromId('proj-1');
+    const runId = '33333333-2222-4333-8444-555555555555';
+    const directory = path.join(projectPath, 'checkout');
+    await runtime.store.create({
+      runId,
+      projectId: 'proj-1',
+      directory,
+      workflowId: 'a',
+      workflowVersion: 1,
+      workflowHash: 'h',
+      inputs: {},
+      status: 'done',
+      cursor: 'first',
+      sandbox: 'worktree',
+      worktreeBranch: `omp/wf/${runId}`,
+      createdAt: 1,
+      steps: [],
+    });
+
+    await runtime.engine.releaseSandbox({ projectId: 'proj-1', projectPath, runId });
+
+    // The checkout's folder held processes; the removal is told to release them
+    // first, the same key the git routes pass (`git/routes.js:1232-1235`).
+    expect(gitIndex.removeWorktree).toHaveBeenCalledTimes(1);
+    expect(gitIndex.removeWorktree.mock.calls[0][0]).toBe(projectPath);
+    expect(gitIndex.removeWorktree.mock.calls[0][1]).toMatchObject({
+      directory,
+      deleteLocalBranch: false,
+      disposeInstance: disposeWorktreeInstance,
+    });
   });
 });

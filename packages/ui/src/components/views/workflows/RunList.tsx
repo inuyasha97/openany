@@ -112,6 +112,9 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, project }:
           {usable.map((definition) => (
             <Button key={definition.file} size="xs" variant="ghost" disabled={busy} onClick={() => beginStart(definition)}>
               {definition.name ?? definition.id}
+              {/* The mode the run will execute in, before one exists: rendered the
+                  way a run's own header renders it (`RunDetail.tsx`), raw. */}
+              {definition.sandbox ? <span className="text-[11px] text-muted-foreground">{definition.sandbox}</span> : null}
             </Button>
           ))}
         </div>

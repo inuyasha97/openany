@@ -38,7 +38,7 @@ import { registerMarkdownImageGrantRoutes } from '../markdown-image-grants/route
  * `undefined` when no runtime is mounted, which makes `removeWorktree` skip
  * disposal.
  */
-const createWorktreeInstanceDisposer = (getOmpRuntime) => {
+export const createWorktreeInstanceDisposer = (getOmpRuntime) => {
   if (typeof getOmpRuntime !== 'function') return undefined;
   return async (worktreeDirectory) => {
     const host = await Promise.resolve(getOmpRuntime()).catch(() => null);

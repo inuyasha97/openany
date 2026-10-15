@@ -62,7 +62,7 @@ import { createSettingsNormalizationRuntime } from './lib/openchamber/settings-n
 import { createSettingsHelpers } from './lib/openchamber/settings-helpers.js';
 import { readConfigFile, writeConfig } from './lib/openchamber/agent-config-files.js';
 import { createThemeRuntime } from './lib/openchamber/theme-runtime.js';
-import { createFeatureRoutesRuntime } from './lib/openchamber/feature-routes-runtime.js';
+import { createFeatureRoutesRuntime, createWorktreeInstanceDisposer } from './lib/openchamber/feature-routes-runtime.js';
 import { createWorkflowRuntime } from './lib/workflows/runtime.js';
 import { createProjectIdFromPath, projectPathFromId } from './lib/projects/project-id.js';
 // Fork-owned OMP agent runtime; the only runtime in this fork.
@@ -979,6 +979,11 @@ const workflowRuntime = createWorkflowRuntime({
     const host = ompAgentRuntime?.getHost?.();
     return host ? await host : null;
   },
+  // Releasing a checkout must first release the runtime's sessions in it: a
+  // worktree cannot be removed while a process still holds its folder. The
+  // getter resolves the host lazily, because the runtime is installed after this
+  // call (`installOmpAgentRuntime`, below).
+  disposeWorktreeInstance: createWorktreeInstanceDisposer(() => ompAgentRuntime?.getHost?.()),
   setSessionAutoAccept: (sessionId, enabled, directory) => permissionAutoAcceptRuntime.setSessionPolicy(sessionId, enabled, directory),
   // The projects the restart sweep walks: read the same way every other feature
   // reads them. `sanitizeProjects` drops any entry without a non-empty canonical

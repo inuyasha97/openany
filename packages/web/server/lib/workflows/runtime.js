@@ -34,6 +34,13 @@ export const createWorkflowRuntime = ({
   broadcast = () => {},
   logger = console,
   git = createGitDriver(),
+  // The runtime's hook for releasing the session processes a checkout holds, so
+  // its folder is not locked while `removeWorktree` deletes it (a worktree
+  // cannot be removed while a process still holds its folder —
+  // `packages/omp-adapter/src/runtime.ts:222`). The server injects the hook the
+  // git routes use; a test injects a stub. Left undefined, removal skips
+  // disposal.
+  disposeWorktreeInstance = undefined,
   now = Date.now,
 }) => {
   const definitions = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId });
@@ -46,7 +53,11 @@ export const createWorkflowRuntime = ({
   // fake instead of this loader.
   const worktrees = {
     createWorktree: async (...args) => (await import('../git/index.js')).createWorktree(...args),
-    removeWorktree: async (...args) => (await import('../git/index.js')).removeWorktree(...args),
+    // `disposeInstance` is the key `removeWorktree` reads to release the folder's
+    // processes before deleting it (`packages/web/server/lib/git/routes.js:1232-1235`),
+    // so the release path carries it the way the git routes do.
+    removeWorktree: async (projectPath, input) =>
+      (await import('../git/index.js')).removeWorktree(projectPath, { ...input, disposeInstance: disposeWorktreeInstance }),
     getWorktreeBootstrapStatus: async (...args) => (await import('../git/index.js')).getWorktreeBootstrapStatus(...args),
   };
 
