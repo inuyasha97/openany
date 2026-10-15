@@ -12,6 +12,7 @@ import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { fetchWorkflowRun, type WorkflowDefinitionSummary, type WorkflowRun } from '@/lib/workflowsApi';
 import { describeRunStatus, describeStepStatus } from '@/lib/workflows/status';
+import type { ProjectRef } from '@/lib/worktrees/worktreeManager';
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
 import { StepPane } from './StepPane';
@@ -19,7 +20,7 @@ import { WorkflowDiagram } from './WorkflowDiagram';
 
 export interface RunDetailProps {
   run: WorkflowRun;
-  project: { path: string };
+  project: ProjectRef;
   /** The declared workflow, for the diagram tab; `null` while it does not load. */
   definition: WorkflowDefinitionSummary | null;
 }

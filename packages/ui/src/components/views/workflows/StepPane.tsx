@@ -10,21 +10,174 @@
 import { useEffect, useState } from 'react';
 
 import { Icon } from '@/components/icon/Icon';
+import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/i18n';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { cn } from '@/lib/utils';
-import type { WorkflowRun, WorkflowStep } from '@/lib/workflowsApi';
-import { describeStepStatus } from '@/lib/workflows/status';
+import {
+  cancelWorkflowRun,
+  confirmWorkflowStep,
+  promptWorkflowStep,
+  runWorkflow,
+  runWorkflowStep,
+  verifyWorkflowStep,
+} from '@/lib/workflowsApi';
+import type { WorkflowRun, WorkflowRunStatus, WorkflowStep, WorkflowStepStatus } from '@/lib/workflowsApi';
+import { describeRunStatus, describeStepStatus } from '@/lib/workflows/status';
+import type { ProjectRef } from '@/lib/worktrees/worktreeManager';
+import { useWorkflowStore } from '@/stores/useWorkflowStore';
 
 export interface StepPaneProps {
   run: WorkflowRun;
   step: WorkflowStep;
-  project: { path: string };
+  project: ProjectRef;
 }
 
 export const StepPane = ({ run, step, project }: StepPaneProps) => {
   const { t } = useI18n();
   const status = describeStepStatus(step.status, t);
+  const setRun = useWorkflowStore((state) => state.setRun);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState('');
+
+  // The engine refuses three classes of action with `conflict` (409): any action
+  // aimed at a run that has already finished, `run`/`prompt` on a step that is
+  // already settled, and `confirm` on a step whose last attempt never completed.
+  // The bar computes the same three facts once, so it never offers a button the
+  // server would refuse.
+  const TERMINAL_RUN_STATUSES: Partial<Record<WorkflowRunStatus, true>> = { done: true, failed: true, cancelled: true };
+  const SETTLED_STEP_STATUSES: Partial<Record<WorkflowStepStatus, true>> = { done: true, skipped: true };
+  const runIsOpen = TERMINAL_RUN_STATUSES[run.status] !== true;
+  const stepIsSettled = SETTLED_STEP_STATUSES[step.status] !== true;
+  const attemptSettled = step.attempts.at(-1)?.status === 'completed';
+
+  // A gated control carries the reason it is refused in its `title`, because a
+  // control that refuses silently reads as a bug. The reason is the localized
+  // status of whatever blocks the action, so the bar introduces no new strings.
+  const runClosedTitle = runIsOpen ? undefined : describeRunStatus(run.status, t).label;
+  const stepSettledTitle = stepIsSettled ? status.label : undefined;
+  const attemptUnsettledTitle = attemptSettled ? undefined : status.label;
+
+  const act = async (action: () => Promise<WorkflowRun>) => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      setRun(project, await action());
+    } catch (failure) {
+      setActionError(failure instanceof Error ? failure.message : t('workflows.error.actionFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * The action bar.
+   *
+   * Every action is disabled while one is in flight: two clicks on "run this step"
+   * must not start two attempts, and the server answers `busy` for the second one
+   * anyway. A refused action shows the server's own message, because "the verifier
+   * failed" is more useful than "the action failed".
+   */
+  const actionBar = (
+    <div className="flex flex-col gap-2 border-t border-border p-2">
+      {actionError ? (
+        <p role="status" className="text-[11px] text-destructive">
+          {actionError}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap gap-1">
+        <Button
+          size="xs"
+          disabled={busy || !runIsOpen || stepIsSettled || step.status === 'running'}
+          title={runClosedTitle ?? stepSettledTitle ?? (step.status === 'running' ? status.label : undefined)}
+          onClick={() => void act(() => runWorkflowStep(project.path, run.runId, step.id))}
+        >
+          {t('workflows.step.run')}
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={busy || !runIsOpen}
+          title={runClosedTitle}
+          onClick={() => void act(() => runWorkflow(project.path, run.runId))}
+        >
+          {t('workflows.step.runAll')}
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={busy || !runIsOpen || step.attempts.length === 0}
+          title={runClosedTitle}
+          onClick={() => void act(() => verifyWorkflowStep(project.path, run.runId, step.id))}
+        >
+          {t('workflows.step.verify')}
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={busy || !runIsOpen}
+          title={runClosedTitle}
+          onClick={() => void act(() => cancelWorkflowRun(project.path, run.runId))}
+        >
+          {t('workflows.step.cancelRun')}
+        </Button>
+      </div>
+      {step.status === 'waiting_confirm' || step.status === 'needs_work' || step.status === 'blocked' ? (
+        <div className="flex flex-col gap-1">
+          <textarea
+            className="min-h-16 rounded border border-border bg-transparent p-1.5 text-xs"
+            placeholder={t('workflows.step.promptPlaceholder')}
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+          />
+          <div className="flex flex-wrap gap-1">
+            <Button
+              size="xs"
+              disabled={busy || !runIsOpen || stepIsSettled || prompt.trim().length === 0}
+              title={runClosedTitle ?? stepSettledTitle}
+              onClick={() =>
+                void act(async () => {
+                  const next = await promptWorkflowStep(project.path, run.runId, step.id, prompt.trim());
+                  setPrompt('');
+                  return next;
+                })
+              }
+            >
+              {t('workflows.step.prompt')}
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={busy || !runIsOpen || !attemptSettled}
+              title={runClosedTitle ?? attemptUnsettledTitle}
+              onClick={() => void act(() => confirmWorkflowStep(project.path, run.runId, step.id, 'done'))}
+            >
+              {t('workflows.step.confirmDone')}
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={busy || !runIsOpen || !attemptSettled}
+              title={runClosedTitle ?? attemptUnsettledTitle}
+              onClick={() => void act(() => confirmWorkflowStep(project.path, run.runId, step.id, 'not_done'))}
+            >
+              {t('workflows.step.confirmNotDone')}
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={busy || !runIsOpen || !attemptSettled}
+              title={runClosedTitle ?? attemptUnsettledTitle}
+              onClick={() => void act(() => confirmWorkflowStep(project.path, run.runId, step.id, 'skip'))}
+            >
+              {t('workflows.step.skip')}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
@@ -76,6 +229,7 @@ export const StepPane = ({ run, step, project }: StepPaneProps) => {
           </div>
         ))}
       </section>
+      {actionBar}
     </div>
   );
 };
