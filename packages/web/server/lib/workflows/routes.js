@@ -157,7 +157,7 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
         status: 'idle',
         cursor: definition.steps[0].id,
         sandbox: definition.sandbox,
-        steps: definition.steps.map((step) => ({ id: step.id, status: 'pending', attempts: [], checkpoint: null, note: null })),
+        steps: definition.steps.map((step) => ({ id: step.id, status: 'pending', attempts: [], note: null })),
       };
       return res.status(201).json({ run: await store.create(run) });
     } catch (error) {

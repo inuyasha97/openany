@@ -2,9 +2,11 @@
  * The run loop.
  *
  * One attempt is: create or adopt a session, send the prompt, wait for the turn
- * to end, run the verifiers, then stop for a person or advance. Every fact the
- * engine records comes from the runtime, from disk, or from git; a step never
- * advances because a model said it was done.
+ * to end, run the verifiers, then stop for a person. Every fact the engine
+ * records comes from the runtime, from disk, or from the verifiers; a step never
+ * advances because a model said it was done, and it is `done` only once a person
+ * says so. Whether the step's work is committed is the step's own prompt's
+ * business: the engine writes no commit.
  *
  * Two writers are impossible by construction: an in-flight map holds the project
  * ids currently executing, and `runUntilStop` stops at the first stop, so a
@@ -60,7 +62,6 @@ export const createWorkflowEngine = ({
   store,
   definitions,
   host,
-  checkpoints,
   runChecks = defaultRunChecks,
   verifyCheckpoint = defaultVerifyCheckpoint,
   reconcileRuns = defaultReconcile,
@@ -124,8 +125,8 @@ export const createWorkflowEngine = ({
 
   /**
    * A step whose record is already written down does not run again in this run:
-   * a checkpoint stands for a finished step's work, and a skipped step is a
-   * decision the person made.
+   * a `done` step is work a person confirmed and a skipped step is a decision
+   * they made.
    */
   const assertStepIsOpen = (step) => {
     if (step.status === 'done' || step.status === 'skipped') {
@@ -225,9 +226,9 @@ export const createWorkflowEngine = ({
     // this frame is the only way a screen learns the step is running.
     emit(started);
     // Everything from the send to the settle lives inside this `try`: a
-    // rejection here — the prompt, the turn's status call, a checkpoint write or
-    // the run file itself — would otherwise leave the attempt `running` and the
-    // run file claiming a live turn for the rest of the process's life.
+    // rejection here — the prompt, the turn's status call or the run file
+    // itself — would otherwise leave the attempt `running` and the run file
+    // claiming a live turn for the rest of the process's life.
     try {
       const accepted = await bus.prompt(sessionId, text);
       if (accepted !== true) {
@@ -274,23 +275,13 @@ export const createWorkflowEngine = ({
     attempt.verify = verify;
     attempt.status = 'completed';
     step.note = verify.ok ? null : 'a verifier failed';
-    if (declared.confirm === 'auto' && verify.ok) {
-      step.status = 'done';
-      step.checkpoint = await writeCheckpointFor({ run, step, attempt, verify });
-      advance(run, step.id);
-      run.status = run.cursor ? 'running' : hasOpenWork(run) ? 'waiting' : 'done';
-    } else {
-      step.status = verify.ok ? 'waiting_confirm' : 'needs_work';
-      run.status = 'waiting';
-    }
+    // A passing verifier only puts the step in front of a person: whether its
+    // work is done is their answer, never the engine's.
+    step.status = verify.ok ? 'waiting_confirm' : 'needs_work';
+    run.status = 'waiting';
     const saved = await store.write(projectId, run);
     emit(saved);
     return saved;
-  };
-
-  const writeCheckpointFor = async ({ run, step, attempt, verify }) => {
-    const artifacts = verify.artifacts.filter((entry) => entry.exists).map(({ path: file, size, sha256 }) => ({ path: file, size, sha256 }));
-    return checkpoints.write({ directory: run.directory, runId: run.runId, stepId: step.id, attemptIndex: attempt.index, artifacts });
   };
 
   const advance = (run, stepId) => {
@@ -345,12 +336,11 @@ export const createWorkflowEngine = ({
       if (decision === 'done') {
         const attempt = step.attempts.at(-1);
         // Only a turn that finished can be confirmed: confirming an attempt that
-        // is still in flight would write a checkpoint for a half-written artifact
-        // set and then be overwritten when that turn settles.
+        // is still in flight would confirm a half-written artifact set and then
+        // be overwritten when that turn settles.
         if (!attempt || attempt.status !== 'completed') throw new WorkflowError('conflict', `step ${stepId} has no finished attempt to confirm`, 409);
         const verify = attempt.verify ?? { ok: false, artifacts: [], commands: [] };
         if (!verify.ok) throw new WorkflowError('conflict', 'a verifier is failing; answer not_done and prompt again, or skip the step', 409);
-        step.checkpoint = await writeCheckpointFor({ run, step, attempt, verify });
         step.status = 'done';
         step.note = null;
         advance(run, stepId);

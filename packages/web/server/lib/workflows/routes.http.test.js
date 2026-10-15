@@ -54,7 +54,7 @@ describe('workflow routes', () => {
       definitions: {
         list: async () => [{
           file: 'a.yaml', id: 'a', name: 'A', version: 1, errors: [],
-          definition: { id: 'a', name: 'A', version: 1, sandbox: 'working-tree', inputs: [], steps: [{ id: 'first', title: 'First', prompt: 'x', session: 'new', permissions: 'ask', verify: { artifacts: [], commands: [] }, confirm: 'human' }] },
+          definition: { id: 'a', name: 'A', version: 1, sandbox: 'working-tree', inputs: [], steps: [{ id: 'first', title: 'First', prompt: 'x', session: 'new', permissions: 'ask', verify: { artifacts: [], commands: [] } }] },
         }],
         read: async () => null,
       },
@@ -176,7 +176,6 @@ describe('workflow routes', () => {
       store,
       definitions: { read: async () => null },
       host: {},
-      checkpoints: {},
       turn: async () => 'completed',
       listProjectIds: async () => [],
     });

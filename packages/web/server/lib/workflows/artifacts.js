@@ -83,8 +83,8 @@ export const matchArtifacts = async ({ directory, pattern }) => {
 
 export const hashFile = async (absolutePath) => {
   // Size and digest come from the same read, so the pair always describes the
-  // same bytes. Comparing them later is what tells a checkpoint whether the file
-  // still holds what it held when a person confirmed it.
+  // same bytes. Comparing them later is what tells the restart re-check whether
+  // the file still holds what it held when the step settled.
   const digest = crypto.createHash('sha256');
   let size = 0;
   const source = createReadStream(absolutePath);

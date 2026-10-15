@@ -58,7 +58,7 @@ describe('createWorkflowRuntime', () => {
       cursor: 'first',
       sandbox: 'working-tree',
       createdAt: 1,
-      steps: [{ id: 'first', status: 'pending', attempts: [], checkpoint: null, note: null }],
+      steps: [{ id: 'first', status: 'pending', attempts: [], note: null }],
     });
     await expect(runtime.engine.startStep({
       projectId: 'proj-1',
@@ -102,7 +102,7 @@ describe('createWorkflowRuntime', () => {
       cursor: 'first',
       sandbox: 'working-tree',
       createdAt: 1,
-      steps: [{ id: 'first', status: 'pending', attempts: [], checkpoint: null, note: null }],
+      steps: [{ id: 'first', status: 'pending', attempts: [], note: null }],
     });
     // `permissions: auto` reaches for the toggle on the way in; a runtime with no
     // toggle must still run the step rather than throw on the missing call.

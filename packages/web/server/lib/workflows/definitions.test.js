@@ -25,7 +25,6 @@ steps:
       commands:
         - run: "bun run type-check:web"
           expectExit: 0
-    confirm: human
   - id: verify
     title: Verify
     prompt: "Run the checks."
@@ -33,7 +32,6 @@ steps:
     verify:
       commands:
         - run: "bun run type-check:web"
-    confirm: auto
 `;
 
 describe('parseDefinition', () => {
@@ -43,7 +41,6 @@ describe('parseDefinition', () => {
     const [spec, verify] = result.definition.steps;
     expect(spec.session).toBe('new');
     expect(spec.permissions).toBe('ask');
-    expect(spec.confirm).toBe('human');
     expect(spec.verify.commands[0]).toEqual({ run: 'bun run type-check:web', expectExit: 0, timeoutMs: 600000 });
     expect(spec.verify.artifacts).toEqual([{ glob: 'docs/superpowers/specs/*-design.md', hash: true }]);
     expect(verify.verify.artifacts).toEqual([]);
@@ -65,11 +62,10 @@ describe('parseDefinition', () => {
     expect(result.errors).toEqual([{ field: 'steps[0].prompt', message: 'unknown input "nope"' }]);
   });
 
-  it('rejects confirm: auto with nothing to verify', () => {
-    const result = parseDefinition(valid.replace('    verify:\n      commands:\n        - run: "bun run type-check:web"\n', ''), { file: 'a.yaml' });
+  it('rejects a definition that still declares confirm, and says why', () => {
+    const result = parseDefinition(valid.replace('    session: new', '    session: new\n    confirm: human'), { file: 'a.yaml' });
     expect(result.ok).toBe(false);
-    expect(result.errors[0].field).toBe('steps[1]');
-    expect(result.errors[0].message).toMatch(/confirm: auto needs a verifier/);
+    expect(result.errors).toEqual([{ field: 'steps[0].confirm', message: '"confirm" is gone: every step becomes done only when a person confirms it' }]);
   });
 
   it('rejects a duplicate step id', () => {

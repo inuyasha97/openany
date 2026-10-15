@@ -9,7 +9,7 @@ import { parse as parseYaml } from 'yaml';
 
 const WORKFLOW_DIR = '.openchamber/workflows';
 const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
-const STEP_FIELDS = new Set(['id', 'title', 'prompt', 'session', 'permissions', 'verify', 'confirm']);
+const STEP_FIELDS = new Set(['id', 'title', 'prompt', 'session', 'permissions', 'verify']);
 const DEFINITION_FIELDS = new Set(['id', 'name', 'version', 'inputs', 'sandbox', 'steps']);
 const INPUT_FIELDS = new Set(['name', 'description', 'required']);
 const VERIFY_FIELDS = new Set(['artifacts', 'commands']);
@@ -130,7 +130,14 @@ export const parseDefinition = (rawText, { file = 'unknown.yaml' } = {}) => {
       return null;
     }
     for (const key of Object.keys(step)) {
-      if (!STEP_FIELDS.has(key)) errors.push({ field, message: `unknown field "${key}"` });
+      if (STEP_FIELDS.has(key)) continue;
+      // `confirm` was a decision the engine made on a person's behalf, so it is
+      // refused by name with a migration hint rather than read as a typo.
+      if (key === 'confirm') {
+        errors.push({ field: `${field}.confirm`, message: '"confirm" is gone: every step becomes done only when a person confirms it' });
+        continue;
+      }
+      errors.push({ field, message: `unknown field "${key}"` });
     }
     if (!isName(step.id)) errors.push({ field: `${field}.id`, message: 'must be lowercase words or dashes' });
     if (isName(step.id)) {
@@ -145,9 +152,6 @@ export const parseDefinition = (rawText, { file = 'unknown.yaml' } = {}) => {
     if (step.permissions !== undefined && !['ask', 'auto'].includes(step.permissions)) {
       errors.push({ field: `${field}.permissions`, message: 'must be "ask" or "auto"' });
     }
-    if (step.confirm !== undefined && !['human', 'auto'].includes(step.confirm)) {
-      errors.push({ field: `${field}.confirm`, message: 'must be "human" or "auto"' });
-    }
     if (isText(step.prompt)) {
       for (const placeholder of findPlaceholders(step.prompt)) {
         if (!inputNames.has(placeholder)) errors.push({ field: `${field}.prompt`, message: `unknown input "${placeholder}"` });
@@ -160,10 +164,6 @@ export const parseDefinition = (rawText, { file = 'unknown.yaml' } = {}) => {
     }
     const artifacts = normalizeArtifacts(verify.artifacts, `${field}.verify.artifacts`, errors);
     const commands = normalizeCommands(verify.commands, `${field}.verify.commands`, errors);
-    const confirm = step.confirm === 'auto' ? 'auto' : 'human';
-    if (confirm === 'auto' && artifacts.length === 0 && commands.length === 0) {
-      errors.push({ field, message: 'confirm: auto needs a verifier, or the step advances on a guess' });
-    }
     if (!isName(step.id) || !isText(step.prompt)) return null;
     return {
       id: step.id,
@@ -172,7 +172,6 @@ export const parseDefinition = (rawText, { file = 'unknown.yaml' } = {}) => {
       session: step.session === 'reuse' ? 'reuse' : 'new',
       permissions: step.permissions === 'auto' ? 'auto' : 'ask',
       verify: { artifacts, commands },
-      confirm,
     };
   }).filter(Boolean);
 

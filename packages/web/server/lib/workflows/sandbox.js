@@ -2,9 +2,9 @@
  * The sandbox a run executes in.
  *
  * `worktree` mode gives every run its own checkout and branch, so its steps
- * cannot touch the project working tree and a checkpoint commit lands somewhere
- * reviewable. The branch outlives the worktree: removing the worktree is tidy-up,
- * the merge is a person's decision.
+ * cannot touch the project working tree and anything a step commits stays on a
+ * branch of its own. The branch outlives the worktree: removing the worktree is
+ * tidy-up, the merge is a person's decision.
  *
  * A git refusal is an error. A run never falls back to the project's working
  * tree, because a person who asked for isolation would be getting the opposite

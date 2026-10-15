@@ -10,7 +10,6 @@ import path from 'node:path';
 import { createWorkflowDefinitions } from './definitions.js';
 import { createWorkflowRunStore } from './store.js';
 import { createWorkflowEngine, WorkflowError } from './engine.js';
-import { createCheckpointWriter, createGitDriver } from './git-checkpoint.js';
 import { runVerifiers } from './verifiers.js';
 import { waitForTurnEnd } from './turn.js';
 import { registerWorkflowRoutes } from './routes.js';
@@ -33,7 +32,6 @@ export const createWorkflowRuntime = ({
   reconcileRuns,
   broadcast = () => {},
   logger = console,
-  git = createGitDriver(),
   // The runtime's hook for releasing the session processes a checkout holds, so
   // its folder is not locked while `removeWorktree` deletes it (a worktree
   // cannot be removed while a process still holds its folder —
@@ -45,7 +43,6 @@ export const createWorkflowRuntime = ({
 }) => {
   const definitions = createWorkflowDefinitions({ fsPromises: fs, path, projectPathFromId });
   const store = createWorkflowRunStore({ fsPromises: fs, path, projectsDirPath, now });
-  const checkpoints = createCheckpointWriter({ git, now });
 
   // The 6000-line git service must not be pulled in at server boot, so the
   // worktree functions are loaded on the worktree path only, the way the git
@@ -85,7 +82,6 @@ export const createWorkflowRuntime = ({
     store,
     definitions,
     host,
-    checkpoints,
     listProjectIds,
     reconcileRuns,
     worktrees,
@@ -99,7 +95,6 @@ export const createWorkflowRuntime = ({
   return {
     definitions,
     store,
-    checkpoints,
     engine,
     resolveProjectId,
     projectPathFromId,

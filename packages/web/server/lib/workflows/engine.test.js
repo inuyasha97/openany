@@ -16,13 +16,11 @@ inputs:
 steps:
   - id: first
     prompt: "Do {{request}}"
-    confirm: human
     verify:
       artifacts: ["out/*.md"]
   - id: second
     prompt: "Check it"
     session: reuse
-    confirm: human
 `;
 
 const definition = parseDefinition(definitionText, { file: 'two-step.yaml' }).definition;
@@ -50,7 +48,7 @@ const buildEngine = async ({ overrides = {} } = {}) => {
     cursor: 'first',
     createdAt: 1,
     sandbox: 'working-tree',
-    steps: (overrides.stepIds ?? ['first', 'second']).map((id) => ({ id, status: 'pending', attempts: [], checkpoint: null, note: null })),
+    steps: (overrides.stepIds ?? ['first', 'second']).map((id) => ({ id, status: 'pending', attempts: [], note: null })),
   };
   await fs.mkdir(path.join(root, 'out'), { recursive: true });
   const store = createWorkflowRunStore({ fsPromises: fs, path, projectsDirPath: root, now: () => 42 });
@@ -71,7 +69,6 @@ const buildEngine = async ({ overrides = {} } = {}) => {
     store,
     definitions: { read: async () => definition },
     host,
-    checkpoints: { write: async ({ artifacts }) => ({ at: 42, commit: 'c'.repeat(40), clean: false, artifacts }) },
     turn: async () => 'completed',
     now: () => 42,
     broadcast: () => {},
@@ -109,21 +106,21 @@ const hostWithoutAutoAccept = () => ({
   setModel: async () => {},
 });
 
-const autoDefinition = parseDefinition(`
-id: two-step
-name: Two step
-version: 1
-steps:
-  - id: first
-    prompt: "Write out/one.md"
-    confirm: auto
-    verify:
-      artifacts: ["out/*.md"]
-  - id: second
-    prompt: "Check it"
-    session: reuse
-    confirm: human
-`, { file: 'two-step.yaml' }).definition;
+// A definition object written before `confirm` was removed: a caller can still
+// hand the engine a step that carries the field, and the engine must ignore it
+// rather than let a verifier settle the step on its own.
+const autoDefinition = {
+  id: 'two-step',
+  name: 'Two step',
+  version: 1,
+  sandbox: 'worktree',
+  inputs: [],
+  file: 'two-step.yaml',
+  steps: [
+    { id: 'first', title: 'first', prompt: 'Write out/one.md', session: 'new', permissions: 'ask', verify: { artifacts: [{ glob: 'out/*.md', hash: false }], commands: [] }, confirm: 'auto' },
+    { id: 'second', title: 'second', prompt: 'Check it', session: 'reuse', permissions: 'ask', verify: { artifacts: [], commands: [] }, confirm: 'human' },
+  ],
+};
 
 const autoPermissionsDefinition = parseDefinition(`
 id: two-step
@@ -133,13 +130,11 @@ steps:
   - id: first
     prompt: "Write out/one.md"
     permissions: auto
-    confirm: auto
     verify:
       artifacts: ["out/*.md"]
   - id: second
     prompt: "Check it"
     session: reuse
-    confirm: human
 `, { file: 'two-step.yaml' }).definition;
 
 describe('startStep', () => {
@@ -163,14 +158,15 @@ describe('startStep', () => {
     expect(run.steps[0].attempts[0].verify.ok).toBe(true);
   });
 
-  it('advances on its own, with a checkpoint, when confirm is auto and the verifier passed', async () => {
+  it('never marks a step done without a person, whatever the verifiers say', async () => {
     const { engine, root, runId } = await buildEngine({ overrides: { definitions: { read: async () => autoDefinition } } });
     await fs.writeFile(path.join(root, 'out/a.md'), 'x');
     const run = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
-    expect(run.steps[0].status).toBe('done');
-    expect(run.steps[0].checkpoint).toMatchObject({ commit: 'c'.repeat(40) });
-    expect(run.cursor).toBe('second');
-    expect(run.status).toBe('running');
+    expect(run.steps[0].status).toBe('waiting_confirm');
+    expect(run.steps[0].attempts[0].verify.ok).toBe(true);
+    expect(run.steps[0].checkpoint).toBeUndefined();
+    expect(run.cursor).toBe('first');
+    expect(run.status).toBe('waiting');
   });
 
   it('records a refused prompt as blocked and never as a sent one', async () => {
@@ -210,8 +206,11 @@ describe('startStep', () => {
     });
     await fs.writeFile(path.join(root, 'out/a.md'), 'x');
     const run = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
-    expect(run.steps[0].status).toBe('done');
-    expect(run.status).toBe('running');
+    // The toggle is missing, which is not the step's business: it runs and then
+    // stops for a person like any other.
+    expect(run.steps[0].status).toBe('waiting_confirm');
+    expect(run.steps[0].attempts[0]).toMatchObject({ status: 'completed', verify: { ok: true } });
+    expect(run.status).toBe('waiting');
   });
 
   it('blocks a step whose declared input has no value', async () => {
@@ -309,15 +308,12 @@ version: 1
 steps:
   - id: first
     prompt: "one"
-    confirm: human
   - id: second
     prompt: "two"
     session: new
-    confirm: human
   - id: third
     prompt: "three"
     session: reuse
-    confirm: human
 `, { file: 'two-step.yaml' }).definition;
     const { engine, root, runId, prompts } = await buildEngine({
       overrides: { definitions: { read: async () => threeSteps }, stepIds: ['first', 'second', 'third'] },
@@ -329,26 +325,13 @@ steps:
   });
 
   it('does not call a run done while a step behind the cursor still owes work', async () => {
-    const autoLast = parseDefinition(`
-id: two-step
-name: Two step
-version: 1
-steps:
-  - id: first
-    prompt: "one"
-    confirm: human
-  - id: second
-    prompt: "two"
-    confirm: auto
-    verify:
-      artifacts: ["out/*.md"]
-`, { file: 'two-step.yaml' }).definition;
-    const { engine, root, runId } = await buildEngine({ overrides: { definitions: { read: async () => autoLast } } });
-    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
-    const run = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'second' });
+    const { engine, root, runId } = await buildEngine();
+    // The last step is run and then confirmed by a person while `first` is still
+    // pending: the run is waiting on that step, not finished.
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'second' });
+    const run = await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'second', decision: 'done' });
     expect(run.steps[1].status).toBe('done');
     expect(run.cursor).toBeNull();
-    // `first` never ran, so the run is waiting on it, not finished.
     expect(run.status).toBe('waiting');
   });
 
@@ -366,13 +349,26 @@ steps:
 });
 
 describe('confirmStep', () => {
-  it('writes the checkpoint and advances on done', async () => {
-    const { engine, root, runId } = await buildEngine();
+  it('writes no commit when a person confirms a step', async () => {
+    const commits = [];
+    const { engine, root, runId } = await buildEngine({
+      // The old wiring, still handed in the way the runtime used to: nothing may
+      // reach it, because the engine no longer commits on its own behalf.
+      overrides: {
+        checkpoints: {
+          write: async (input) => {
+            commits.push(input);
+            return { at: 42, commit: 'c'.repeat(40), clean: false, artifacts: [] };
+          },
+        },
+      },
+    });
     await fs.writeFile(path.join(root, 'out/a.md'), 'x');
     await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
     const run = await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'done' });
     expect(run.steps[0].status).toBe('done');
-    expect(run.steps[0].checkpoint).toMatchObject({ commit: 'c'.repeat(40) });
+    expect(run.steps[0].checkpoint).toBeUndefined();
+    expect(commits).toEqual([]);
     expect(run.cursor).toBe('second');
     expect(run.status).toBe('running');
   });
@@ -561,7 +557,7 @@ describe('the worktree sandbox', () => {
   });
 
   it('prepares a checkout once and runs the step inside it', async () => {
-    const calls = { create: [], sessions: [], autoAccept: [], verify: [], checkpoint: [] };
+    const calls = { create: [], sessions: [], autoAccept: [], verify: [] };
     const worktrees = fakeWorktrees(calls);
     const host = {
       createSession: async (params) => { calls.sessions.push(params); return { id: 'session-1' }; },
@@ -578,7 +574,6 @@ describe('the worktree sandbox', () => {
         host,
         definitions: { read: async () => autoPermissionsDefinition },
         runChecks: async ({ directory }) => { calls.verify.push(directory); return { ok: true, artifacts: [], commands: [] }; },
-        checkpoints: { write: async ({ directory, artifacts }) => { calls.checkpoint.push(directory); return { at: 42, commit: 'c'.repeat(40), clean: false, artifacts }; } },
       },
     });
     await store.write('proj-1', { ...run, sandbox: 'worktree' });
@@ -590,8 +585,8 @@ describe('the worktree sandbox', () => {
       directory: root,
       input: { mode: 'new', worktreeName: `wf-${run.runId}`, branchName: `omp/wf/${run.runId}` },
     }]);
-    // cwd, auto-accept, the verifiers and the checkpoint all read the run's
-    // directory, not the project the run was created from.
+    // The session's cwd, the auto-accept calls and the verifiers all read the
+    // run's directory, not the project the run was created from.
     expect(calls.sessions).toEqual([{ cwd: started.directory }]);
     // Auto-accept is set on the session by more than one place in the attempt
     // (unchanged from before this task); every call must name the run's
@@ -599,7 +594,6 @@ describe('the worktree sandbox', () => {
     expect(calls.autoAccept.length).toBeGreaterThan(0);
     expect(calls.autoAccept.every((entry) => entry[0] === 'session-1' && entry[1] === true && entry[2] === started.directory)).toBe(true);
     expect(calls.verify).toEqual([started.directory]);
-    expect(calls.checkpoint).toEqual([started.directory]);
     // The run the answer came from is the one on disk.
     expect(await store.read('proj-1', run.runId)).toMatchObject({ directory: started.directory, worktreeBranch: `omp/wf/${run.runId}` });
   });

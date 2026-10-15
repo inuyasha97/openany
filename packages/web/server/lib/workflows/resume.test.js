@@ -23,7 +23,7 @@ const baseRun = (overrides = {}) => ({
   sandbox: 'working-tree',
   steps: [
     { id: 'first', status: 'done', attempts: [{ index: 0, sessionId: 'session-1', status: 'completed' }], checkpoint: { at: 1, commit: 'a'.repeat(40), clean: false, artifacts: [] }, note: null },
-    { id: 'second', status: 'running', attempts: [{ index: 0, sessionId: 'session-9', status: 'running' }], checkpoint: null, note: null },
+    { id: 'second', status: 'running', attempts: [{ index: 0, sessionId: 'session-9', status: 'running' }], note: null },
   ],
   ...overrides,
 });
@@ -165,7 +165,6 @@ describe('reconcileRuns and the session of an interrupted step', () => {
       store,
       definitions: { read: async () => ({ id: 'two-step', version: 1, steps: [{ id: 'first', prompt: 'x' }, { id: 'second', prompt: 'y' }] }) },
       host: { createSession: async () => ({ id: 'session-1' }), prompt: async () => true, getSessionStatus: async () => ({ busy: false }), listSessions: async () => [{ id: 'session-9' }], renameSession: async () => {}, setModel: async () => {}, setAutoAccept: async () => {} },
-      checkpoints: { write: async ({ artifacts }) => ({ at: 42, commit: 'c'.repeat(40), clean: false, artifacts }) },
       runChecks: async () => ({ ok: true, artifacts: [], commands: [] }),
       now: () => 42,
       broadcast: () => {},
@@ -178,7 +177,7 @@ describe('reconcileRuns and the session of an interrupted step', () => {
     expect(verified.steps[1].status).toBe('waiting_confirm');
     const confirmed = await engine.confirmStep({ projectId: 'proj-1', runId: baseRun().runId, stepId: 'second', decision: 'done' });
     expect(confirmed.steps[1].status).toBe('done');
-    expect(confirmed.steps[1].checkpoint).toMatchObject({ commit: 'c'.repeat(40) });
+    expect(confirmed.steps[1].checkpoint).toBeUndefined();
     expect(confirmed.status).toBe('done');
   });
 });
