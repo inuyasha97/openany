@@ -272,20 +272,20 @@ describe("OMP tool execution", () => {
   test("a todo call re-emits the session's list", () => {
     const p = projector()
     const sid = "ses_a"
-    const call = { type: "toolCall" as const, id: "call_9", name: "todo", arguments: { i: "Ship", list: [{ phase: "P", items: ["a", "b"] }] } }
+    const call = { type: "toolCall" as const, id: "call_9", name: "todo", arguments: { i: "Ship", op: "init", list: [{ phase: "P", items: ["a", "b"] }] } }
     p.project(sid, { type: "message_start", message: assistant({ content: [call] }) })
 
     const started = p.project(sid, {
       type: "tool_execution_start",
       toolCallId: "call_9",
       toolName: "todo",
-      args: { i: "Ship", list: [{ phase: "P", items: ["a", "b"] }] },
+      args: { i: "Ship", op: "init", list: [{ phase: "P", items: ["a", "b"] }] },
     })
     expect(started.at(-1)).toEqual({
       type: "todo.updated",
       properties: {
         sessionID: sid,
-        todo: { title: "Ship", items: [{ phase: "P", text: "a", status: "pending" }, { phase: "P", text: "b", status: "pending" }] },
+        todo: { title: "Ship", items: [{ phase: "P", text: "a", status: "in_progress" }, { phase: "P", text: "b", status: "pending" }] },
       },
     })
 
