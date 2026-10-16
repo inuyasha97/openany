@@ -11,6 +11,14 @@ import { parse as parseYaml } from 'yaml';
 const WORKFLOW_DIR = '.openchamber/workflows';
 const DEFINITION_EXTENSIONS = ['.yaml', '.yml'];
 const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
+/**
+ * The two places a run may execute, as one list. A definition's `sandbox` is
+ * validated against it here, and the create route validates a run's chosen mode
+ * against the same export, so the parser and the route cannot drift into
+ * disagreeing about which modes exist. Exported as a value rather than derived
+ * from a type, because the server is plain JavaScript.
+ */
+export const WORKFLOW_SANDBOX_MODES = ['worktree', 'working-tree'];
 const STEP_FIELDS = new Set(['id', 'title', 'prompt', 'session', 'permissions', 'verify']);
 const DEFINITION_FIELDS = new Set(['id', 'name', 'version', 'inputs', 'sandbox', 'steps']);
 const INPUT_FIELDS = new Set(['name', 'description', 'required']);
@@ -112,7 +120,7 @@ export const parseDefinition = (rawText, { file = 'unknown.yaml' } = {}) => {
   // would silently change what a person asked for.
   if (raw.sandbox === undefined) {
     errors.push({ field: 'sandbox', message: 'is required: choose "worktree" or "working-tree"' });
-  } else if (!['worktree', 'working-tree'].includes(raw.sandbox)) {
+  } else if (!WORKFLOW_SANDBOX_MODES.includes(raw.sandbox)) {
     errors.push({ field: 'sandbox', message: 'must be "worktree" or "working-tree"' });
   }
 

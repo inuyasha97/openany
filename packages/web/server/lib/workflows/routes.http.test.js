@@ -342,7 +342,11 @@ describe('workflow routes', () => {
     const { app } = createApp({ engine, store });
     const response = await request(app).post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/sandbox/release').set(SCOPE).send({});
     expect(response.status).toBe(409);
-    expect(response.body.error).toMatch(/still running/);
+    // The wording is true of a `waiting` run too, which is what a definition that
+    // changed underneath a run leaves behind: not executing, but still
+    // answerable, and an answer starts an attempt in the checkout this call
+    // would have removed.
+    expect(response.body.error).toMatch(/has not finished/);
   });
 
   it('maps an engine WorkflowError to its status and its message', async () => {

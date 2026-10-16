@@ -253,6 +253,11 @@ Transitions:
    created. A definition that changed puts the step in `blocked` with a note that
    names the workflow and says what to do — restore the definition, or start a
    new run — and nothing is sent to the model, so the step carries no attempt.
+   A file edited into something that no longer parses, or one that no longer
+   declares the step, is the same change and reaches the same block: the block is
+   written before the definition is asked to declare the step, so an edit out of
+   shape is never answered with a lookup's 404, which would write nothing and
+   leave an auto-advancing run reading `running` with nothing executing it.
    The step is not settled, so restoring the file exactly lets it run again on
    the workflow it began with. A run whose definition is unchanged is untouched,
    and a run created before runs carried a hash has nothing to compare and runs as
@@ -369,23 +374,28 @@ Deleting a run removes one run file whose id the caller had to name. It does not
 delete commits, artifacts, or the sessions the run created, and no route deletes
 a session by pattern.
 
-Releasing a run's checkout is the one route that deletes files, and it is a
-destructive action that says so. The engine writes no commit, so a step whose
-prompt asked for none has left its output only in that checkout, and the removal
-takes the directory with it. The release therefore refuses a checkout that still
-holds uncommitted work, and the refusal names the paths — in its message and as
-`uncommitted` in the body — which is what a screen offers to delete. The deletion
-happens only through a request that asks for it (`deleteUncommitted: true`) and
-repeats the paths the person was shown (`confirmed`): the removal proceeds only
-when a fresh status read is exactly that set, and the answer names what it deleted
-as `deleted`, so the screen can say what went rather than only that something did.
+Releasing a run's checkout is the one route here that deletes work, and it is a
+destructive action that says so. Two other routes delete something, neither of
+them work: `DELETE /api/workflows/runs/:runId` removes one run file — run state,
+not a person's files — and the app's own `DELETE /api/git/worktrees`, outside
+this surface, removes a checkout by the path it is handed. The engine writes no
+commit, so a step whose prompt asked for none has left its output only in that
+checkout, and the removal takes the directory with it. The release therefore
+refuses a checkout that still holds uncommitted work, and the refusal names the
+paths — in its message and as `uncommitted` in the body — which is what a screen
+offers to delete. The deletion happens only through a request that asks for it
+(`deleteUncommitted: true`) and repeats the paths the person was shown
+(`confirmed`): the removal proceeds only when a fresh status read is exactly that
+set, and the answer names what it deleted as `deleted`, so the screen can say what
+went rather than only that something did.
 A `confirmed` list that no longer matches is refused, naming what changed, with
 the fresh paths beside it; a list the person never saw confirms nothing and is
 refused the same way. A checkout whose status cannot be read is refused whether or
 not the flag is present — the override changes what happens to a dirty answer,
-never what a failed read means. An in-flight run is refused because it is still
-writing there. The branch is deliberately left behind: the checkout is tidiness,
-the branch is the work.
+never what a failed read means. A run that has not finished is refused: `running`
+is still writing there, and `waiting` may still be answered, which would start a
+fresh attempt in the checkout this call had just removed. The branch is
+deliberately left behind: the checkout is tidiness, the branch is the work.
 
 Frames of type `openchamber:workflow` are broadcast on
 `/api/openchamber/events`, following `openchamber:omp`. Screens update from the

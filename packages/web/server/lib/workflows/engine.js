@@ -120,6 +120,25 @@ export const createWorkflowEngine = ({
   };
 
   /**
+   * The definition to compare against what the run began with, or `null` when it
+   * no longer loads at all. A file edited into something that does not parse is a
+   * definition that changed under the run like any other edit, and the run is
+   * told so by `blockIfDefinitionChanged` rather than stopped with the lookup's
+   * 404: an auto-advancing run would otherwise be left reading `running` on disk
+   * with nothing executing it, until a restart reconciled it. A run that carries
+   * no hash has nothing to compare, so the lookup's own 404 is the whole story
+   * for it — the definition is simply not there.
+   */
+  const loadDefinitionForRun = async (projectId, run) => {
+    try {
+      return await loadStepDefinition(projectId, run);
+    } catch (error) {
+      if (!run.workflowHash || !(error instanceof WorkflowError) || error.code !== 'not-found') throw error;
+      return null;
+    }
+  };
+
+  /**
    * A run executes the definition it was created from, and that definition is
    * re-read on every advance — an edit between two steps would otherwise change
    * what the run is doing halfway through, silently. So the freshly parsed
@@ -134,9 +153,18 @@ export const createWorkflowEngine = ({
    * shape the missing-input and worktree failures use: the step is `blocked`,
    * the run waits, and the note names what happened and the ways forward. The
    * step is not settled, so restoring the definition lets it run again.
+   *
+   * `definition` is `null` when the file no longer loads at all
+   * (`loadDefinitionForRun`), which is the same change and gets the same note
+   * and the same written run: "changed" covers the file that now says something
+   * else and the file that says nothing the parser accepts, and the person's two
+   * ways forward — restore the definition, or start a new run — are the same.
+   * What no longer loads is also what no longer declares a step, so the removal
+   * of a step lands here too, before any lookup that would answer with a code.
    */
   const blockIfDefinitionChanged = async ({ projectId, run, step, definition }) => {
-    if (!run.workflowHash || definitionHash(definition) === run.workflowHash) return null;
+    if (!run.workflowHash) return null;
+    if (definition && definitionHash(definition) === run.workflowHash) return null;
     step.status = 'blocked';
     step.note = `the workflow definition ${run.workflowId} changed since this run started, so the run cannot continue on the definition it began with: restore the definition, or start a new run`;
     run.status = 'waiting';
@@ -177,13 +205,22 @@ export const createWorkflowEngine = ({
 
   const attemptStep = async ({ projectId, projectPath, runId, stepId }) => {
     const run = assertRunIsOpen(await loadRun(projectId, runId));
-    const definition = await loadStepDefinition(projectId, run);
-    const declared = definition.steps.find((entry) => entry.id === stepId);
-    if (!declared) throw new WorkflowError('not-found', `step ${stepId} is not declared by ${run.workflowId}`, 404);
+    // The run's own step is looked up before the definition is read: a file
+    // edited out of shape does not stop the run from having the step this
+    // advance is about, and that step is what the block below writes.
     const step = assertStepIsOpen(findStep(run, stepId));
+    const definition = await loadDefinitionForRun(projectId, run);
 
+    // Before the definition is asked to declare the step, because an edit that
+    // removes or renames it leaves nothing to find: a run stopped with the
+    // lookup's 404 is a run nothing wrote. `definition` is non-null here once
+    // this returns null — a null definition only reaches here with a hash, and a
+    // hash always blocks.
     const changed = await blockIfDefinitionChanged({ projectId, run, step, definition });
     if (changed) return changed;
+
+    const declared = definition.steps.find((entry) => entry.id === stepId);
+    if (!declared) throw new WorkflowError('not-found', `step ${stepId} is not declared by ${run.workflowId}`, 404);
 
     const { text, missing } = substituteInputs(declared.prompt, run.inputs ?? {});
     if (missing.length > 0) {
@@ -411,11 +448,11 @@ export const createWorkflowEngine = ({
       if (!trimmed) throw new WorkflowError('invalid', 'a continue prompt needs text');
       return withLock(projectId, async () => {
         const run = assertRunIsOpen(await loadRun(projectId, runId));
-        const definition = await loadStepDefinition(projectId, run);
-        const declared = definition.steps.find((entry) => entry.id === stepId);
         const step = findStep(run, stepId);
+        const definition = await loadDefinitionForRun(projectId, run);
         const changed = await blockIfDefinitionChanged({ projectId, run, step, definition });
         if (changed) return changed;
+        const declared = definition.steps.find((entry) => entry.id === stepId);
         const sessionId = step.attempts.at(-1)?.sessionId;
         if (!declared || !sessionId) throw new WorkflowError('conflict', `step ${stepId} has no session to continue`, 409);
         return runPromptInSession({ projectId, run, step, declared, sessionId, text: trimmed });
@@ -425,8 +462,6 @@ export const createWorkflowEngine = ({
     verifyStep: async ({ projectId, runId, stepId }) => {
       if (inFlight.has(projectId)) throw new WorkflowError('busy', 'this project already has a run executing a step', 409);
       const run = assertRunIsOpen(await loadRun(projectId, runId));
-      const definition = await loadStepDefinition(projectId, run);
-      const declared = definition.steps.find((entry) => entry.id === stepId);
       // Re-running the checks on a settled step would rewrite the `attempts.at(-1).verify`
       // the restart sweep compares against — replacing the digest the person
       // confirmed with the file's current one, so a later change would compare
@@ -434,8 +469,10 @@ export const createWorkflowEngine = ({
       // checks stays available where the answer still matters (`waiting_confirm`,
       // `needs_work`).
       const step = assertStepIsOpen(findStep(run, stepId));
+      const definition = await loadDefinitionForRun(projectId, run);
       const changed = await blockIfDefinitionChanged({ projectId, run, step, definition });
       if (changed) return changed;
+      const declared = definition.steps.find((entry) => entry.id === stepId);
       const attempt = step.attempts.at(-1);
       if (!declared || !attempt) throw new WorkflowError('conflict', `step ${stepId} has not run yet`, 409);
       attempt.verify = await runChecks({ step: declared, directory: run.directory });
@@ -469,10 +506,12 @@ export const createWorkflowEngine = ({
      * Take a finished run's checkout away and leave its branch.
      *
      * The checkout is tidiness, the branch is the work: a person merges it
-     * themselves, so nothing here touches a branch. An in-flight run is refused
-     * because it is still writing into that checkout — and because `waiting` may
-     * still be answered, which would start a fresh attempt in a directory this
-     * call had just removed.
+     * themselves, so nothing here touches a branch. A run that has not finished
+     * is refused: `running` is still writing into that checkout, and `waiting`
+     * may still be answered — a changed definition's block, for one, is answered
+     * by restoring the file — which would start a fresh attempt in a directory
+     * this call had just removed. The refusal names no status of its own, so it
+     * stays true of both.
      *
      * A dirty checkout is refused too: the engine writes no commit, so a step
      * whose prompt asked for none has left its output only there, and removing
@@ -498,7 +537,7 @@ export const createWorkflowEngine = ({
     releaseSandbox: ({ projectId, projectPath, runId, deleteUncommitted = false, confirmed = null }) => withLock(projectId, async () => {
       const run = await loadRun(projectId, runId);
       if (run.status === 'running' || run.status === 'waiting') {
-        throw new WorkflowError('conflict', `run ${runId} is still running`, 409);
+        throw new WorkflowError('conflict', `run ${runId} has not finished, so its checkout cannot be released: finish or cancel the run first`, 409);
       }
       // A run that never took a checkout — a `working-tree` run, or one that
       // stopped before its first step — has nothing to release. Answering it as

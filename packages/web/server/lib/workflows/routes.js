@@ -14,7 +14,7 @@
  */
 import crypto from 'node:crypto';
 import express from 'express';
-import { parseDefinition } from './definitions.js';
+import { parseDefinition, WORKFLOW_SANDBOX_MODES } from './definitions.js';
 import { TERMINAL_RUN_STATUSES } from './engine.js';
 import { isValidRunId } from './store.js';
 
@@ -294,9 +294,12 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
       // The person starting a run may choose where it executes; when they do,
       // that choice is what the run records, and the definition's declaration is
       // only the pre-selection the screen offered them. A mode the engine does
-      // not know is refused here rather than recorded for the sandbox to guess at.
+      // not know is refused here rather than recorded for the sandbox to guess at,
+      // against the same list the parser validates a declaration with
+      // (`WORKFLOW_SANDBOX_MODES`), so the two can never disagree about which
+      // modes exist.
       const chosenSandbox = req.body?.sandbox;
-      if (chosenSandbox !== undefined && !['worktree', 'working-tree'].includes(chosenSandbox)) {
+      if (chosenSandbox !== undefined && !WORKFLOW_SANDBOX_MODES.includes(chosenSandbox)) {
         return res.status(400).json({ error: 'sandbox must be "worktree" or "working-tree"' });
       }
 

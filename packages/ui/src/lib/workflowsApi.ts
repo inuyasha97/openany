@@ -128,6 +128,25 @@ export interface WorkflowDefinitionSummary {
   sandbox: WorkflowSandbox | null;
 }
 
+/**
+ * A row whose file parses. Its `id` and its `sandbox` are `null` together — a
+ * file that does not parse declares neither, because the parser requires the
+ * mode — so a screen that needs the declaration proves it here instead of
+ * defaulting one. The create route requires a mode and the engine refuses to
+ * apply one, so a guessed mode in the client would be a run in a place nobody
+ * chose.
+ */
+export type LoadedWorkflowDefinitionSummary = WorkflowDefinitionSummary & {
+  id: string;
+  name: string;
+  version: number;
+  sandbox: WorkflowSandbox;
+};
+
+/** Whether this row is a definition a run can be started from. */
+export const isLoadedDefinition = (definition: WorkflowDefinitionSummary): definition is LoadedWorkflowDefinitionSummary =>
+  definition.id !== null && definition.sandbox !== null;
+
 /** What a save answers: the file it wrote and the hash of the text now on disk. */
 export interface WorkflowDefinitionWrite {
   file: string;

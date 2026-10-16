@@ -27,7 +27,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Icon } from '@/components/icon/Icon';
 import { Input } from '@/components/ui/input';
 import { Radio } from '@/components/ui/radio';
-import { createWorkflowRun, deleteWorkflowRun, type WorkflowDefinitionSummary, type WorkflowRun, type WorkflowSandbox } from '@/lib/workflowsApi';
+import { createWorkflowRun, deleteWorkflowRun, isLoadedDefinition, type LoadedWorkflowDefinitionSummary, type WorkflowDefinitionSummary, type WorkflowRun, type WorkflowSandbox } from '@/lib/workflowsApi';
 import { useWorkflowStore } from '@/stores/useWorkflowStore';
 import { describeRunStatus } from '@/lib/workflows/status';
 import type { ProjectRef } from '@/lib/projectContextApi';
@@ -52,14 +52,18 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
   const [error, setError] = useState<string | null>(null);
   // The run whose delete is being confirmed; the dialog asks before anything is removed.
   const [pendingDelete, setPendingDelete] = useState<WorkflowRun | null>(null);
-  // The definition whose start is being set up.
-  const [startFor, setStartFor] = useState<WorkflowDefinitionSummary | null>(null);
+  // The definition whose start is being set up. Only a row that parses reaches
+  // here (`isLoadedDefinition`), so the declaration below is always a real one.
+  const [startFor, setStartFor] = useState<LoadedWorkflowDefinitionSummary | null>(null);
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
-  // The mode this run executes in, pre-selected from the definition's
-  // declaration and sent with the create so the run records the choice.
-  const [sandbox, setSandbox] = useState<WorkflowSandbox>('worktree');
-  // A row with no `id` is a file that does not parse: there is no declared
-  // workflow to start a run of, but it is still a file this screen can open.
+  // The mode this run executes in. `null` until `beginStart` sets it from the
+  // definition's declaration: there is no fallback, because a mode nobody chose
+  // is the one thing the create route exists to make impossible — which is also
+  // why Start stays disabled while this is `null`.
+  const [sandbox, setSandbox] = useState<WorkflowSandbox | null>(null);
+  // A row that does not load (`isLoadedDefinition`) is a file, not a workflow:
+  // the mode a run executes in is part of the declaration it failed to make, so
+  // there is no run to start from it. It is still a file this screen can open.
   const missingRequired = startFor
     ? startFor.inputs.some((input) => input.required && !(inputValues[input.name] ?? '').trim())
     : false;
@@ -77,11 +81,11 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
 
   // Resolves true when the run was created; on a failure the dialog stays open
   // and the message renders inside it.
-  const start = async (definition: WorkflowDefinitionSummary, inputs: Record<string, string>, mode: WorkflowSandbox): Promise<boolean> => {
+  const start = async (definition: LoadedWorkflowDefinitionSummary, inputs: Record<string, string>, mode: WorkflowSandbox): Promise<boolean> => {
     setBusy(true);
     setError(null);
     try {
-      const run = await createWorkflowRun(project.path, { workflowId: definition.id as string, inputs, sandbox: mode });
+      const run = await createWorkflowRun(project.path, { workflowId: definition.id, inputs, sandbox: mode });
       setRun(project, run);
       onSelect(run.runId);
       setStartFor(null);
@@ -94,12 +98,14 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
     }
   };
 
-  const beginStart = (definition: WorkflowDefinitionSummary) => {
+  const beginStart = (definition: LoadedWorkflowDefinitionSummary) => {
     setError(null);
     // The dialog asks for the mode even when the definition declares no input:
-    // where a run executes is a choice, so it is never started without one.
+    // where a run executes is a choice, so it is never started without one. The
+    // declaration is what the dialog opens on, and the person may choose the
+    // other mode from there.
     setInputValues({});
-    setSandbox(definition.sandbox ?? 'worktree');
+    setSandbox(definition.sandbox);
     setStartFor(definition);
   };
 
@@ -138,7 +144,7 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
           </Button>
           {definitions.map((definition) => (
             <span key={definition.file} className="flex items-center">
-              {definition.id === null ? (
+              {!isLoadedDefinition(definition) ? (
                 /* A file that does not parse declares no workflow, so there is no
                    run to start from it. It is still a file on disk, and the edit
                    action beside it is the repair: the pane shows the text as it
@@ -149,9 +155,6 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
               ) : (
                 <Button size="xs" variant="ghost" disabled={busy} onClick={() => beginStart(definition)}>
                   {definition.name ?? definition.id}
-                  {/* The mode the run will execute in, before one exists: rendered the
-                      way a run's own header renders it (`RunDetail.tsx`), raw. */}
-                  {definition.sandbox ? <span className="text-[11px] text-muted-foreground">{definition.sandbox}</span> : null}
                 </Button>
               )}
               {/* Every listed definition opens its YAML, whether or not a run of
@@ -248,9 +251,9 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
             </Button>
             <Button
               size="sm"
-              disabled={busy || missingRequired}
+              disabled={busy || missingRequired || sandbox === null}
               onClick={() => {
-                if (!startFor) return;
+                if (!startFor || sandbox === null) return;
                 void start(startFor, inputValues, sandbox);
               }}
             >

@@ -644,6 +644,98 @@ steps:
     expect((await store.read('proj-1', runId)).steps[1]).toMatchObject({ status: 'blocked', note: next.steps[1].note });
   });
 
+  it('blocks when the definition no longer loads at all, instead of stopping with the lookup code', async () => {
+    const definitions = editableDefinitions(definition);
+    const { engine, store, runId, root, prompts } = await buildEngine({ overrides: { definitions } });
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'done' });
+    // What an auto-advancing run looks like on disk the moment a person confirms
+    // a step: the cursor points at the next step and the run reads `running`.
+    expect((await store.read('proj-1', runId)).status).toBe('running');
+    // The file was edited into something the parser refuses, so no definition
+    // resolves for this run at all.
+    definitions.current = null;
+
+    const next = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'second' });
+
+    expect(next.steps[1].status).toBe('blocked');
+    // The same note the parseable edit writes: the file changed, and these are
+    // the two ways forward, whether or not it still parses.
+    expect(next.steps[1].note).toMatch(/changed since this run started/);
+    expect(next.steps[1].note).toMatch(/restore the definition/);
+    expect(next.status).toBe('waiting');
+    expect(prompts).toHaveLength(1);
+    // Nothing is left `running` on disk with nothing executing it.
+    expect((await store.read('proj-1', runId)).status).toBe('waiting');
+  });
+
+  it('blocks when the definition no longer declares the step', async () => {
+    // A definition that parses and declares one step: `second` is gone from it,
+    // which is what removing or renaming a step in the file amounts to.
+    const withoutSecond = parseDefinition(`
+id: two-step
+name: Two step
+version: 1
+sandbox: worktree
+inputs:
+  - name: request
+    required: true
+steps:
+  - id: first
+    prompt: "Do {{request}}"
+    verify:
+      artifacts: ["out/*.md"]
+`, { file: 'two-step.yaml' }).definition;
+    const definitions = editableDefinitions(definition);
+    const { engine, store, runId, root, prompts } = await buildEngine({ overrides: { definitions } });
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    definitions.current = withoutSecond;
+
+    const next = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'second' });
+
+    expect(next.steps[1].status).toBe('blocked');
+    expect(next.steps[1].note).toMatch(/changed since this run started/);
+    expect(next.status).toBe('waiting');
+    expect(prompts).toHaveLength(1);
+    // The block is on disk, not only in the answer.
+    expect((await store.read('proj-1', runId)).steps[1].status).toBe('blocked');
+  });
+
+  it('stops an auto-advancing run on that block, rather than leaving it `running` with nothing executing it', async () => {
+    const definitions = editableDefinitions(definition);
+    const { engine, store, runId, root } = await buildEngine({ overrides: { definitions } });
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    await engine.confirmStep({ projectId: 'proj-1', runId, stepId: 'first', decision: 'done' });
+    definitions.current = null;
+
+    const stopped = await engine.runUntilStop({ projectId: 'proj-1', projectPath: root, runId });
+
+    expect(stopped.status).toBe('waiting');
+    expect(stopped.steps[1].status).toBe('blocked');
+    expect(stopped.steps[1].note).toMatch(/changed since this run started/);
+    expect((await store.read('proj-1', runId)).status).toBe('waiting');
+  });
+
+  it('refuses a continued prompt and a re-check for a definition that no longer loads, the same way', async () => {
+    const definitions = editableDefinitions(definition);
+    const { engine, root, runId, prompts } = await buildEngine({ overrides: { definitions } });
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    definitions.current = null;
+
+    const continued = await engine.continueStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first', text: 'tighten it' });
+    expect(continued.steps[0].status).toBe('blocked');
+    expect(continued.steps[0].note).toMatch(/changed since this run started/);
+
+    const verified = await engine.verifyStep({ projectId: 'proj-1', runId, stepId: 'first' });
+    expect(verified.steps[0].status).toBe('blocked');
+    expect(verified.steps[0].note).toMatch(/changed since this run started/);
+    expect(prompts).toHaveLength(1);
+  });
+
   it('refuses a continued prompt and a re-check for the same reason', async () => {
     const definitions = editableDefinitions(definition);
     const { engine, root, runId, prompts } = await buildEngine({ overrides: { definitions } });
@@ -962,13 +1054,17 @@ describe('the worktree sandbox', () => {
       expect(calls.remove).toEqual([{ directory: root, input: { directory: finished.directory, deleteLocalBranch: false } }]);
     });
 
-    it('refuses while the run is still running or waiting on a person', async () => {
+    it('refuses while the run has not finished, whether it is executing or waiting on a person', async () => {
       const calls = { create: [], remove: [] };
       const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
       for (const status of ['running', 'waiting']) {
         await store.write('proj-1', { ...run, sandbox: 'worktree', directory: `${root}/checkout`, worktreeBranch: `omp/wf/${run.runId}`, status });
-        await expect(engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId }))
-          .rejects.toMatchObject({ code: 'conflict', status: 409 });
+        const refusal = await engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId }).catch((error) => error);
+        expect(refusal).toMatchObject({ code: 'conflict', status: 409 });
+        // One message for both, and it names neither status: a `waiting` run is
+        // not executing, so "still running" would be false of it.
+        expect(refusal.message).toMatch(/has not finished/);
+        expect(refusal.message).toMatch(/finish or cancel the run first/);
       }
       expect(calls.remove).toEqual([]);
     });

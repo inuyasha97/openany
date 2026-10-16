@@ -44,24 +44,28 @@
 
 **Interfaces:**
 - Consumes: the existing `releaseSandbox` guard (`sandbox.js:96-116`) that refuses a dirty checkout with the paths.
-- Produces: `releaseSandbox({ run, projectPath, git, deleteUncommitted = false }) -> { removed, deleted: string[] }`; `POST /api/workflows/runs/:runId/sandbox/release` with `{ deleteUncommitted?: boolean }`; `releaseWorkflowSandbox(directory, runId, { deleteUncommitted })` on the client.
+- Produces: `releaseSandbox({ run, projectPath, git, deleteUncommitted = false, confirmed = null }) -> { removed: boolean, deleted?: string[] }`; `POST /api/workflows/runs/:runId/sandbox/release` with `{ deleteUncommitted?: boolean, confirmed?: string[] }` — the request carries the paths the person was shown, and the server removes nothing unless a fresh status read is exactly that set, answering the paths it deleted beside the run; `releaseWorkflowSandbox(directory, runId, { deleteUncommitted, confirmed })` on the client.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```js
 // sandbox.test.js — the destructive path
-it('deletes uncommitted work only when it is asked to', async () => {
+it('deletes the uncommitted work it names, but only when the release asks it to', async () => {
   const prepared = await prepareSandbox({ run: run(), projectPath: root, git: gitService });
   await fs.writeFile(path.join(prepared.directory, 'scratch.txt'), 'x');
   await expect(releaseSandbox({ run: runWith(prepared), projectPath: root, git: gitService }))
-    .rejects.toThrow(/uncommitted changes/);                                  // unchanged: refuses
-  const released = await releaseSandbox({ run: runWith(prepared), projectPath: root, git: gitService, deleteUncommitted: true });
+    .rejects.toThrow(/uncommitted changes/);                                  // unchanged: refuses, naming the paths
+  const released = await releaseSandbox({ run: runWith(prepared), projectPath: root, git: gitService, deleteUncommitted: true, confirmed: ['scratch.txt'] });
   expect(released).toMatchObject({ removed: true, deleted: ['scratch.txt'] });
   await expect(fs.stat(prepared.directory)).rejects.toThrow();
+  // The branch survives the deletion: it is the work, the checkout is tidiness.
 });
+it('refuses a deletion that confirms nothing, and deletes nothing', async () => { /* a bare flag names no path */ });
+it('refuses a deletion the checkout no longer matches, naming what changed', async () => { /* a path appeared */ });
 
-// engine.test.js — the refusal names the count, the override removes
-it('answers 409 with the paths, and removes them when the request says so', async () => { /* … */ });
+// engine.test.js — the refusal names the paths; the confirmed request is what removes them
+it('names the uncommitted paths in the refusal, and removes them when the release is asked to', async () => { /* … */ });
+it('refuses a deletion whose confirmation no longer matches the checkout', async () => { /* … */ });
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -70,13 +74,13 @@ Run: `bun run --cwd packages/web test -- server/lib/workflows/sandbox.test.js se
 
 - [ ] **Step 3: Implement**
 
-- `sandbox.js`: keep the guard's refusal exactly as it is when `deleteUncommitted` is false; when it is true, capture the paths from the same status read, remove the checkout, and answer them as `deleted`. A read that fails for a reason other than a missing repository still refuses — the override does not make the guard fail-open.
-- `engine.js`: the release method passes the flag through, and the run's answer is unchanged apart from the release stamp.
-- `routes.js`: the body's `deleteUncommitted` must be a boolean or absent; anything else is a 400, in the shape the route already uses for a malformed body.
+- `sandbox.js`: keep the guard's refusal exactly as it is when `deleteUncommitted` is false; when it is true, compare the paths a fresh status read reports with the `confirmed` set the person was shown — a path that appeared, or one that is no longer uncommitted, means the confirmation describes a different checkout, so the release refuses and names what changed, with the fresh paths in `details.uncommitted`. Only when the two are the same set is the checkout removed, answering the paths as `deleted`; a flag with no list confirms nothing and is refused the same way. A read that fails for a reason other than a missing repository still refuses — the override does not make the guard fail-open.
+- `engine.js`: the release method passes the flag and the confirmed paths through, answers the deleted paths beside the run, and refuses a run that has not finished (`running` or `waiting`) with wording true of both.
+- `routes.js`: the body's `deleteUncommitted` must be a boolean or absent, and `confirmed` an array of paths or absent; anything else is a 400, in the shape the route already uses for a malformed body.
 
 - [ ] **Step 4: The screen**
 
-`RunDetail.tsx` already offers the release and renders the refusal's message. Add the destructive path: when the refusal names uncommitted changes, offer a second control that states how many files it will delete and opens a confirmation; only the confirmed request carries `deleteUncommitted: true`. The count and the paths come from the refusal's message — do not re-derive them on the client.
+`RunDetail.tsx` already offers the release and renders the refusal's message. Add the destructive path: when the refusal names uncommitted work, offer a second control that states how many files it will delete and opens a confirmation; only the confirmed request carries `deleteUncommitted: true`. The count and the paths come from the refusal's `uncommitted` list in the body — the same list the request sends back as `confirmed`, never re-derived on the client, so what the person confirmed is what the server compares against.
 
 - [ ] **Step 5: Run the suites**
 
@@ -186,7 +190,7 @@ Run: `bun run --cwd packages/web test -- server/lib/workflows/engine.test.js`
 
 - [ ] **Step 3: Implement**
 
-- `engine.js`: wherever a run in flight loads its definition (`attemptStep`, `continueStep`, `verifyStep`), compare the freshly parsed definition's hash with `run.workflowHash` using the same convention, and block the step with a note naming the change (for example the declared version, or that the definition's content differs) when they differ. A run that carries no hash — created before this plan — is not blocked; there is nothing to compare.
+- `engine.js`: wherever a run in flight loads its definition (`attemptStep`, `continueStep`, `verifyStep`), compare the freshly parsed definition's hash with `run.workflowHash` using the same convention, and block the step with a note naming the change (for example the declared version, or that the definition's content differs) when they differ. A run that carries no hash — created before this plan — is not blocked; there is nothing to compare. The block is written before the definition is asked to declare the step, and a definition that no longer loads at all is the same change: an edit that leaves a typo, or removes the step, must reach this block rather than a lookup's 404, which would write nothing and leave an auto-advancing run reading `running` on disk with nothing executing it.
 - The note must tell the person what to do: the definition changed, so the run cannot continue on the workflow it started with; restoring the file or starting a new run are the two ways forward.
 
 - [ ] **Step 4: Run the suites**
