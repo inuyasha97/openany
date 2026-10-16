@@ -38,7 +38,7 @@ What exists today, all verified:
 | Item | OMP side | App side today |
 |---|---|---|
 | Todo | tool `todo` (`args.list[].{phase,items}`, `args.op:"done"`, text result `Remaining items (N) … [in_progress]`), plus `custom_message`/`mid-run-todo-nudge` frames | tool call rides the generic path (`mapping-messages.ts:220-234`, `mapping-events.ts:85-99`), `todo` has no entry in `TOOL_METADATA` (`lib/toolHelpers.ts:266-274`), result renders as text (`ToolPart.tsx:1592-1610`), the nudge frame is dropped, and the session-todo store/dropdown is gone (only orphan i18n keys remain, `lib/i18n/messages/en.ts:2202-2212`) |
-| Sub-agents | tool `task` (spawn), tool `wait` (results carry `<task-result id=… agent=…>`), one transcript per sub-agent at `<project>/<session-file>/<Agent>.jsonl` with its own `session` header and a `parentSession` link | tool name `subagent` is what the UI keys on (`lib/opencode/tools.ts:39-70`), so OMP's `task` rows stay generic; the store deliberately ignores 3-segment files (`omp-adapter/src/session-store.ts:113-118`), `session-activity.js:41-51` hard-codes "no children", `toAgentSession` carries no `parentID` (`lib/agent/omp-runtime.ts:306-318`), and the prompt route has no `agent` field (`web/server/lib/agents/omp-routes.js:27-46`) |
+| Sub-agents | tools `task` (spawn, **streams `tool_execution_update`**) and `hub` (wait/status on `jobs[].id` = the agent name), one transcript per sub-agent at `<project>/<session-file>/<Agent>.jsonl` with its own `session` header and a `parentSession` link | tool name `subagent` is what the UI keys on (`lib/opencode/tools.ts:39-70`), so OMP's `task`/`hub` rows stay generic; the store deliberately ignores 3-segment files (`omp-adapter/src/session-store.ts:113-118`), `session-activity.js:41-51` hard-codes "no children", `toAgentSession` carries no `parentID` (`lib/agent/omp-runtime.ts:306-318`), and the prompt route has no `agent` field (`web/server/lib/agents/omp-routes.js:27-46`) |
 | Roles | `modelRoles.<role>` in `~/.omp/agent/config.yml` (this machine: `DEV`, `plan`, `default`); per-run flags `--smol/--slow/--plan`; role list from OMP 18.10.4 docs | no route, no page, no i18n (`grep modelRoles` in `packages/ui` and `packages/web` = 0). The two OMP-native knobs the UI *can* write are `providers.cacheRetention` and `tools.approvalMode` (`web/server/lib/openchamber/omp-settings-routes.js:20-156`) — that pair is the template |
 
 Two facts that shape the tasks:
@@ -55,6 +55,8 @@ Settle these before the named task; each is a choice two reasonable people could
 - **D1 — where the todo list appears (before Task 5).** (a) Only inside the `todo` tool row: cheapest, visible only in the transcript; (b) tool row *plus* a live session-level surface (status row above the composer or the existing work-status panel): survives scrolling and shows progress across calls. This plan implements (a) in Task 5 and (b) in Task 6; drop Task 6 for (a) only.
 - **D2 — how sub-agent transcripts reach the UI (before Task 7).** (a) A separate read-only viewer hung off the `task` row (no new sessions anywhere); (b) synthesize child sessions fed into the UI's existing child machinery (`child-session-discovery.ts`, `runningSubagentRuns.ts`) so the OpenCode-era UI lights up. This plan implements (a); (b) is a larger behavioural change and touches what `agentSelection:false` deliberately encodes.
 - **D3 — may the UI write `modelRoles` (before Task 9)?** Yes (mirrors the two existing knobs) or read-only with the roles shown for information. Unanswered → build the GET half and stop.
+
+**Settled by the maintainer, 2026-10-16:** D1 = tool row **and** the live surface (Tasks 5 and 6), D2 = a separate read-only viewer (Tasks 7 and 8, no synthesized child sessions), D3 = yes, the UI may write `modelRoles` (Tasks 9 and 10). Execution: **native** — the agent implements each task in one session, each task ending in its own test run and commit.
 
 ---
 
@@ -434,13 +436,13 @@ git commit -m "feat(server): expose a session's sub-agent transcripts"
 
 - [ ] **Step 1: Write the failing test**
 
-Assert `isSubagentTool("task")` is true, and that a `task` tool part carrying `<task-result id="c1" agent="scout">…</task-result>` output renders the agent name and a control that opens the transcript. (Both from the nearest existing ToolPart test harness.)
+Assert `isSubagentTool("task")` is true, and that a `task` tool part whose progress text is ``Spawned agent `WordReply`…`` plus a `hub` part carrying `{ op: "wait", jobs: [{ id: "WordReply", status: … }] }` renders the agent name and a control that opens the transcript. (Both from the nearest existing ToolPart test harness.)
 
 - [ ] **Step 2: Run it and watch it fail** — `cd packages/ui && bunx vitest run src/components/chat/message/parts/subagentTranscript.test.tsx`
 
 - [ ] **Step 3: Implement recognition, the summary and the dialog**
 
-Extend the OpenCode-era helper rather than adding a second notion: `isSubagentTool` becomes "the tool that spawns children" and gains `task`; `taskToolModel.ts` keeps parsing what it already parses and gains the `<task-result agent=…>` shape OMP emits. The dialog fetches the child's messages and renders them with the existing transcript renderer; it is read-only (there is no control to stop, start or message a sub-agent).
+Extend the OpenCode-era helper rather than adding a second notion: `isSubagentTool` becomes "the tool that spawns children" and gains `task` (and `hub`, whose job list names them); `taskToolModel.ts` keeps parsing what it already parses and gains the two shapes OMP actually emits — the ``Spawned agent `<name>`…`` progress text and the `hub` `jobs[].id` list. The dialog fetches the child's messages and renders them with the existing transcript renderer; it is read-only (there is no control to stop, start or message a sub-agent).
 
 - [ ] **Step 4: Run the UI tests**
 
@@ -557,8 +559,11 @@ git commit -m "docs(plans): record the parity verification run"
 
 _(Filled by Task 1 and Task 11; each entry states what ran and what was seen.)_
 
-- Task 1, live frames: _(pending)_
-- Task 1, role freshness: _(pending)_
+- **Task 1, live frames (run 2026-10-16, session `01a142b2-b436-706c-859a-20aaf14a0179`, OMP 18.10.4, staged CLI).** One session, two prompts, every runtime frame printed:
+  - Prompt *"Use the todo tool to record exactly two tasks…"* → **three `todo` calls, each producing only `tool_execution_start` + `tool_execution_end`; no `tool_execution_update` at all.** Todo has no partial-result channel: the reducer in Task 3 must build state from the start args and the end text, and live todo progress means re-emitting on each call, not streaming within one.
+  - Prompt *"Use the task tool to launch exactly one scout sub-agent…"* → **`task` streams `tool_execution_update` frames** whose `partialResult` is an object `{ content: [{ type: "text", text }], details: { … } }` with texts `Spawned agent \`WordReply\`…`, `Running background task WordReply…`, `Running agent WordReply…` (repeated), and finally `Background task WordReply complete.`. Task 2's projection is therefore the live channel for sub-agents, and the agent's own name appears in the text **and** in `details`/the job list.
+  - The waiting tool in this OMP version is **`hub`**, not `wait`: its args/partials carry `{ op: "wait", jobs: [{ id: "WordReply", … }] }`, and `hub` produced its own `tool_execution_update` frames while the sub-agent ran. Task 7/8 must key on `task` and `hub`, and prefer `jobs[].id`/`details` as the link to a child, falling back to the transcript's `parentSession` header.
+- Task 1, role freshness: _(pending — Step 3 not run yet)_
 - Task 11, todo row: _(pending)_
 - Task 11, sub-agent row and viewer: _(pending)_
 - Task 11, role change: _(pending)_
