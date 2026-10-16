@@ -20,6 +20,7 @@ import { z } from "zod"
 import { openChamberClient } from "@/lib/openchamber/client"
 import { GLOBAL_EVENT_DIRECTORY, syncEventSessionID, type SyncEvent } from "@/lib/agent/events"
 import { getAgentRuntime, registerSessionRuntime } from "@/lib/agent/registry"
+import { useTodoStore } from "@/stores/useTodoStore"
 import type { Metadata, Session } from "@/lib/opencode/model"
 import { getRuntimeUrlResolver } from "@/lib/runtime-url"
 import { clearRuntimeUrlAuthToken, refreshRuntimeUrlAuthToken } from "@/lib/runtime-auth"
@@ -247,6 +248,12 @@ function translateOpenchamberRuntimeFrame(payload: unknown, frameDirectory: stri
   // own server, already in the canonical vocabulary.
   const events = parsed.data.properties.events as SyncEvent[]
   for (const event of events) {
+    if (event.type === "todo.updated") {
+      // The one event this pipeline keeps outside the directory stores: a todo
+      // belongs to the session process, not to a directory's message history.
+      useTodoStore.getState().apply(event.properties.sessionID, event.properties.todo)
+      continue
+    }
     if (event.type !== "session.created") continue
     const info = event.properties.info
     // SAFETY: a session record from another runtime carries the extra identity
