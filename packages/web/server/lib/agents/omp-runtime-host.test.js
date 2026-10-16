@@ -177,6 +177,18 @@ describe('createOmpRuntimeHost', () => {
     ]);
   });
 
+  it('keeps the todo a session reported and answers it on demand', async () => {
+    const frames = [];
+    const { adapter, runtime } = createFakeAdapter();
+    const host = createOmpRuntimeHost({ adapter, broadcast: (frame) => frames.push(frame) });
+
+    const todo = { title: 'Ship', items: [{ phase: 'P', text: 'a', status: 'done' }] };
+    runtime.emit('ses_new', { type: 'todo.updated', todo });
+
+    expect(await host.getTodo('ses_new')).toEqual(todo);
+    expect(await host.getTodo('ses_never_seen')).toBeNull();
+  });
+
   it('broadcasts projected events with the session id and its directory', async () => {
     const frames = [];
     const { adapter, runtime } = createFakeAdapter();

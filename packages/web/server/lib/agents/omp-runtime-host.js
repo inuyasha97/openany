@@ -64,6 +64,10 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
   // session, so a prompt carrying a picker choice has to switch it there; this
   // keeps an unchanged choice from rewriting the session file on every prompt.
   const appliedModels = new Map();
+  // The session's todo list, as its last `todo.updated` event reported it, so
+  // the UI can ask for it when it opens a session instead of waiting for the
+  // model to touch the list again.
+  const todos = new Map();
   // A login runs on its own short-lived process and outlives the request that
   // started it, so its reply sink is kept under a synthetic id the permission
   // route can address.
@@ -135,6 +139,7 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     pendingCutIds.delete(id);
     cutTimestamps.delete(id);
     appliedModels.delete(id);
+    todos.delete(id);
     approvals.forget(id);
   };
 
@@ -175,6 +180,7 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
         timestamps.set(clientId, event.message.timestamp);
       }
     }
+    if (event.type === 'todo.updated') todos.set(sessionId, event.todo ?? null);
     let events;
     try {
       events = projectorFor(sessionId).project(sessionId, event);
@@ -186,6 +192,15 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
   });
 
   return {
+    /**
+     * The session's last known todo list, or null when this process has not
+     * seen one. A UI that just opened the session asks for it, so its progress
+     * line does not have to wait for the model to touch the list again.
+     */
+    async getTodo(sessionId) {
+      return todos.get(sessionId) ?? null;
+    },
+
     async listSessions() {
       const sessions = await runtime.listSessions();
       for (const session of sessions) announceSession(session);

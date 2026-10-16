@@ -310,6 +310,20 @@ export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
   });
 
   /**
+   * The session's last known todo list. OMP streams the list only when its
+   * `todo` tool runs, so a UI that just opened the session asks here instead of
+   * showing nothing until the model touches the list again.
+   */
+  app.get('/api/agents/omp/sessions/:id/todo', async (req, res) => {
+    if (await rejectIfDisabled(res)) return;
+    try {
+      return res.json({ todo: await (await getHost()).getTodo(req.params.id) });
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to read the OMP session todo');
+    }
+  });
+
+  /**
    * The session's busy state. OMP reports no error state: a failed turn is an
    * event on the stream (`stopReason: "error"`, `notice`, `auto_retry_*`), not
    * a status, so this route never invents one. `busy` covers compaction as well
