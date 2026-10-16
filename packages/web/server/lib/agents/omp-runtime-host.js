@@ -180,13 +180,17 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
         timestamps.set(clientId, event.message.timestamp);
       }
     }
-    if (event.type === 'todo.updated') todos.set(sessionId, event.todo ?? null);
     let events;
     try {
       events = projectorFor(sessionId).project(sessionId, event);
     } catch (error) {
       console.warn('[omp] event projection failed:', error instanceof Error ? error.message : error);
       return;
+    }
+    // The todo state is a projected event, not an OMP frame: the projector folds
+    // the tool's calls into it, so it is read after projection.
+    for (const projected of events) {
+      if (projected.type === 'todo.updated') todos.set(sessionId, projected.properties.todo ?? null);
     }
     emit(sessionId, events);
   });
@@ -331,23 +335,20 @@ export function createOmpRuntimeHost({ adapter, broadcast, now }) {
     },
 
     /**
-     * Sets the session's thinking level. OMP validates the enum and answers
-     * without the level it applied, so the caller echoes the accepted level
-     * unless the runtime reports one back.
+     * Sets the session's thinking level. OMP answers whether it accepted the
+     * level rather than the level it applied, so the caller echoes the level it
+     * asked for.
      */
     async setThinkingLevel(id, level) {
-      const applied = await runtime.setThinkingLevel(id, level);
-      return typeof applied === 'string' ? applied : level;
+      await runtime.setThinkingLevel(id, level);
+      return level;
     },
 
     cycleThinkingLevel: (id) => runtime.cycleThinkingLevel(id),
 
     async setFastMode(id, enabled) {
-      const result = await runtime.setFastMode(id, enabled);
-      if (result && typeof result === 'object') {
-        return { enabled: result.enabled === true, active: result.active === true };
-      }
-      return { enabled, active: enabled };
+      const applied = await runtime.setFastMode(id, enabled);
+      return { enabled: applied.enabled, active: applied.active };
     },
 
     getSessionStatus: (id) => runtime.getSessionStatus(id),

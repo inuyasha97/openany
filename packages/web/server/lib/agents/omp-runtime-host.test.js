@@ -177,15 +177,22 @@ describe('createOmpRuntimeHost', () => {
     ]);
   });
 
-  it('keeps the todo a session reported and answers it on demand', async () => {
+  it('keeps the todo a projected event reported and answers it on demand', async () => {
     const frames = [];
-    const { adapter, runtime } = createFakeAdapter();
+    // The projector is what folds a `todo` tool call into the event, so the test
+    // drives a real frame through it rather than handing the host the event.
+    const { adapter, runtime } = createFakeAdapter({
+      projectImpl: (sessionId, event) => (
+        event.type === 'tool_execution_start' && event.toolName === 'todo'
+          ? [{ type: 'todo.updated', properties: { sessionID: sessionId, todo: { title: 'Ship', items: [] } } }]
+          : []
+      ),
+    });
     const host = createOmpRuntimeHost({ adapter, broadcast: (frame) => frames.push(frame) });
 
-    const todo = { title: 'Ship', items: [{ phase: 'P', text: 'a', status: 'done' }] };
-    runtime.emit('ses_new', { type: 'todo.updated', todo });
+    runtime.emit('ses_new', { type: 'tool_execution_start', toolCallId: 'call_1', toolName: 'todo', args: { i: 'Ship' } });
 
-    expect(await host.getTodo('ses_new')).toEqual(todo);
+    expect(await host.getTodo('ses_new')).toEqual({ title: 'Ship', items: [] });
     expect(await host.getTodo('ses_never_seen')).toBeNull();
   });
 
