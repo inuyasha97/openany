@@ -1,3 +1,5 @@
+import fs from 'fs';
+
 import express from 'express';
 import { z } from 'zod';
 
@@ -47,6 +49,58 @@ export const TOOL_APPROVAL_MODES = ['always-ask', 'write', 'yolo'];
 const toolApprovalSchema = z.enum(TOOL_APPROVAL_MODES);
 
 const TOOL_APPROVAL_DEFAULT = 'yolo';
+
+/**
+ * The roles OMP 18.10.4 resolves models for: the chat roles first — `default`
+ * (the plain model), `smol`/`slow`/`tiny` (the cheap, thorough and smallest
+ * work OMP does on its own), `vision`, `plan`, `commit`, `memory`, `task` (its
+ * sub-agents) and `advisor` (its reviewer) — then the model-kind roles, `image`,
+ * `web`, `speech`, `dictation` and `judge`.
+ *
+ * `modelRoles` is a free-form record in OMP's schema, so a key of any other
+ * name is honoured too; this list is what the settings surface offers, and the
+ * file's own keys are added on top of it.
+ */
+export const MODEL_ROLE_NAMES = [
+  'default', 'smol', 'slow', 'vision', 'plan', 'commit', 'tiny', 'memory', 'task', 'advisor',
+  'image', 'web', 'speech', 'dictation', 'judge',
+];
+
+const modelRoleNameSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,31}$/);
+
+/** A role's model id; an empty value names no model, so it reads as unset. */
+const modelIdSchema = z.string().min(1);
+
+/** The shipped roles plus the ones this file already sets, shipped order first. */
+const knownRoles = (stored) => [
+  ...MODEL_ROLE_NAMES,
+  ...Object.keys(stored).filter((name) => !MODEL_ROLE_NAMES.includes(name)),
+];
+
+const modelRoleWriteSchema = z.object({
+  role: modelRoleNameSchema,
+  // `undefined`/`""`/`null` all mean "unset this role".
+  value: z.union([z.string(), z.null()]).optional(),
+});
+
+/**
+ * OMP's settings writer renders an empty record as a flow map — `modelRoles: {}`
+ * or `modelRoles:` with `  {}` beneath it — and `writeConfigKey` cannot add a
+ * key to that shape: the key would land after the flow line, which is not valid
+ * YAML, so the writer refuses the result and leaves the file alone. Dropping the
+ * placeholder first leaves the block empty for the key to join; besides the key
+ * itself, the container's own line is the only line this changes.
+ */
+const dropEmptyModelRolesMap = (filePath) => {
+  if (!fs.existsSync(filePath)) return;
+
+  const text = fs.readFileSync(filePath, 'utf8');
+  const next = text
+    .replace(/^modelRoles:[ \t]*\{[ \t]*\}$/m, 'modelRoles:')
+    .replace(/^modelRoles:[ \t]*\n[ \t]*\{[ \t]*\}$/m, 'modelRoles:');
+  if (next === text) return;
+  fs.writeFileSync(filePath, next, 'utf8');
+};
 
 export const registerOmpSettingsRoutes = (app, dependencies = {}) => {
   const {
@@ -152,6 +206,84 @@ export const registerOmpSettingsRoutes = (app, dependencies = {}) => {
     } catch (error) {
       console.error('[API:PUT /api/config/tool-approval] Failed to save tool approval:', error);
       res.status(500).json({ error: 'Failed to save tool approval' });
+    }
+  });
+
+  /**
+   * `GET|PUT /api/config/model-roles`.
+   *
+   * OMP's role table, `modelRoles` in the user config: each key names a role and
+   * its value is the model that role resolves to (`provider/model`, optionally
+   * `:variant`). `GET` answers one row per known role — a `null` value for every
+   * role the file does not set, which is the state the settings surface shows as
+   * "unset" — plus the file's own keys, which OMP honours even when this version
+   * does not ship the name.
+   *
+   * A write touches that one key: every other line of `config.yml` is read back
+   * and written unchanged (the file is hand-edited, so comments and ordering
+   * survive), `null`/empty removes the key, and the response reports the
+   * resulting table rather than the request.
+   */
+  const readModelRoles = () => {
+    const config = readConfigFile(resolveConfigFile()) ?? {};
+    const stored = isPlainObject(config.modelRoles) ? config.modelRoles : {};
+    const known = knownRoles(stored);
+
+    return {
+      roles: known.map((name) => {
+        const model = modelIdSchema.safeParse(stored[name]);
+        return { name, value: model.success ? model.data : null };
+      }),
+      known,
+    };
+  };
+
+  app.get('/api/config/model-roles', async (_req, res) => {
+    try {
+      res.json(readModelRoles());
+    } catch (error) {
+      console.error('[API:GET /api/config/model-roles] Failed to read model roles:', error);
+      res.status(500).json({ error: 'Failed to read model roles' });
+    }
+  });
+
+  app.put('/api/config/model-roles', parseJsonBody, async (req, res) => {
+    const parsed = modelRoleWriteSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: 'role must be a name of up to 32 letters, digits, `_` or `-` starting with a letter, and value a string or null',
+      });
+      return;
+    }
+
+    const { role } = parsed.data;
+    const requested = parsed.data.value?.trim() ?? '';
+    const value = requested === '' ? null : requested;
+
+    try {
+      const configFile = resolveConfigFile();
+      const config = readConfigFile(configFile) ?? {};
+      if (config.modelRoles !== undefined && !isPlainObject(config.modelRoles)) {
+        throw new Error('the modelRoles section is not a mapping');
+      }
+
+      const stored = isPlainObject(config.modelRoles) ? config.modelRoles : {};
+      if (!knownRoles(stored).includes(role)) {
+        res.status(400).json({ error: `role must be one of: ${MODEL_ROLE_NAMES.join(', ')} (or a role the config file already sets)` });
+        return;
+      }
+
+      // Adding a role to a table OMP wrote as an empty flow map needs the
+      // placeholder gone first; removing one leaves the placeholder alone.
+      if (value !== null && Object.keys(stored).length === 0) {
+        dropEmptyModelRolesMap(configFile);
+      }
+      writeConfigKey(configFile, ['modelRoles', role], value);
+
+      res.json({ ok: true, roles: readModelRoles().roles });
+    } catch (error) {
+      console.error('[API:PUT /api/config/model-roles] Failed to save model role:', error);
+      res.status(500).json({ error: 'Failed to save model role' });
     }
   });
 };
