@@ -1,6 +1,7 @@
 import { settingsDict } from './tr.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { modelRolesI18n } from './model-roles.i18n';
 import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
@@ -43,6 +44,7 @@ export const dict = {
   ...settingsDict,
   ...linearIssuePickerI18n.tr,
   ...linearPanelI18n.tr,
+  ...modelRolesI18n.tr,
   ...routingI18n.tr,
   ...pluginPanelI18n.tr,
   ...surfacePanelI18n.tr,

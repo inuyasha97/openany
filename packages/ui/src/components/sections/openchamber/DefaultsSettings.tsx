@@ -16,6 +16,7 @@ import {
 } from '@/components/sections/shared/SettingsSection';
 import { PermissionDefaultModeField } from './PermissionDefaultModeField';
 import { CacheRetentionRow } from './CacheRetentionRow';
+import { ModelRolesRows } from './ModelRolesRows';
 import { ToolApprovalRow } from './ToolApprovalRow';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { SettingsInfoHint } from '@/components/sections/shared/SettingsInfoHint';
@@ -436,6 +437,8 @@ export const DefaultsSettings: React.FC = () => {
               </SettingsFieldRow>
             </SettingsInset>
           </div>
+
+          <ModelRolesRows />
         </div>
       </SettingsSection>
     </>

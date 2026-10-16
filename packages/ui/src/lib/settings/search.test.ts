@@ -47,6 +47,19 @@ describe('settings search', () => {
     }
   });
 
+  test('finds the model roles table by a role name', () => {
+    for (const query of ['model roles', 'smol', 'dictation']) {
+      const results = buildSettingsSearchResults({
+        query,
+        runtimeCtx,
+        t,
+        getPageTitle: (page) => page,
+      });
+
+      expect(results.find((result) => result.id === 'sessions.model-roles')?.page).toBe('sessions');
+    }
+  });
+
   test('finds the scrollbar preference on every surface', () => {
     for (const context of [runtimeCtx, { ...runtimeCtx, isDesktop: true }, { ...runtimeCtx, isVSCode: true }, { ...runtimeCtx, isMobile: true }]) {
       const results = buildSettingsSearchResults({

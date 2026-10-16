@@ -6,7 +6,8 @@ import type { DesktopSettings } from '@/lib/desktop';
 
 type ProviderState = {
   id: string;
-  models: Array<{ id: string; variants?: Record<string, boolean> }>;
+  name: string;
+  models: Array<{ id: string; name: string; variants?: Record<string, boolean> }>;
 };
 
 type ConfigState = {
@@ -118,6 +119,7 @@ mock.module('@/components/sections/shared/SettingsSection', () => ({
   ),
   SettingsInset: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   SettingsGroupTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  SettingsControlGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   SETTINGS_CUSTOM_TRIGGER_CLASS: '',
   SETTINGS_SELECT_ROW_TRIGGER_CLASS: '',
   SETTINGS_SELECT_SIZE: 'sm',
@@ -145,7 +147,7 @@ describe('DefaultsSettings', () => {
       defaultVariant: 'high',
     };
     updateCalls.length = 0;
-    configState.providers = [{ id: 'sidecar', models: [{ id: 'model', variants: { high: true } }] }];
+    configState.providers = [{ id: 'sidecar', name: 'Sidecar', models: [{ id: 'model', name: 'Model', variants: { high: true } }] }];
     windowInstance = new Window({ url: 'http://localhost/' });
     // SAFETY: the test installs a happy-dom Window for the component and restores the original global afterward.
     Object.assign(globalThis, {
@@ -191,7 +193,7 @@ describe('DefaultsSettings', () => {
     expect(host.textContent).toContain('High');
     expect(updateCalls).toEqual([]);
 
-    configState.providers = [{ id: 'sidecar', models: [{ id: 'model', variants: { high: true } }] }];
+    configState.providers = [{ id: 'sidecar', name: 'Sidecar', models: [{ id: 'model', name: 'Model', variants: { high: true } }] }];
     await act(async () => {
       root.render(<DefaultsSettings />);
       await Promise.resolve();

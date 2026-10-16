@@ -455,6 +455,19 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['approval', 'approve', 'permission', 'permissions', 'ask', 'yolo', 'auto-approve', 'bash', 'shell', 'exec', 'dangerous'],
   },
   {
+    // One entry for the table: the rows are the roles OMP ships, which are
+    // identifiers rather than labels, so they belong in the keywords instead of
+    // in fifteen identical results.
+    id: 'sessions.model-roles',
+    page: 'sessions',
+    titleKey: 'settings.openchamber.modelRoles.title',
+    descriptionKey: 'settings.openchamber.modelRoles.info',
+    keywords: [
+      'model roles', 'role', 'modelRoles', 'default', 'smol', 'slow', 'vision', 'plan', 'commit', 'tiny',
+      'memory', 'task', 'advisor', 'image', 'web', 'speech', 'dictation', 'judge', 'subagent', 'small model',
+    ],
+  },
+  {
     id: 'sessions.permission-default',
     page: 'sessions',
     titleKey: 'settings.sessions.permissions.defaultMode',
