@@ -55,7 +55,7 @@ failure that reached a user while this table read `PASS`.
 | Permission rules from the UI | `PASS` (write) | Settings → Agents → a custom agent → **Tool Permissions** offers one row per tool (Default for all tools, Shell, Edit, Read, Glob, Grep, Patch, Webfetch, Websearch, Skill, Subagent, Question, External Directory, Openchamber…) with inherit/allow/ask/deny chips and no Save button. Clicking `ask` on the Shell row wrote `permissions: [{ action: shell, resource: "*", effect: ask }]` into `~/.omp/agent/agents/perm-probe.md` — OMP's own agent file — and the Mode row wrote `mode: primary`. The probe agent was deleted afterwards (route answered 200, the directory is empty, `config.yml` untouched). **See §I.10: OMP does not read either key.** |
 | Model `ask` form answered | `PASS` (was `FAIL`) | The model had no `ask` tool because the adapter spawned `omp --mode rpc`, where OMP's `hasUI` is false and `AskTool.createIf` therefore returns null. Spawning `--mode rpc-ui` creates it: `get_state`'s `dumpTools` went from 11 tools to 12 with `ask` added. Verified in the app — the prompt raised the form dock with "Red — The color red." / "Blue — The color blue." and `dismiss` / `submit`; choosing Red and submitting closed the dock and the turn recorded the `ask` call with that answer; §I.13. |
 | Goals / small-model affordance | `PASS` | The composer offers "Start a goal with the next message". It used to say "Goals need a Small Model…" because the small-model service saw no authenticated provider at all; that was a wiring bug (§I.15), and with it fixed and an explicit small model chosen the control resolves a model. |
-| Ask other models / multi-run | `PARTIAL` | "Ask other models" opens from the answer's Continue menu. On a fresh session's **first** answer it reads "Only the first answer of a chat can be compared for now." with cancel / **run 0 more** / Close and offers no model list, so a comparison cannot be started from it. |
+| Ask other models / multi-run | `PARTIAL` | The old reading was wrong on the important half: on this session the Continue menu's "Ask other models" opens **"Ask other models — This chat becomes the first run. Each model gets the same first prompt in its own worktree."** — no "only the first answer" restriction, and **Add model** opens the real catalog (search field, favorites section, both authenticated providers, DeepSeek/Claude families). What is still unproven is the run itself: the button stays **"Run 0 more"** (disabled) after selecting `DeepSeek V4 Flash` — scripted `click()`, a full pointer/mouse sequence and one Puppeteer click (which hung on actionability) all left it at 0 — and the run was deliberately not forced, because it would create worktrees inside the user's repository. |
 
 ## B. Chat message actions
 
@@ -65,8 +65,8 @@ failure that reached a user while this table read `PASS`.
 | Pin into context (survives compaction) | `PASS` | Pin state set on the message (`aria-pressed`). |
 | Continue from this answer → menu | `PASS` | Opens: Fork from here / Start new session from this answer / Ask other models / Start new multi-run. |
 | Fork from here | `PASS` | "Continue from this answer" → "Fork from here" created session `01a11f67-…` with `parentSessionPath` set, whose transcript holds exactly the two messages up to the cut (the `@package.json` prompt and its `0.1.2` answer) while the original still holds its nine. No dialog appeared; the fork is immediate. |
-| Start new session from this answer | `PARTIAL` | Offered by the same Continue menu (each answer exposes it). In this pass the menu item did not open a surface; the earlier pass drove it to a dialog carrying the answer as context, so the affordance is there but not re-confirmed now. |
-| Ask other models / multi-run from an answer | `PARTIAL` | The menu item opens "Ask other models — Only the first answer of a chat can be compared for now." with cancel / **run 0 more** / Close, and no model list, so nothing can be started from it. |
+| Start new session from this answer | `PASS` (was `PARTIAL`) | Re-driven and confirmed: the Continue menu's item opens the dialog **"Start new session from this answer"** with Model (`DeepSeek V4.1 Flash`), Thinking level, Agent, Instructions and **Run as goal**, plus cancel/send. Send created session `01a143d5-…` and the new transcript carries the earlier answer's content (`ready`). The earlier "did not open a surface" reading was a probe miss. |
+| Ask other models / multi-run from an answer | `PARTIAL` | Same dialog as the row above, reached from the answer's Continue menu: "This chat becomes the first run…" with **Add model** → the real catalog. **Start new multi-run from this answer** and **Fork from here** render beside it. The run count stayed at 0 for the scripted selections, so a comparison still has not been started; the run was not forced (it creates worktrees in the user's repository). |
 | Revert (undo) a message | `ABSENT` | `revert: false` — OMP keeps no file snapshots. The session's toolset (11 tools, no `checkpoint`/`rewind`) confirms there is nothing to reach for either. |
 | Per-turn file diff | `ABSENT` | `turnDiff: false`. |
 | Scroll to bottom | `PASS` | Scrolled the transcript to the top (`scrollTop 0`), clicked the control, and 2.5 s later it sat at `scrollTop 19495` with `scrollHeight 20396` and `clientHeight 901` — exactly the bottom. |
@@ -85,7 +85,7 @@ failure that reached a user while this table read `PASS`.
 | Archive session | `PASS` | Confirmation dialog "Archive session? … Cancel / Archive". |
 | Export session as Markdown | `PASS` (was `FAIL`) | A row whose folder is gone now says "This session's folder no longer exists: … OMP cannot open a session whose folder is gone." A healthy session's export was not confirmed (no download was captured). |
 | Rename | `PASS` | Menu → Rename opens an inline input ("Rename", pre-filled with the title); typing `audit-renamed` + Enter put that name in the sidebar. |
-| Rename with AI | `PARTIAL` | Driven twice in the packaged app, on an untitled session and on one whose row read "Add thinking command support": after 40 s the sidebar was unchanged, and the server's session list still held the same single non-empty title ("User asks who you are"). The probe cannot say which session the item acted on, because the sidebar renders project headers and session rows with the same class, so this stays unproven rather than broken. |
+| Rename with AI | `FAIL` | On a session whose title the server reports as `''`, with the small-model gate **open** (`GET /api/small-model` → `available: true`, `source: "settings"`), the item is enabled and clicking it closes the menu and does **nothing**: no `POST /api/small-model/generate`, no title write, no toast, no pending spinner, and the title stays `''` after 60 s. The same `generate` route answers in 6 s when called directly (`{"text":"Ready Reply Request",…}`), so the server half works and the client stops silently before its request. §I.18. |
 | Pin session | `PASS` | Menu → Pin session; the same menu then reads "Unpin session", so the state flipped. |
 | Track as in work | `PASS` | The row's "Track as in work" action moved the session under a new **in work** group in the sidebar. |
 | Move to folder | `PASS` | Present in the sidebar row's context menu, and selecting it opens the folder list: "No folders yet" with a "New folder…" row. The earlier "produced no dialog or menu" reading was taken from the header menu, which does not carry the item. |
@@ -95,9 +95,10 @@ failure that reached a user while this table read `PASS`.
 | Search sessions | `PASS` | "Search sessions" opens an input reading "Press Enter to search / Esc to clear"; typing `thinking` changed the list. |
 | Select sessions (bulk) | `PASS` | Entering the mode puts "0 selected" in the sidebar, and clicking a session row changes it to **"1 selected"**. Selection is by row click; the probe's earlier "no checkbox" reading was looking for the wrong control. |
 | Display mode: Grouped / Timeline / Manual | `PASS` | The menu lists View (Grouped/Timeline/Manual), Sort projects (A→Z/Z→A/Newest/Recent) and Sort worktrees (Recent activity/Manual); choosing **Timeline** changed the sidebar's grouping. Sorts and scope are listed but were not applied. |
-| Display mode: sort (A→Z, Newest, Recent activity) and scope (All/One project) | `PARTIAL` | The Display-mode menu opens 14 entries in the packaged app: View (Grouped / Timeline / Manual), Sort projects (A→Z / Z→A / Newest / Recent), Sort worktrees (Recent activity / Manual / A→Z), scope (All projects / One project), "Show recent section" and "Collapse all". Choosing Timeline did change the sidebar grouping, and choosing Z→A closed the menu without error, but the resulting order cannot be read here: every session in this profile is untitled and the sidebar holds one project. |
+| Display mode: sort (A→Z, Newest, Recent activity) and scope (All/One project) | `PARTIAL` | The menu opens 15 entries: View (Grouped / Timeline / Manual), Sort projects (Manual / A→Z / Z→A / Newest / Recent), Sort worktrees (Recent activity / Manual / A→Z), scope (All projects / One project), "Show recent section", "Collapse all", "Expand all". **Scope is now proven**: on a profile opened in "One project" mode the sidebar listed one session folder; choosing **All projects** revealed the second group (`~`) with its sessions. **Sort writes but was not shown to reorder**: choosing Z→A persisted `projectSortOrder: "z-a"` into the `session-display-mode` store (`localStorage` reads it back) and left the rendered order untouched — and there is only **one project header** in that profile to order, because the other sidebar group is a *session folder* (`chats`), not a project. Closing this needs a profile with two projects that both have sessions. |
 | Show more sessions (pagination) | `PASS` | Clicking it grew the sidebar from 23 to 25 rows, and the button then read "Show fewer sessions". |
-| Project menu: New session / Edit / Close project | `PARTIAL` | In the packaged app the project row exposes "Add project" beside one "Session menu" button per session row; no "Project menu" button was found on it, so the item the earlier pass saw was not reachable here. |
+| Project menu: New session / Edit / Close project | `PASS` (was `PARTIAL`) | The button exists but is **hidden until hover** (`opacity-0 pointer-events-none` unless the row is hovered/focused, or the surface is mobile/tablet) — a static snapshot cannot see it, which is why the packaged-app pass reported none. Driven here: `aria-label="Project menu"` on the project header row, and it opens **New session / Edit / Close project** (`sortableItems.tsx:184-207`; a git-repo project shows "Manage worktrees" instead of "New session"). The earlier report also had the location wrong: "Add project" sits on the sidebar toolbar, not on the project row. |
+| Session todo list (the `todo` tool row and its list) | `PASS` (was `FAIL`) | A real turn's `todo` calls (init three tasks, finish `alpha`, move to `beta`) made `GET /api/agents/omp/sessions/:id/todo` answer exactly what the tool itself reported — `alpha done`, `beta in_progress`, `gamma pending` — and reopening that session in the UI renders the row `Tasks` with `alpha`, `beta`, `gamma` under the `Todo` tool call. §I.17. |
 
 ## D. Panels
 
@@ -138,7 +139,7 @@ only enumerated, not driven.
 | Notifications | 2 | `PASS` | The toggle is gated on the browser's own permission: with `Notification.permission === "denied"` the page says "Enable Notifications — Notification permission denied. Enable it in your browser settings." and the click changes nothing. Granted notifications through CDP for the origin: the same click flipped false→**true**, revealed "Notify While App is Focused" and "send test notification", and survived a reload. Restored to off afterwards. |
 | Sessions | 15 | `PASS` (one item) | `sessions.deletion-dialog` flipped true→false and survived a reload (restored). Items: default model/thinking/agent, permission default, deletion dialog, cache retention, small model ("Use default small model" is on), walkthrough model, work (3), auto-cleanup + retention (3). |
 | Routing | 4 | `PASS` | `routing.enabled` flipped true→false and survived a reload (restored). |
-| Shortcuts | 1 | `PARTIAL` | `shortcuts.keyboard-shortcuts` renders the whole binding list with defaults (⌘+L, ⌘+I, ⌘+K T, ⌘+N, ⌘+⌥+←, …), a per-binding **edit** and a **reset all**; the edit click did not visibly enter a capture state, and reset all was not used (it would discard the user's own bindings). |
+| Shortcuts | 1 | `PASS` (was `PARTIAL`) | The page renders the whole binding list with defaults (⌘+L, ⌘+I, ⌘+K T, ⌘+N, ⌘+⌥+←, …) and every row carries **Edit** + a **reset all**. **Edit** opens the capture panel ("Press up to two key combinations, with at most three keys each…", "Press keys…", cancel / confirm). The keystroke itself cannot be typed from this harness (the capture ignores both synthetic and CDP keys, and a risky browser key such as ⌘J is refused by design), so the edit was proven on the store the capture writes: `shortcutOverrides: { focus_input: 'meta+e' }` in `ui-store` made **⌘E focus the composer**, clearing it made ⌘E a no-op while the default ⌘I still focused the composer, and **reset all** on the seeded overrides (`focus_input`, `new_session`) emptied them and put `⌘ + I` back on the row. Overrides were seeded on a throwaway profile, not the user's. |
 | Voice | 2 | `PASS` (one item) | `voice.playback` flipped false→true and survived a reload (restored); `voice.speech-recognition` needs audio. |
 | Integrations | 5 | `PASS` | `integrations.first-party` lists GitHub and Linear; the GitHub control reports the account that is actually connected — "phonnt フォン phonnt • phon.nt.2510@gmail.com • CLI Authenticated" — and Excalidraw renders as a first-party extension. Linear and the extensions were not connected. |
 | Extensions | 3 | `PASS` (form) | `extensions.add` renders its own form on the page — an input reading "/path/to/panel or https://github.com/org/panel.git", a "Browse ZIP archive" control and an "add" button. Nothing was installed. |
@@ -151,7 +152,7 @@ only enumerated, not driven.
 | Agents | 1 | `PASS` | `agents.create` opens the New Agent editor (Identity & Role with the `agent-name` field, Mode, Model & Parameters, System Prompt) — and the Tool Permissions editor appears once the agent exists, which is how §I.10 was found. |
 | Behavior | 2 | `PASS` (one item) | `behavior.response-style` flipped false→true and survived a reload (restored); `behavior.system-prompt` renders. |
 | Commands | 1 | `PASS` | `commands.create` opens the **New Command** editor beside a list of "Total 110" (built-in `/init system`, `/review system`, and custom `/add-dir`, `/advisor`, `/as-fixes`, `/caveman:caveman-init`, `/changelog`, `/compact`, …) with Command Name + scope, Description, Override Agent/Model, Thinking Variant, "Run in a child session" and a Command Template. The draft was discarded and nothing was written to `~/.omp/agent/commands/`. |
-| MCP | 1 | `PARTIAL` | `mcp.create` renders ("Add MCP server — Local command or remote URL"); the list is empty, so enable/disable is unverified. |
+| MCP | 1 | `PASS` (was `PARTIAL`) | `mcp.create` renders ("Add MCP server — Local command or remote URL") and now has something to act on: a local stdio server created through this page is listed, and its "Enable Server" checkbox writes `disabled` through `PATCH /api/config/mcp/:name` — flipped off, the route answers `disabled: true` and `mcp.json` gains `disabledServers: ["verify-echo"]`; flipped on, both clear again. |
 | Magic Prompts | 3 | `PASS` (renders) | `magic-prompts.visible-prompt` reads "Visible Prompt — Using built-in default — reset to default / save"; `magic-prompts.instructions` reads "Instructions — Placeholders: {{selected_files}}, {{recent_comm…}}" with the same reset/save pair; `magic-prompts.reset-overrides` is "reset all overrides". Nothing was saved or reset. |
 | Snippets | 1 | `PASS` | `snippets.create` opens the editor with `snippet-name`, "What this snippet does" and a trigger field ("safe, careful"); the `#` picker that consumes them is verified in section A. Nothing was saved. |
 | Skills | 1 | `PASS` | `skills.create` opens the editor with a `skill-name` field beside the skill search. Nothing was saved. |
@@ -224,7 +225,7 @@ the repackaged app, so these exercise the real main-process handlers.
 |---|---|---|
 | Model catalog read from the account's credentials | `PASS` | Real catalog returned. |
 | Provider sign-in (OAuth) | `PASS` (affordance) | Settings → Providers lists "Provider sign-in — ChatGPT Plus/Pro (Codex Subscription) — Not signed in — sign in" and "Anthropic (Claude Pro/Max) — Not signed in — sign in"; the `login` route + URL/device flow exist. The flow itself was not completed (it needs the user's account). |
-| MCP server list / enable / disable | `PARTIAL` | Settings → MCP reads "Tool servers your agents can call. Open one to see its status and settings. — No MCP servers yet. Add MCP server — Local command or remote URL". The list and the add affordance render; nothing exists to enable or disable. |
+| MCP server list / enable / disable | `PASS` (was `PARTIAL`) | Settings → MCP reads "Tool servers your agents can call. Open one to see its status and settings." A local stdio server (`node -e process.stdin.resume()` named `verify-echo`) appears as a card — `Local server`, pill `● Connected`, `node -e process.stdin.resume()` — and its detail page carries **Enable Server**; flipping it wrote `disabled: true` (and `disabledServers`) into the agent dir's `mcp.json`, flipping it back cleared both, and the user's own `~/.omp/agent/mcp.json` was never created (the check ran against an isolated `PI_CODING_AGENT_DIR`). |
 
 ## J. Method for what is still open
 
@@ -543,7 +544,7 @@ default enabled, and why the override picker had nothing to offer. The session
 routes were unaffected — they call the controller's own `getHost()` — so the app
 looked healthy while every feature behind this module was degraded.
 
-### I.16 A Windows user could not send a chat message — DIAGNOSED
+### I.16 A Windows user could not send a chat message — RESOLVED (the machine's network, not the app)
 Reported from the maintainer's Windows machine: *every* send failed with
 
 ```
@@ -780,14 +781,77 @@ omp --mode rpc     -> tools(11): read, bash, edit, eval, glob, grep, task, hub, 
 omp --mode rpc-ui  -> tools(12): read, bash, edit, ask, eval, glob, grep, task, hub, todo, web_search, write   has ask? true
 ```
 
-Fix: `rpc-client.ts` and `rpc-host.ts` spawn `--mode rpc-ui`. Verified end to
-end in the app: a prompt asking the model to ask a question raised the form dock
-with "Red — The color red." / "Blue — The color blue." and `dismiss` / `submit`;
-choosing Red and submitting closed the dock and the turn recorded the `ask` call
-with that answer. `bun test` in `packages/omp-adapter` (111) and
-`packages/web` `server/lib/agents` (91) pass.
+### I.17 The session's todo list never reached the UI — FIXED
+The `todo` tool is OMP's task list, and three separate links in the chain were
+broken at once, so **the list was invisible everywhere**: no row under the tool
+call, no `GET /api/agents/omp/sessions/:id/todo` answer.
+
+1. The adapter's reducer was written against a shape the tool does not send. It
+   treated a bare `list` as an init and read `done { task }` as "mark the item
+   the call names done". Every recorded call on this machine carries `op`
+   (457 calls: `init` 80, `done` 349, `append` 10, `block` 8, `start` 4, `drop`
+   4, `rm` 1, `view` 1), `init` takes `list: [{ phase, items }]` or a flat
+   `items`, and `done { task: "beta" }` means *finish the item being worked on
+   and work on `beta` next* — the tool's own answers show it (`Remaining items
+   (2): beta [in_progress]`, `Overall: 1/3 done`). So an `op`-carrying call
+   projected nothing and the list stayed empty.
+2. The host recorded the list from the raw OMP frame
+   (`if (event.type === 'todo.updated')`), but `todo.updated` is a *projected*
+   event — the projector is what folds the tool's calls into it. The route
+   therefore answered `null` even for a turn that called `todo` four times.
+3. The UI read the list on open from `StatusRow`, which returns `null` unless
+   the session is working — so a session reopened later showed nothing even
+   once the first two were right.
+
+Fix: the reducer reads the real op set (structure from the input, statuses from
+the tool's own answer, item names matched past the `text (phase)` rendering),
+the host records the projected `todo.updated` events, and the read on open moved
+to the chat viewport, which is mounted whenever a session is shown.
+
+Verified end to end against real OMP: a turn that ran `init` with three tasks,
+finished `alpha` and moved to `beta` made the route answer
+`alpha done / beta in_progress / gamma pending`, matching the tool's own
+`Remaining items` text line for line; reopening that session in the UI renders
+`Tasks` with `alpha`, `beta`, `gamma` under the `Todo` call. `bun test` in
+`packages/omp-adapter` (127) and `packages/web` `server/lib/agents` (107) pass,
+as do `packages/ui` `src/stores` + `src/components/chat` (184 files).
 
 
 
 
 
+
+### I.18 "Rename with AI" silently did nothing — DIAGNOSED
+The chain exists end to end and the server half works: the item renders in the
+single-session header and the sidebar (`SessionAiRenameMenuItem`), the click runs
+`useSessionAiRenameAction.run` → `useSessionAiRename.rename` →
+`runSessionTitleGeneration` → `generateAndSaveSessionTitle` →
+`POST /api/small-model/generate` → `updateSessionTitle`. Called by hand against
+the same server, `generate` answers in 6 s
+(`{"text":"Ready Reply Request","providerID":"opencode-go",…,"source":"settings"}`).
+
+Measured in the browser, on a session whose stored title is `''` and whose
+small-model gate is open (`available: true`, `source: "settings"` so the item is
+**enabled** — the earlier "disabled" reading was the store still fetching, it
+flips within a few seconds):
+
+- clicking the item closes the menu, and **no request follows** — the page's
+  resource timings hold `/api/small-model?directory=…` (the availability check)
+  and never `/api/small-model/generate`, and no session title write either;
+- no toast appears (so no throw reached `run`'s `toast.error`), the item never
+  shows its pending spinner, and the session's title record in
+  `~/.omp/agent/sessions/…/<id>.jsonl` stays `{"type":"title","v":1,"title":""}`.
+
+The only silent exits on that path are `use-session-ai-rename.ts:49`
+(`if (!directory) return`, ruled out — the item's `disabled` would be true) and
+two inside `session-title-generation.ts`: `pending.has(key)` at `:56` and
+`getRuntimeKey() !== target.runtimeKey` at `:64` — the latter fits every
+observation, because a key that never matches also never sets `pending`
+(`useSessionTitleGenerationPending` keys on the same `runtimeKey`), which is
+exactly what the UI shows. Pinning it needs one instrumentation pass over those
+two guards; the fix belongs with the guard that turns out to fire.
+
+The `Prepare` step's own failure mode is *not* silent (`No completed turns`
+reaches the toast), and the metadata guard at `generateAndSaveSessionTitle`'s
+`current.title !== session.title` return sits *after* the request, which never
+went out — so neither explains what was observed.
