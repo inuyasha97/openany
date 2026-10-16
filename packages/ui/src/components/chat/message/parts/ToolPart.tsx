@@ -41,6 +41,8 @@ import { DiffViewToggle, type DiffViewMode } from '../DiffViewToggle';
 import { MinDurationShineText } from './MinDurationShineText';
 import { ToolRevealOnMount } from './ToolRevealOnMount';
 import { getToolIcon } from './toolPresentation';
+import { TodoChecklist } from './TodoChecklist';
+import { useTodoStore } from '@/stores/useTodoStore';
 import { GuestToolTable } from './GuestToolTable';
 import type { JsonValue } from '@openchamber/sdk';
 import {
@@ -90,6 +92,7 @@ import {
     isQuestionTool,
     isShellTool,
     isSubagentTool,
+    isTodoTool,
     isWebSearchTool,
     isWriteTool,
     normalizeToolName,
@@ -1250,6 +1253,8 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
     const { t } = useI18n();
     const runtime = React.useContext(RuntimeAPIContext);
     const mobileActions = useMobileAppActions();
+    // The session's todo list, subscribed only for the tool that owns it.
+    const todo = useTodoStore((store) => (isTodoTool(part.tool) ? store.bySession.get(part.sessionID) : undefined));
     const [diffViewMode, setDiffViewMode] = React.useState<DiffViewMode>('unified');
     const stateWithData = state as ToolStateWithMetadata;
     const metadata = stateWithData.metadata;
@@ -1502,6 +1507,13 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
             }
 
             return <div className="typography-meta text-muted-foreground">{t('chat.toolPart.awaitingResponse')}</div>;
+        }
+
+        if (isTodoTool(part.tool) && todo && todo.items.length > 0) {
+            return renderScrollableBlock(
+                <TodoChecklist todo={todo} />,
+                { maxHeightClass: 'max-h-60' },
+            );
         }
 
         if (isSubagentTool(part.tool) && hasStringOutput) {

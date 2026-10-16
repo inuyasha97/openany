@@ -34,6 +34,9 @@ export const OPENCODE_TOOLS = {
   shell: "shell",
   skill: "skill",
   subagent: "subagent",
+  // OMP's task list. OpenCode's `todowrite`/`todoread` are gone with that
+  // runtime; this is the tool the model uses now.
+  todo: "todo",
   webfetch: "webfetch",
   websearch: "websearch",
   write: "write",
@@ -73,6 +76,8 @@ export const isShellTool = is(OPENCODE_TOOLS.shell)
  */
 export const isExecuteTool = is(OPENCODE_TOOLS.execute)
 export const isSubagentTool = is(OPENCODE_TOOLS.subagent)
+/** The model's own task list; OMP renders it as a checklist, not as prose. */
+export const isTodoTool = is(OPENCODE_TOOLS.todo)
 export const isQuestionTool = is(OPENCODE_TOOLS.question)
 export const isSkillTool = is(OPENCODE_TOOLS.skill)
 export const isReadTool = is(OPENCODE_TOOLS.read)

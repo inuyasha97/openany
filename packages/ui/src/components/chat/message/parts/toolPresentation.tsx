@@ -30,6 +30,9 @@ export const getToolIcon = (toolName: string, presentation?: GuestToolRule | nul
     if (tool === 'mermaid-preview') {
         return <Icon name="file-list-2" className={iconClass} />;
     }
+    if (tool === 'todo') {
+        return <Icon name="checkbox-multiple" className={iconClass} />;
+    }
     if (tool === 'edit' || tool === 'patch' || tool === 'str_replace' || tool === 'str_replace_based_edit_tool') {
         return <Icon name="pencil" className={iconClass} />;
     }
