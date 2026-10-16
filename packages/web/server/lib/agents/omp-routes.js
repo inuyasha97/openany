@@ -14,6 +14,8 @@
 import express from 'express';
 import { z } from 'zod';
 
+import { readChildMessages, readSessionChildren } from './omp-host-access.js';
+
 const parseJsonBody = express.json({ limit: '1mb' });
 // A prompt may carry base64 images (`ImageContent[]`), which overshoot the 1mb
 // the other routes need by far. Only this route gets the larger budget.
@@ -193,6 +195,36 @@ export const registerOmpRoutes = (app, { getHost, isEnabled }) => {
       return res.json(await (await getHost()).getMessages(req.params.id));
     } catch (error) {
       return respondWithError(res, error, 'Failed to read OMP messages');
+    }
+  });
+
+  /**
+   * The sub-agent transcripts this session spawned. OMP writes each one beside
+   * the session file rather than listing it as a session, so the UI cannot see
+   * them in the session list and asks here.
+   */
+  app.get('/api/agents/omp/sessions/:id/children', async (req, res) => {
+    if (await rejectIfDisabled(res)) return;
+    try {
+      const children = await readSessionChildren(req.params.id);
+      // Reading is the only way to reach the child files, so an unavailable
+      // runtime is a missing answer rather than an empty list.
+      if (!children) return res.status(503).json({ error: 'The OMP runtime is not available' });
+      return res.json({ children });
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to list OMP sub-agent transcripts');
+    }
+  });
+
+  /** One sub-agent's transcript, as the same `{ items, cursor }` page this session's messages route answers with. */
+  app.get('/api/agents/omp/sessions/:id/children/:childId/messages', async (req, res) => {
+    if (await rejectIfDisabled(res)) return;
+    try {
+      const page = await readChildMessages(req.params.id, req.params.childId);
+      if (!page) return res.status(404).json({ error: 'Unknown OMP sub-agent' });
+      return res.json(page);
+    } catch (error) {
+      return respondWithError(res, error, 'Failed to read OMP sub-agent messages');
     }
   });
 

@@ -1,7 +1,11 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import express from 'express';
 import request from 'supertest';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { configureOmpRuntimeHost } from './omp-host-access.js';
 import { registerOmpRoutes } from './omp-routes.js';
 
 const createHost = (overrides = {}) => {
@@ -469,5 +473,105 @@ describe('OMP routes', () => {
     const refused = await request(app).post('/api/agents/omp/login').send({ providerId: 'nope' });
     expect(refused.status).toBe(500);
     expect(refused.body).toEqual({ error: 'Unknown OAuth provider: nope' });
+  });
+});
+describe('OMP sub-agent transcript routes', () => {
+  const writeJsonl = (file, records) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+  };
+
+  let directory;
+  let parentFile;
+  let childrenDirectory;
+  let sessions;
+
+  beforeEach(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), 'omp-children-'));
+    parentFile = path.join(directory, '2026-10-16T10-00-00Z_aaa.jsonl');
+    childrenDirectory = path.join(directory, '2026-10-16T10-00-00Z_aaa');
+    writeJsonl(parentFile, [
+      { type: 'title', v: 1, title: '' },
+      { type: 'session', id: 'ses_a', cwd: directory },
+    ]);
+    sessions = [{ id: 'ses_a', sessionPath: parentFile, cwd: directory, title: 'A' }];
+  });
+
+  afterEach(() => {
+    configureOmpRuntimeHost(null);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const writeChild = (name, header, extra) => {
+    const file = path.join(childrenDirectory, name);
+    writeJsonl(file, [{ type: 'title', v: 1, title: '' }, header]);
+    if (extra !== undefined) fs.appendFileSync(file, extra);
+    return file;
+  };
+
+  it("lists a session's sub-agent transcripts, skipping a lock, an empty file and a foreign child", async () => {
+    const wordReply = writeChild('WordReply.jsonl', {
+      type: 'session',
+      id: 'child-1',
+      cwd: directory,
+      timestamp: '2026-10-16T10:00:05.000Z',
+      parentSession: parentFile,
+    });
+    writeChild(
+      'half-written.jsonl',
+      { type: 'session', id: 'child-2', cwd: directory, timestamp: '2026-10-16T10:00:06.000Z', parentSession: parentFile },
+      // The last line of a transcript OMP is still writing is not a record.
+      '{"type":"message","mes',
+    );
+    fs.writeFileSync(path.join(childrenDirectory, 'empty.jsonl'), '');
+    fs.writeFileSync(path.join(childrenDirectory, 'NotAnAgent.txt'), 'notes\n');
+    fs.writeFileSync(path.join(childrenDirectory, '.Scout.jsonl.lock.os'), '');
+    writeChild('Foreign.jsonl', { type: 'session', id: 'child-3', cwd: directory, parentSession: '/s/elsewhere.jsonl' });
+
+    const host = createHost({ listSessions: vi.fn(async () => sessions) });
+    configureOmpRuntimeHost(() => host);
+
+    const response = await request(createApp(host)).get('/api/agents/omp/sessions/ses_a/children');
+
+    expect(response.status).toBe(200);
+    expect(response.body.children).toHaveLength(2);
+    expect(response.body.children.map((child) => child.agent).sort()).toEqual(['WordReply', 'half-written']);
+    expect(response.body.children.find((child) => child.agent === 'WordReply')).toEqual({
+      id: 'child-1',
+      agent: 'WordReply',
+      sessionPath: wordReply,
+      startedAt: '2026-10-16T10:00:05.000Z',
+    });
+  });
+
+  it('answers 404 for a session the runtime does not know', async () => {
+    const host = createHost({ listSessions: vi.fn(async () => sessions) });
+    configureOmpRuntimeHost(() => host);
+
+    const response = await request(createApp(host)).get('/api/agents/omp/sessions/ses_missing/children');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Unknown OMP session' });
+  });
+
+  it('answers 404 for a sub-agent the session never spawned', async () => {
+    writeChild('WordReply.jsonl', { type: 'session', id: 'child-1', cwd: directory, parentSession: parentFile });
+    const host = createHost({ listSessions: vi.fn(async () => sessions) });
+    configureOmpRuntimeHost(() => host);
+
+    const response = await request(createApp(host)).get('/api/agents/omp/sessions/ses_a/children/Absent/messages');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Unknown OMP sub-agent' });
+  });
+
+  it('refuses both routes when the runtime is disabled', async () => {
+    const app = createApp(createHost(), false);
+
+    for (const route of ['/api/agents/omp/sessions/ses_a/children', '/api/agents/omp/sessions/ses_a/children/child-1/messages']) {
+      const response = await request(app).get(route);
+      expect(response.status).toBe(404);
+      expect(response.body).toEqual({ error: 'OMP runtime is disabled', disabled: true });
+    }
   });
 });

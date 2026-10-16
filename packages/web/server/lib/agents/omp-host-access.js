@@ -12,6 +12,8 @@
  * message shape, and the canonical one is the vocabulary both sides share.
  */
 
+import { listSubagentTranscripts, readSubagentMessages } from './subagent-transcripts.js';
+
 let hostProvider = null;
 
 /**
@@ -65,7 +67,45 @@ export const promptSession = async (sessionId, text, messageId, images) => {
   return host.prompt(sessionId, text, messageId, images);
 };
 
-/** Switches a session's model; `null` when the runtime is unavailable. */
+/**
+ * A session file path by id, from the runtime's own session index: the sessions
+ * root's layout is an OMP implementation detail, so the path is never
+ * constructed from an id.
+ */
+const sessionFilePath = async (host, sessionId) => {
+  const sessions = await host.listSessions();
+  const session = (Array.isArray(sessions) ? sessions : []).find((entry) => entry?.id === sessionId);
+  if (!session?.sessionPath) throw new Error(`unknown omp session: ${sessionId}`);
+  return session.sessionPath;
+};
+
+/**
+ * The sub-agent transcripts a session spawned (`listSubagentTranscripts`'s
+ * shape), or `null` when the runtime is unavailable. An id the runtime does not
+ * know rejects with the message every other session read uses, so a route can
+ * answer 404 without inventing one.
+ */
+export const readSessionChildren = async (sessionId) => {
+  const host = await getOmpRuntimeHost();
+  if (!host) return null;
+  return listSubagentTranscripts({ sessionPath: await sessionFilePath(host, sessionId) });
+};
+
+/**
+ * One sub-agent's transcript page (`{ items, cursor }`, the shape the session's
+ * own messages route answers with), or `null` when the runtime is unavailable or
+ * the session has no sub-agent under that id.
+ */
+export const readChildMessages = async (sessionId, childId) => {
+  const host = await getOmpRuntimeHost();
+  if (!host) return null;
+  const sessionPath = await sessionFilePath(host, sessionId);
+  return readSubagentMessages({ sessionPath, childId });
+};
+
+/**
+ * Switches a session's model; `null` when the runtime is unavailable.
+ */
 export const setSessionModel = async (sessionId, provider, modelId) => {
   const host = await getOmpRuntimeHost();
   if (!host) return null;
