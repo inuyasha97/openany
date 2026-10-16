@@ -63,6 +63,16 @@ export type ToolTransition =
   | { kind: "success"; output: string; attachments?: FilePart[]; metadata?: Metadata; executed: boolean; end: number }
   | { kind: "failed"; error: string; output?: string; metadata?: Metadata; executed: boolean; end: number }
 
+/** One entry of a session's todo list, as OMP's `todo` tool reports it. */
+export type TodoItem = { phase: string; text: string; status: "pending" | "in_progress" | "done" }
+
+/**
+ * A session's todo list. OMP keeps the authoritative list inside its own
+ * session process and streams nothing but the calls that touch it, so this is
+ * the projection the app keeps to show progress between them.
+ */
+export type TodoState = { title: string; items: TodoItem[] }
+
 /**
  * What OpenCode rebuilt. v2 watches its own config files and announces the
  * rebuilt slice without saying which entry changed, so each kind names the
@@ -109,6 +119,12 @@ export type SyncEvent =
   | { type: "message.part.updated"; properties: { sessionID: string; part: Part } }
   | { type: "message.part.delta"; properties: { sessionID: string; messageID: string; partID: string; field: "text" | "raw"; delta: string } }
   | { type: "message.tool.transition"; properties: { sessionID: string; messageID: string; partID: string; transition: ToolTransition } }
+  /**
+   * A session's todo list after one of OMP's `todo` calls. The list changes
+   * only when that tool runs, so this event carries the whole state rather than
+   * a patch.
+   */
+  | { type: "todo.updated"; properties: { sessionID: string; todo: TodoState } }
   | { type: "message.parts.replaced"; properties: { sessionID: string; messageID: string; parts: Part[] } }
   /** Text appended to the summary of the compaction currently running in the session. */
   | { type: "message.compaction.delta"; properties: { sessionID: string; delta: string } }

@@ -12,7 +12,8 @@
  */
 
 import type { JsonValue, Part } from "@openchamber/ui/lib/opencode/model"
-import type { SyncEvent, ToolTransition } from "@openchamber/ui/lib/agent/events"
+import type { SyncEvent, TodoState, ToolTransition } from "@openchamber/ui/lib/agent/events"
+import { createTodoReducer, type OmpTodoReducer } from "./todo-state"
 import {
   ompAssistantCompletedPatch,
   ompMessageId,
@@ -52,6 +53,8 @@ type SessionState = {
   pendingCommand?: string
   /** Creation time of the last command output, so two cannot share an id. */
   lastCommandAt?: number
+  /** The session's todo list as of the last `todo` tool call. */
+  todo?: TodoState | null
 }
 
 const partUpdated = (sessionId: string, part: Part): SyncEvent => ({
@@ -245,6 +248,37 @@ const projectToolEnd = (
 // ---------------------------------------------------------------------------
 
 /**
+ * The `todo` tool is the only place OMP's list is visible: the arguments carry
+ * the list or one status change, and the result text carries what is still
+ * open. A call re-emits the whole state, because nothing streams within one.
+ */
+const projectTodoInput = (
+  reducer: OmpTodoReducer,
+  sessionId: string,
+  state: SessionState,
+  args: Record<string, JsonValue>,
+): SyncEvent[] => {
+  const next = reducer.apply(state.todo ?? null, args)
+  if (!next) return []
+  state.todo = next
+  return [{ type: "todo.updated", properties: { sessionID: sessionId, todo: next } }]
+}
+
+const projectTodoResult = (
+  reducer: OmpTodoReducer,
+  sessionId: string,
+  state: SessionState,
+  text: string,
+): SyncEvent[] => {
+  const current = state.todo
+  if (!current) return []
+  const next = reducer.applyResult(current, text)
+  if (!next) return []
+  state.todo = next
+  return [{ type: "todo.updated", properties: { sessionID: sessionId, todo: next } }]
+}
+
+/**
  * A tool's partial output, as it arrives. OMP streams this for the long tools —
  * `task` reports ``Spawned agent `WordReply`…`` and then `Running agent …` until
  * it completes — and the sync layer already models it as a `progress`
@@ -371,6 +405,9 @@ const projectNotice = (sessionId: string, event: Extract<OmpEvent, { type: "noti
 export const createOmpEventProjector = (options: { now?: () => number } = {}): OmpEventProjector => {
   const now = options.now ?? Date.now
   const sessions = new Map<string, SessionState>()
+  // The todo state is held per session (inside `SessionState`); the reducer
+  // itself carries none.
+  const todoReducer = createTodoReducer()
   const stateFor = (sessionId: string): SessionState => {
     let state = sessions.get(sessionId)
     if (!state) {
@@ -393,10 +430,16 @@ export const createOmpEventProjector = (options: { now?: () => number } = {}): O
         return projectMessageUpdate(sessionId, state, event.message, event.assistantMessageEvent, now())
       case "message_end":
         return projectMessageEnd(sessionId, state, event.message, now())
-      case "tool_execution_start":
-        return projectToolStart(sessionId, state, event.toolCallId, event.toolName, event.args, now())
-      case "tool_execution_end":
-        return projectToolEnd(sessionId, state, event.toolCallId, event.toolName, event.result, event.isError, now())
+      case "tool_execution_start": {
+        const events = projectToolStart(sessionId, state, event.toolCallId, event.toolName, event.args, now())
+        return event.toolName === "todo" ? [...events, ...projectTodoInput(todoReducer, sessionId, state, event.args)] : events
+      }
+      case "tool_execution_end": {
+        const events = projectToolEnd(sessionId, state, event.toolCallId, event.toolName, event.result, event.isError, now())
+        return event.toolName === "todo"
+          ? [...events, ...projectTodoResult(todoReducer, sessionId, state, toolOutputText(event.result?.content))]
+          : events
+      }
       case "tool_execution_update":
         return projectToolProgress(sessionId, state, event.toolCallId, event.partialResult)
       case "auto_retry_start":

@@ -269,6 +269,49 @@ describe("OMP tool execution", () => {
     expect(p.project(sid, { type: "tool_execution_update", toolCallId: "call_1", toolName: "task", args: {}, partialResult: null })).toEqual([])
   })
 
+  test("a todo call re-emits the session's list", () => {
+    const p = projector()
+    const sid = "ses_a"
+    const call = { type: "toolCall" as const, id: "call_9", name: "todo", arguments: { i: "Ship", list: [{ phase: "P", items: ["a", "b"] }] } }
+    p.project(sid, { type: "message_start", message: assistant({ content: [call] }) })
+
+    const started = p.project(sid, {
+      type: "tool_execution_start",
+      toolCallId: "call_9",
+      toolName: "todo",
+      args: { i: "Ship", list: [{ phase: "P", items: ["a", "b"] }] },
+    })
+    expect(started.at(-1)).toEqual({
+      type: "todo.updated",
+      properties: {
+        sessionID: sid,
+        todo: { title: "Ship", items: [{ phase: "P", text: "a", status: "pending" }, { phase: "P", text: "b", status: "pending" }] },
+      },
+    })
+
+    const ended = p.project(sid, {
+      type: "tool_execution_end",
+      toolCallId: "call_9",
+      toolName: "todo",
+      result: { content: [{ type: "text", text: "Remaining items (1):\n  - b [in_progress] (P)\nOverall: 1/2 done." }] },
+    })
+    expect(ended.at(-1)).toEqual({
+      type: "todo.updated",
+      properties: {
+        sessionID: sid,
+        todo: { title: "Ship", items: [{ phase: "P", text: "a", status: "done" }, { phase: "P", text: "b", status: "in_progress" }] },
+      },
+    })
+  })
+
+  test("another tool leaves the session's list alone", () => {
+    const p = projector()
+    const sid = "ses_a"
+    p.project(sid, { type: "message_start", message: assistant({ content: [] }) })
+    const events = p.project(sid, { type: "tool_execution_start", toolCallId: "call_8", toolName: "bash", args: { command: "ls" } })
+    expect(events.some((event) => event.type === "todo.updated")).toBe(false)
+  })
+
   test("tool execution without a known assistant message is dropped", () => {
     expect(projector().project("ses_a", { type: "tool_execution_start", toolCallId: "call_1", toolName: "bash", args: {} })).toEqual([])
   })
