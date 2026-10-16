@@ -61,8 +61,13 @@ choices open to this work:
    either confirms it is done or types another prompt, which continues the same
    session as a new attempt in the same step.
 3. The sandbox is declared per workflow (`sandbox: worktree | working-tree`) and
-   defaults to `worktree`. Until worktree mode exists (P4) the schema does not
-   declare the field, so no definition can ask for behavior the code lacks.
+   is **required**: a definition that chooses no mode does not load, and the
+   person starting a run chooses the mode again for that run. As first written
+   this decision said the field defaults to `worktree` and that until P4 the
+   schema did not declare it at all; the default was withdrawn in P7
+   (`docs/superpowers/plans/2026-10-16-p7-chosen-sandbox-and-release.md`),
+   because nothing about where a run executes may be implicit — not by a parser
+   default and not by a screen that guesses.
 
 ## Goals
 
@@ -126,6 +131,7 @@ so this follows the same habit.
 id: sdlc-feature
 name: SDLC, feature work
 version: 3
+sandbox: worktree       # required: worktree | working-tree
 inputs:
   - name: request
     description: What to build, in the requester's words
@@ -158,6 +164,12 @@ steps:
 
 Field notes:
 
+- `sandbox` is required and is a declaration, not a default: `worktree` gives the
+  run its own checkout and branch, `working-tree` runs the steps in the project's
+  own checkout, and a definition that declares neither is a load error whose
+  message names the two values. The person starting a run may choose the other
+  mode for that run, and the run records the mode it actually used, which is the
+  mode its `directory` matches. A screen reports that mode; nothing re-derives it.
 - `inputs` are declared by the definition and get their values when a run is
   created. `{{name}}` in a prompt is substituted before the prompt is sent. A
   placeholder with no declared input is a load error, not an empty string.
@@ -199,10 +211,11 @@ Step states: `pending`, `running`, `waiting_confirm`, `needs_work`, `done`,
 `failed`, `skipped`, `blocked`, `interrupted`.
 
 `blocked` means the run is waiting on a person for something that is not the
-step's own verdict: a tool approval, a provider that refused the model, or a
-session whose directory is not the run's. It clears when the person answers and
-never counts as a failure, so a run stopped by a missing model does not read as
-broken.
+step's own verdict: a tool approval, a provider that refused the model, a
+session whose directory is not the run's, or — since P7 — the definition the run
+was created from having changed under it (transition 7). It clears when the
+person answers and never counts as a failure, so a run stopped by a missing model
+does not read as broken.
 
 Transitions:
 
@@ -234,6 +247,16 @@ Transitions:
    on the attempt. The run does not advance, and nothing is recorded as a failed
    step. Answering the approval in the session's permission dock, or picking a
    model that works, clears the block.
+7. A run executes the definition it was created from, so before a step runs the
+   engine re-reads the file, hashes the definition it parses the way the create
+   route did, and compares that hash with the one the run recorded when it was
+   created. A definition that changed puts the step in `blocked` with a note that
+   names the workflow and says what to do — restore the definition, or start a
+   new run — and nothing is sent to the model, so the step carries no attempt.
+   The step is not settled, so restoring the file exactly lets it run again on
+   the workflow it began with. A run whose definition is unchanged is untouched,
+   and a run created before runs carried a hash has nothing to compare and runs as
+   it always did.
 
 Consequence to keep in view: "run the whole workflow" runs until the first stop.
 Every step stops for a person on purpose — that is the point, not a gap — and so
@@ -330,10 +353,11 @@ and rebuilds from evidence instead of trusting the file:
 ```
 GET    /api/workflows/definitions                    definitions with validation errors
 GET    /api/workflows/runs                           runs for the project
-POST   /api/workflows/runs                           create a run with its input values (does not start it)
+POST   /api/workflows/runs                           create a run with its input values and its chosen sandbox (does not start it)
 GET    /api/workflows/runs/:runId                    full state: steps and their attempts
 POST   /api/workflows/runs/:runId/run                run until the next stop
 POST   /api/workflows/runs/:runId/cancel
+POST   /api/workflows/runs/:runId/sandbox/release    remove the run's checkout; body { deleteUncommitted?, confirmed? }
 DELETE /api/workflows/runs/:runId                    the run file only; commits, artifacts and sessions stay
 POST   /api/workflows/runs/:runId/steps/:id/run      run this step
 POST   /api/workflows/runs/:runId/steps/:id/prompt   another prompt in the same session
@@ -344,6 +368,24 @@ POST   /api/workflows/runs/:runId/steps/:id/confirm  done | not_done | skip
 Deleting a run removes one run file whose id the caller had to name. It does not
 delete commits, artifacts, or the sessions the run created, and no route deletes
 a session by pattern.
+
+Releasing a run's checkout is the one route that deletes files, and it is a
+destructive action that says so. The engine writes no commit, so a step whose
+prompt asked for none has left its output only in that checkout, and the removal
+takes the directory with it. The release therefore refuses a checkout that still
+holds uncommitted work, and the refusal names the paths — in its message and as
+`uncommitted` in the body — which is what a screen offers to delete. The deletion
+happens only through a request that asks for it (`deleteUncommitted: true`) and
+repeats the paths the person was shown (`confirmed`): the removal proceeds only
+when a fresh status read is exactly that set, and the answer names what it deleted
+as `deleted`, so the screen can say what went rather than only that something did.
+A `confirmed` list that no longer matches is refused, naming what changed, with
+the fresh paths beside it; a list the person never saw confirms nothing and is
+refused the same way. A checkout whose status cannot be read is refused whether or
+not the flag is present — the override changes what happens to a dirty answer,
+never what a failed read means. An in-flight run is refused because it is still
+writing there. The branch is deliberately left behind: the checkout is tidiness,
+the branch is the work.
 
 Frames of type `openchamber:workflow` are broadcast on
 `/api/openchamber/events`, following `openchamber:omp`. Screens update from the
@@ -361,7 +403,10 @@ no workflow yet, with an empty state that points at the definition directory; a
 "Configure panels" dialog can hide or reorder it.
 
 - Run list: each run's workflow and version, status, current step, sandbox, and
-  last update, with actions to open, continue, cancel or delete.
+  last update, with actions to open, continue, cancel or delete. Starting a run
+  asks for the definition's required inputs and for the mode, both pre-filled from
+  the definition, and sends what the person chose; a run started as the other mode
+  records that choice, and no screen claims otherwise afterwards.
 - Run detail: the step sequence down the left with a status color per step and
   the selected step on the right. The timeline is built from theme tokens and
   not from a diagram renderer, because live status changes on every frame and
@@ -370,7 +415,11 @@ no workflow yet, with an empty state that points at the definition directory; a
   results with real command output, each artifact with its digest and each
   command with its exit code and output; the prompt box for "prompt tiếp"; and
   the four actions. A `done` step shows that record — its evidence is what was
-  verified, and it holds no commit.
+  verified, and it holds no commit. Releasing a `worktree` run's checkout is
+  offered from here: a dirty checkout's refusal is shown with its paths, and the
+  destructive path is a second control that states how many files it will delete
+  and opens a confirmation. Only the confirmed request carries the flag, and the
+  count and the paths come from the refusal, never re-derived on the client.
 - Definition diagram: a separate read-only tab that draws the declared workflow
   with `beautiful-mermaid`, already a dependency. It describes structure, not
   live state.
@@ -413,10 +462,24 @@ until someone asks for it.
 
 ### P4: worktree sandbox
 
-- The `sandbox` field with `worktree` as the default, worktree and branch
-  creation per run, and the merge back as an explicit final step.
+- The `sandbox` field, worktree and branch creation per run, and the merge back
+  as an explicit final step. P4 shipped the field with a parser default of
+  `worktree`; P7 withdrew the default, made the field required, and added the
+  choice taken when a run is created.
 - Validation: one run in each mode, and a measurement of worktree setup cost
-  (dependency install, build cache) before `worktree` ships as the default.
+  (dependency install, build cache) so that a person who chooses `worktree` knows
+  what it costs.
+
+### P6/P7: the engine's git behaviour and the three later decisions
+
+- P6 took the engine out of git: a step's work is committed only if that step's
+  prompt asks the agent for it.
+- P7 gave the release its destructive path (with the count and the confirmation),
+  made the sandbox a choice taken per run, and made a run notice that the
+  definition it began with changed.
+- Validation: each of the three driven on a running server against a real `omp`
+  and a scratch git repository; the observed bodies and on-disk state are recorded
+  in `docs/agent-host/FUNCTION-STATUS.md` §K.
 
 ### P5: definition authoring (deferred)
 
@@ -427,7 +490,9 @@ until someone asks for it.
 
 - Server tests cover the transitions that can go wrong: a verifier that passes and
   a step that still waits for a person, a definition that still declares `confirm`
-  rejected at load, the human stop, a continue prompt in the same session, a
+  rejected at load, a definition that chooses no sandbox rejected at load, a
+  definition edited between two steps blocking the next one, a release that would
+  delete uncommitted work, the human stop, a continue prompt in the same session, a
   refused prompt, an interrupted step, a recorded artifact whose hash no longer
   matches, and one run per project. Verifiers are tested
   against temporary directories: hashing, glob matching, timeout, expected exit
@@ -454,8 +519,9 @@ until someone asks for it.
   only waiting for a person to pick a model.
 - Artifacts that get regenerated change their hash. Hashing has to stay limited
   to artifacts meant to be stable, or a passing step reads as broken.
-- A worktree per run is expensive on a large repository. Measuring the setup cost
-  belongs in P4, before the default lands.
+- A worktree per run is expensive on a large repository. P4 measured the setup
+  cost; since P7 the mode is the person's own choice at run start, so the cost is
+  one they weigh rather than one that arrives by default.
 - `promptSession` answers `true` or `null`, and a scheduled task treats the send
   as the end of the task. Copying that pattern would mark steps done that never
   ran; the engine waits for the turn.
