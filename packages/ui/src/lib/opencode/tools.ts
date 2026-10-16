@@ -37,6 +37,10 @@ export const OPENCODE_TOOLS = {
   // OMP's task list. OpenCode's `todowrite`/`todoread` are gone with that
   // runtime; this is the tool the model uses now.
   todo: "todo",
+  // OMP spawns a sub-agent through `task` and waits on it through `hub`, whose
+  // `jobs[].id` names the agents. OpenCode v2 called the spawn `subagent`.
+  task: "task",
+  hub: "hub",
   webfetch: "webfetch",
   websearch: "websearch",
   write: "write",
@@ -75,7 +79,20 @@ export const isShellTool = is(OPENCODE_TOOLS.shell)
  * called is `metadata.toolCalls`.
  */
 export const isExecuteTool = is(OPENCODE_TOOLS.execute)
-export const isSubagentTool = is(OPENCODE_TOOLS.subagent)
+/**
+ * The tool that spawns children: OpenCode v2's `subagent` and OMP's `task`.
+ * Both open a sub-agent session the row can list and read; neither is a
+ * different kind of call, only the newer name for it.
+ */
+export const isSubagentTool = (toolName: ToolName): boolean => {
+  const name = normalizeToolName(toolName)
+  return name === OPENCODE_TOOLS.subagent || name === OPENCODE_TOOLS.task
+}
+/**
+ * OMP's wait/status tool. It spawns nothing: the `jobs` it carries name the
+ * agents the turn is waiting on, so its row shows them the way a task row does.
+ */
+export const isSubagentStatusTool = is(OPENCODE_TOOLS.hub)
 /** The model's own task list; OMP renders it as a checklist, not as prose. */
 export const isTodoTool = is(OPENCODE_TOOLS.todo)
 export const isQuestionTool = is(OPENCODE_TOOLS.question)
@@ -143,6 +160,10 @@ const inputSchema = z
     query: optionalText,
     url: optionalText,
     code: optionalText,
+    // OMP's `hub` waits on sub-agents: `op` says what it does, `jobs` lists the
+    // agents it is waiting on.
+    op: optionalText,
+    jobs: z.array(z.unknown()).optional().catch(undefined),
     questions: z.array(z.unknown()).optional().catch(undefined),
   })
   .catch({})
@@ -367,7 +388,13 @@ export function toolDescription(
 
     // "A short 3-5 word label for the task, displayed to the user".
     case OPENCODE_TOOLS.subagent:
+    case OPENCODE_TOOLS.task:
       return text(parsed.description) ?? text(parsed.agent)
+
+    // The waiting tool says what it waits for; the agents themselves are the
+    // row's sub-agent list, not its description.
+    case OPENCODE_TOOLS.hub:
+      return text(parsed.op)
 
     case OPENCODE_TOOLS.patch: {
       const reported = toolFileDiffs(metadata).map((file) => file.file)

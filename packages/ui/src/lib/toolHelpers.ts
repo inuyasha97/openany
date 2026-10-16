@@ -121,6 +121,26 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
       { key: 'agent', label: 'Agent', type: 'text' }
     ]
   },
+  // OMP's names for the same call: `task` spawns the sub-agent, `hub` waits on
+  // it. Both read as the sub-agent row so the two surfaces agree.
+  task: {
+    displayName: 'Agent Task',
+    category: 'ai',
+    outputLanguage: 'markdown',
+    inputFields: [
+      { key: 'description', label: 'Task', type: 'text' },
+      { key: 'prompt', label: 'Instructions', type: 'text' },
+      { key: 'agent', label: 'Agent', type: 'text' }
+    ]
+  },
+  hub: {
+    displayName: 'Agent Task',
+    category: 'ai',
+    outputLanguage: 'text',
+    inputFields: [
+      { key: 'op', label: 'Operation', type: 'text' }
+    ]
+  },
 
   webfetch: {
     displayName: 'Fetch URL',

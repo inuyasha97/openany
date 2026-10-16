@@ -5,8 +5,11 @@ import {
     buildTaskSummaryEntriesFromSession,
     parseTaskMetadataBlock,
     prepareTaskToolOutput,
+    readHubJobNames,
+    readProgressAgentName,
     readTaskSessionIdFromRecord,
     readTaskSessionIdFromOutput,
+    readToolProgressText,
     resolveRunningTaskChildSessionId,
 } from './taskToolModel';
 import { TOOL_OUTPUT_MAX_CHARS } from '../toolRenderers';
@@ -56,6 +59,38 @@ describe('taskToolModel', () => {
     test('leaves normal task output untouched', () => {
         expect(prepareTaskToolOutput('done\n<task_metadata>{"sessionID":"child-1"}</task_metadata>')).toBe('done');
         expect(prepareTaskToolOutput(undefined)).toBe('');
+    });
+
+    test('reads the live status line OMP streams for a sub-agent', () => {
+        // The payload OMP's `tool_execution_update` actually carries.
+        expect(readToolProgressText({ content: [{ type: 'text', text: 'Running agent X…' }] })).toBe('Running agent X…');
+        expect(readToolProgressText({
+            content: [{ type: 'text', text: 'Spawned agent `WordReply`…' }],
+            details: { jobs: [{ id: 'WordReply' }] },
+        })).toBe('Spawned agent `WordReply`…');
+        // Anything else answers nothing rather than a wrong line.
+        expect(readToolProgressText({ content: [] })).toBe(undefined);
+        expect(readToolProgressText({ content: [{ type: 'image', text: 'not text' }] })).toBe(undefined);
+        expect(readToolProgressText({ content: [{ type: 'text', text: '   ' }] })).toBe(undefined);
+        expect(readToolProgressText('plain string')).toBe(undefined);
+        expect(readToolProgressText(undefined)).toBe(undefined);
+    });
+
+    test('names the agent a progress line is about', () => {
+        expect(readProgressAgentName('Spawned agent `WordReply`…')).toBe('WordReply');
+        expect(readProgressAgentName('Running agent scout…')).toBe('scout');
+        expect(readProgressAgentName('Running background task WordReply…')).toBe('WordReply');
+        expect(readProgressAgentName(undefined)).toBe(undefined);
+        expect(readProgressAgentName('Background task WordReply complete.')).toBe('WordReply');
+    });
+
+    test('reads the agents a hub call waits on', () => {
+        expect(readHubJobNames({ op: 'wait', jobs: [{ id: 'WordReply' }, { id: 'scout', status: 'running' }] }))
+            .toEqual(['WordReply', 'scout']);
+        expect(readHubJobNames({ op: 'wait' })).toEqual([]);
+        expect(readHubJobNames({ jobs: [{ status: 'running' }] })).toEqual([]);
+        expect(readHubJobNames('wait')).toEqual([]);
+        expect(readHubJobNames(undefined)).toEqual([]);
     });
 
     test('unwraps the task result envelope and preserves the result Markdown exactly', () => {

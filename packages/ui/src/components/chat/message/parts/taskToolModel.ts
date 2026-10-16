@@ -1,5 +1,7 @@
+import { z } from 'zod';
+
 import type { MessageRecord } from '@/lib/messageCompletion';
-import type { Part, Session, ToolInput } from '@/lib/opencode/model';
+import type { JsonValue, Part, Session, ToolInput } from '@/lib/opencode/model';
 
 import { isSubagentTool, normalizeToolName } from '@/lib/opencode/tools';
 
@@ -31,6 +33,58 @@ export const readTaskSessionIdFromRecord = (value: unknown): string | undefined 
     if (!value || typeof value !== 'object') return undefined;
     const record = value as Record<string, unknown>;
     return normalizeSessionIdCandidate(record.sessionID) ?? normalizeSessionIdCandidate(record.sessionId);
+};
+
+/**
+ * The live status a tool reported while it ran. OMP's `tool_execution_update`
+ * payload is `{ content: [{ type: "text", text }], details: { … } }`, and the
+ * adapter stores the payload whole under `metadata.partial`; only the text
+ * content is the status line a row shows (`Spawned agent \`WordReply\`…`,
+ * `Running agent WordReply…`).
+ */
+const toolProgressPayloadSchema = z.looseObject({
+    content: z.array(z.looseObject({
+        type: z.string(),
+        text: z.string().optional(),
+    })).optional(),
+});
+
+/** The progress text of a partial-result payload, or `undefined` when it carries none. */
+export const readToolProgressText = (payload: JsonValue | undefined): string | undefined => {
+    const parsed = toolProgressPayloadSchema.safeParse(payload);
+    if (!parsed.success) return undefined;
+    for (const entry of parsed.data.content ?? []) {
+        const text = entry.type === 'text' ? entry.text?.trim() : undefined;
+        if (text) return text;
+    }
+    return undefined;
+};
+
+// OMP names the agent it is working on inside the status line, in backticks
+// (`Spawned agent \`WordReply\`…`) or bare after the noun (`Running agent
+// WordReply…`).
+const PROGRESS_AGENT_PATTERNS = [/`([^`]+)`/, /\b(?:agent|task)\s+([\w.:-]+)/i];
+
+/** The agent a progress line names, so the row can mark that sub-agent as the active one. */
+export const readProgressAgentName = (text: string | undefined): string | undefined => {
+    if (!text) return undefined;
+    for (const pattern of PROGRESS_AGENT_PATTERNS) {
+        const name = text.match(pattern)?.[1]?.trim();
+        if (name) return name;
+    }
+    return undefined;
+};
+
+/** OMP's `hub` carries the jobs it waits on as `{ op: "wait", jobs: [{ id: "AgentName" }] }`. */
+const hubJobsSchema = z.looseObject({
+    jobs: z.array(z.looseObject({ id: z.string().min(1) })).optional(),
+});
+
+/** The agents a `hub` call waits on (`jobs[].id`), in the order it named them. */
+export const readHubJobNames = (value: JsonValue | undefined): string[] => {
+    const parsed = hubJobsSchema.safeParse(value);
+    if (!parsed.success) return [];
+    return (parsed.data.jobs ?? []).map((job) => job.id);
 };
 
 /**

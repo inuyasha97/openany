@@ -10,6 +10,7 @@ import {
   isExplorationTool,
   isFileChangeTool,
   isShellTool,
+  isSubagentStatusTool,
   isSubagentTool,
   isWebTool,
   normalizeToolName,
@@ -24,7 +25,11 @@ describe("tool identity", () => {
     expect(isShellTool("shell")).toBe(true)
     expect(isShellTool("bash")).toBe(false)
     expect(isSubagentTool("subagent")).toBe(true)
-    expect(isSubagentTool("task")).toBe(false)
+    // OMP spawns the same child through `task`, and waits on it through `hub`.
+    expect(isSubagentTool("task")).toBe(true)
+    expect(isSubagentTool("hub")).toBe(false)
+    expect(isSubagentStatusTool("hub")).toBe(true)
+    expect(isSubagentStatusTool("task")).toBe(false)
     expect(isFileChangeTool("patch")).toBe(true)
     expect(isFileChangeTool("apply_patch")).toBe(false)
     expect(isExplorationTool("list")).toBe(false)
@@ -84,6 +89,10 @@ describe("tool row description", () => {
   test("subagent shows the 3-5 word label the model wrote", () => {
     expect(toolDescription("subagent", { agent: "Explore", description: "Find the tool renderers" }, undefined))
       .toEqual({ kind: "text", value: "Find the tool renderers" })
+    // OMP's `task` takes the same arguments, and `hub` describes the wait it does.
+    expect(toolDescription("task", { agent: "scout", description: "Map the stores" }, undefined))
+      .toEqual({ kind: "text", value: "Map the stores" })
+    expect(toolDescription("hub", { op: "wait" }, undefined)).toEqual({ kind: "text", value: "wait" })
   })
 
   test("file tools show their path, patch shows its files", () => {

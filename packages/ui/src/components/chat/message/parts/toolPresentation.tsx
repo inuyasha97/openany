@@ -78,7 +78,7 @@ export const getToolIcon = (toolName: string, presentation?: GuestToolRule | nul
     if (tool === 'skill') {
         return <Icon name="book" className={iconClass} />;
     }
-    if (tool === 'subagent') {
+    if (tool === 'subagent' || tool === 'task' || tool === 'hub') {
         return <Icon name="ai-agent" className={iconClass} />;
     }
     if (tool === 'openchamber') {

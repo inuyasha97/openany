@@ -57,11 +57,14 @@ import {
     normalizeTaskSummaryEntries,
     parseTaskMetadataBlock,
     prepareTaskToolOutput,
+    readHubJobNames,
     readTaskSessionIdFromOutput,
     readTaskSessionIdFromRecord,
+    readToolProgressText,
     resolveRunningTaskChildSessionId,
     type TaskToolSummaryEntry,
 } from './taskToolModel';
+import { SubagentList } from './SubagentTranscript';
 import { areRenderRelevantPartsEqual } from '../renderCompare';
 import { useI18n } from '@/lib/i18n';
 import {
@@ -91,6 +94,7 @@ import {
     isPatchTool,
     isQuestionTool,
     isShellTool,
+    isSubagentStatusTool,
     isSubagentTool,
     isTodoTool,
     isWebSearchTool,
@@ -1010,7 +1014,13 @@ const TaskToolSummary: React.FC<{
     input?: Record<string, unknown>;
     animateTailText?: boolean;
     isActive?: boolean;
-}> = ({ entries, isExpanded, isMobile, output, sessionId, onShowPopup, input, animateTailText = true, isActive = false }) => {
+    /** The session whose sub-agent transcripts this row lists. */
+    parentSessionId?: string;
+    /** The status line OMP reported for this call while it runs. */
+    progressText?: string;
+    /** Agents a `hub` call named, before the server lists their transcripts. */
+    jobNames?: string[];
+}> = ({ entries, isExpanded, isMobile, output, sessionId, onShowPopup, input, animateTailText = true, isActive = false, parentSessionId, progressText, jobNames }) => {
     const { t } = useI18n();
     const currentDirectory = useEffectiveDirectory();
     const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
@@ -1047,12 +1057,25 @@ const TaskToolSummary: React.FC<{
         ? input.agent
         : 'subagent';
 
+    // The row's sub-agent roster. It comes from the parent session, not from
+    // this call, so it is the same read while the call is still running and
+    // once it settled, and a `subagent` part with no join of its own still
+    // lists what the session spawned.
+    const subagentList = parentSessionId ? (
+        <SubagentList
+            sessionId={parentSessionId}
+            progressText={progressText}
+            jobNames={jobNames}
+        />
+    ) : null;
+
     if (entries.length === 0 && !hasOutput && !sessionId) {
         return (
             <div className="relative pr-2 pb-2 pt-2 space-y-2 pl-[1.4375rem]">
                 <div className="typography-meta text-muted-foreground/70">
                     {isActive ? 'Waiting for subagent activity...' : 'No subagent session id on task metadata.'}
                 </div>
+                {subagentList}
             </div>
         );
     }
@@ -1065,6 +1088,8 @@ const TaskToolSummary: React.FC<{
                 'before:top-[-0.25rem] before:bottom-0'
             )}
         >
+            {subagentList}
+
             {entries.length > 0 ? (
                 <TaskSummaryEntriesList
                     entries={entries}
@@ -1970,6 +1995,20 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
         }
         return metadataTaskSummaryEntries;
     }, [childSessionTaskSummaryEntries, metadataTaskSummaryEntries]);
+
+    // OMP streams a sub-agent's status while the call runs and stores the whole
+    // payload under `metadata.partial` (Task 2's progress transition).
+    const subagentProgressText = React.useMemo(
+        () => (isTaskTool && state.status === 'running' ? readToolProgressText(metadata?.partial) : undefined),
+        [isTaskTool, metadata, state.status],
+    );
+    // `hub` is the call that waits: its job list names the agents, which is the
+    // only way to know them before the server lists their transcripts.
+    const subagentJobNames = React.useMemo(() => {
+        if (!isSubagentStatusTool(normalizedPartTool)) return [];
+        const named = readHubJobNames(input);
+        return named.length > 0 ? named : readHubJobNames(metadata?.partial);
+    }, [input, metadata, normalizedPartTool]);
     const diffStats = React.useMemo(() => {
         return (isEditTool(normalizedPartTool) || isPatchTool(normalizedPartTool))
             ? parseDiffStats(metadata)
@@ -2319,6 +2358,9 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                     input={input}
                     animateTailText={animateTailText}
                     isActive={isActive}
+                    parentSessionId={part.sessionID}
+                    progressText={subagentProgressText}
+                    jobNames={subagentJobNames}
                 />
             ) : null}
 
