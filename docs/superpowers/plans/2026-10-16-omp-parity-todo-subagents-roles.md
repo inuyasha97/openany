@@ -97,7 +97,7 @@ git commit -m "docs(plans): verify the OMP surfaces this plan builds on"
 
 **Interfaces:**
 - Consumes: OMP frame `{ type: "tool_execution_update"; toolCallId; toolName; args; partialResult }` (already in the union, `model.ts:100`).
-- Produces: canonical event `{ type: "tool_progress"; sessionID: string; messageID: string; toolCallId: string; tool: string; text: string }`, where `text` is `partialResult` rendered as text (`toolOutputText` when it is a content list, `String(partialResult)` otherwise) and empty strings are not emitted.
+- Produces: the tool part's state carries the partial payload as a `message.tool.transition` with `{ kind: "progress", metadata: { partial: <OMP's payload> } }`, emitted only while its state is `running` and skipped when the payload is empty. **Implemented this way** — no new canonical event was needed: the sync layer already models `progress` (`packages/ui/src/lib/agent/events.ts:59-64`) and its reducer already writes `transition.metadata` onto the part (`sync/event-reducer.ts:252`), so the frame reaches the part with no UI reducer change. The payload travels whole under `partial` because the `details` half carries the job/agent identifiers Task 8 links on.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -564,6 +564,7 @@ _(Filled by Task 1 and Task 11; each entry states what ran and what was seen.)_
   - Prompt *"Use the task tool to launch exactly one scout sub-agent…"* → **`task` streams `tool_execution_update` frames** whose `partialResult` is an object `{ content: [{ type: "text", text }], details: { … } }` with texts `Spawned agent \`WordReply\`…`, `Running background task WordReply…`, `Running agent WordReply…` (repeated), and finally `Background task WordReply complete.`. Task 2's projection is therefore the live channel for sub-agents, and the agent's own name appears in the text **and** in `details`/the job list.
   - The waiting tool in this OMP version is **`hub`**, not `wait`: its args/partials carry `{ op: "wait", jobs: [{ id: "WordReply", … }] }`, and `hub` produced its own `tool_execution_update` frames while the sub-agent ran. Task 7/8 must key on `task` and `hub`, and prefer `jobs[].id`/`details` as the link to a child, falling back to the transcript's `parentSession` header.
 - Task 1, role freshness: _(pending — Step 3 not run yet)_
+- **Task 2 (implemented, native execution).** `tool_execution_update` is now projected: `model.ts:100` types `partialResult` as `JsonValue` (it is OMP's JSON for the tool), `mapping-events.ts` gained `projectToolProgress` plus the `tool_execution_update` case, and the payload rides the existing `progress` transition. Adapter tests **117/117 pass**, `dist` rebuilt, `oxlint` reports no finding on any added line (the three findings in these files are pre-existing lines 315/361 in `mapping-events.ts` and the `OmpModelInfo` declaration). The two new tests assert the transition shape and that an empty payload is not one; before the change the frame fell into the switch's `default` branch, which returns `[]` by design ("tool progress … does not model").
 - Task 11, todo row: _(pending)_
 - Task 11, sub-agent row and viewer: _(pending)_
 - Task 11, role change: _(pending)_

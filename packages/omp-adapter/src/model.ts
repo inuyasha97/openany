@@ -97,7 +97,7 @@ export type OmpEvent =
   | { type: "message_update"; message: OmpAssistantMessage; assistantMessageEvent: OmpAssistantStreamEvent }
   | { type: "message_end"; message: OmpMessage }
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: Record<string, JsonValue> }
-  | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: Record<string, JsonValue>; partialResult: unknown }
+  | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: Record<string, JsonValue>; partialResult: JsonValue }
   | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: OmpToolResult | undefined; isError?: boolean }
   | { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string; errorId?: number }
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }

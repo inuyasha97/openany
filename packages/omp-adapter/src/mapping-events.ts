@@ -244,6 +244,29 @@ const projectToolEnd = (
 // Compaction and retries
 // ---------------------------------------------------------------------------
 
+/**
+ * A tool's partial output, as it arrives. OMP streams this for the long tools —
+ * `task` reports ``Spawned agent `WordReply`…`` and then `Running agent …` until
+ * it completes — and the sync layer already models it as a `progress`
+ * transition, so the tool part carries the payload while its state is `running`.
+ *
+ * The payload travels whole under `partial`: it is OMP's JSON for the tool
+ * (`{ content: [{ type: "text", text }], details: { … } }` for `task`), and the
+ * `details` half carries the job and agent identifiers the UI needs to link a
+ * row to the sub-agent that is running.
+ */
+const projectToolProgress = (
+  sessionId: string,
+  state: SessionState,
+  toolCallId: string,
+  partialResult: JsonValue,
+): SyncEvent[] => {
+  const messageID = state.assistantMessageID
+  if (!messageID) return []
+  if (partialResult === null || partialResult === "") return []
+  return [toolTransition(sessionId, messageID, toolCallId, { kind: "progress", metadata: { partial: partialResult } })]
+}
+
 const compactionMessage = (
   sessionId: string,
   event: Extract<OmpEvent, { type: "auto_compaction_end" }>,
@@ -374,6 +397,8 @@ export const createOmpEventProjector = (options: { now?: () => number } = {}): O
         return projectToolStart(sessionId, state, event.toolCallId, event.toolName, event.args, now())
       case "tool_execution_end":
         return projectToolEnd(sessionId, state, event.toolCallId, event.toolName, event.result, event.isError, now())
+      case "tool_execution_update":
+        return projectToolProgress(sessionId, state, event.toolCallId, event.partialResult)
       case "auto_retry_start":
         return [{
           type: "session.status",

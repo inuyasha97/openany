@@ -238,6 +238,37 @@ describe("OMP tool execution", () => {
     ])
   })
 
+  test("a tool's partial output lands on the part while it runs", () => {
+    const p = projector()
+    const sid = "ses_a"
+    const call = { type: "toolCall" as const, id: "call_1", name: "task", arguments: { prompt: "reply DONE" } }
+    const message = assistant({ content: [call] })
+    const id = ompMessageId(sid, "assistant", STAMP)
+    p.project(sid, { type: "message_start", message })
+    p.project(sid, { type: "tool_execution_start", toolCallId: "call_1", toolName: "task", args: { prompt: "reply DONE" } })
+
+    // OMP's shape for a running sub-agent: the text half reads, and the details
+    // half names the job the UI has to link the row to.
+    const partial = {
+      content: [{ type: "text", text: "Running agent WordReply..." }],
+      details: { op: "wait", jobs: [{ id: "WordReply" }] },
+    }
+    expect(p.project(sid, { type: "tool_execution_update", toolCallId: "call_1", toolName: "task", args: {}, partialResult: partial })).toEqual([
+      { type: "message.tool.transition", properties: { sessionID: sid, messageID: id, partID: "call_1", transition: { kind: "progress", metadata: { partial } } } },
+    ])
+  })
+
+  test("an empty partial output is not a transition", () => {
+    const p = projector()
+    const sid = "ses_a"
+    const call = { type: "toolCall" as const, id: "call_1", name: "task", arguments: {} }
+    const message = assistant({ content: [call] })
+    p.project(sid, { type: "message_start", message })
+
+    expect(p.project(sid, { type: "tool_execution_update", toolCallId: "call_1", toolName: "task", args: {}, partialResult: "" })).toEqual([])
+    expect(p.project(sid, { type: "tool_execution_update", toolCallId: "call_1", toolName: "task", args: {}, partialResult: null })).toEqual([])
+  })
+
   test("tool execution without a known assistant message is dropped", () => {
     expect(projector().project("ses_a", { type: "tool_execution_start", toolCallId: "call_1", toolName: "bash", args: {} })).toEqual([])
   })
