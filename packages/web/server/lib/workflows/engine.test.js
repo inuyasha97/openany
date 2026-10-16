@@ -10,6 +10,7 @@ const definitionText = `
 id: two-step
 name: Two step
 version: 1
+sandbox: worktree
 inputs:
   - name: request
     required: true
@@ -126,6 +127,7 @@ const autoPermissionsDefinition = parseDefinition(`
 id: two-step
 name: Two step
 version: 1
+sandbox: worktree
 steps:
   - id: first
     prompt: "Write out/one.md"
@@ -307,6 +309,7 @@ describe('startStep', () => {
 id: two-step
 name: Two step
 version: 1
+sandbox: worktree
 steps:
   - id: first
     prompt: "one"

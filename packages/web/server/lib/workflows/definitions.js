@@ -106,9 +106,13 @@ export const parseDefinition = (rawText, { file = 'unknown.yaml' } = {}) => {
   if (!isWorkflowId(raw.id)) errors.push({ field: 'id', message: 'must be lowercase words, dots or dashes' });
   if (!isText(raw.name)) errors.push({ field: 'name', message: 'is required' });
   if (!Number.isInteger(raw.version) || raw.version < 1) errors.push({ field: 'version', message: 'must be a positive integer' });
-  // Where the run executes is a declaration, not a preference: a value the
-  // engine does not know would silently change what a person asked for.
-  if (raw.sandbox !== undefined && !['worktree', 'working-tree'].includes(raw.sandbox)) {
+  // Where the run executes is a declaration, not a preference: the field is
+  // required, because a definition that leaves it out would have the engine
+  // choose a mode on the author's behalf, and a value the engine does not know
+  // would silently change what a person asked for.
+  if (raw.sandbox === undefined) {
+    errors.push({ field: 'sandbox', message: 'is required: choose "worktree" or "working-tree"' });
+  } else if (!['worktree', 'working-tree'].includes(raw.sandbox)) {
     errors.push({ field: 'sandbox', message: 'must be "worktree" or "working-tree"' });
   }
 
@@ -193,13 +197,11 @@ export const parseDefinition = (rawText, { file = 'unknown.yaml' } = {}) => {
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
-    // A definition written before this field existed means `worktree`: every run
-    // records the mode it actually used, so an old run keeps reading the way it ran.
     definition: {
       id: raw.id,
       name: raw.name,
       version: raw.version,
-      sandbox: raw.sandbox === 'working-tree' ? 'working-tree' : 'worktree',
+      sandbox: raw.sandbox,
       inputs: normalizedInputs,
       steps,
       file,

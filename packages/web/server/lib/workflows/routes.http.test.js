@@ -135,6 +135,25 @@ describe('workflow routes', () => {
     expect(calls[0][1].sandbox).toBe('worktree');
   });
 
+  it('records the mode the caller chose, not the one the definition declares', async () => {
+    const { app, calls } = createApp({
+      definitions: { list: async () => [], read: async () => ({ id: 'a', version: 1, sandbox: 'worktree', inputs: [], steps: [{ id: 'first' }] }) },
+    });
+    const response = await request(app).post('/api/workflows/runs').set(SCOPE).send({ workflowId: 'a', sandbox: 'working-tree' });
+    expect(response.status).toBe(201);
+    expect(calls[0][1].sandbox).toBe('working-tree');
+  });
+
+  it('refuses a mode that is not one of the two', async () => {
+    const { app, calls } = createApp({
+      definitions: { list: async () => [], read: async () => ({ id: 'a', version: 1, sandbox: 'worktree', inputs: [], steps: [{ id: 'first' }] }) },
+    });
+    const response = await request(app).post('/api/workflows/runs').set(SCOPE).send({ workflowId: 'a', sandbox: 'container' });
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'sandbox must be "worktree" or "working-tree"' });
+    expect(calls).toEqual([]);
+  });
+
   it('refuses a run whose required input has no value', async () => {
     const { app } = createApp({
       definitions: { list: async () => [], read: async () => ({ id: 'a', version: 1, inputs: [{ name: 'request', required: true }], steps: [{ id: 'first' }] }) },
@@ -374,6 +393,7 @@ describe('workflow routes', () => {
 const SOURCE = `id: two-step
 name: Two steps
 version: 1
+sandbox: worktree
 steps:
   - id: first
     prompt: "Do the first thing."
@@ -401,7 +421,7 @@ describe('workflow definition routes', () => {
     const response = await request(app)
       .put('/api/workflows/definitions/two-step')
       .set(SCOPE)
-      .send({ raw: 'id: two-step\nname: Two steps\nversion: 1\nsteps: []\n' });
+      .send({ raw: 'id: two-step\nname: Two steps\nversion: 1\nsandbox: worktree\nsteps: []\n' });
 
     expect(response.status).toBe(400);
     expect(response.body.error).toBe('steps: must be a non-empty list');

@@ -291,6 +291,15 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
         else if (input.required) return res.status(400).json({ error: `input "${input.name}" is required` });
       }
 
+      // The person starting a run may choose where it executes; when they do,
+      // that choice is what the run records, and the definition's declaration is
+      // only the pre-selection the screen offered them. A mode the engine does
+      // not know is refused here rather than recorded for the sandbox to guess at.
+      const chosenSandbox = req.body?.sandbox;
+      if (chosenSandbox !== undefined && !['worktree', 'working-tree'].includes(chosenSandbox)) {
+        return res.status(400).json({ error: 'sandbox must be "worktree" or "working-tree"' });
+      }
+
       const run = {
         runId: crypto.randomUUID(),
         projectId: scope.projectId,
@@ -301,7 +310,7 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
         inputs,
         status: 'idle',
         cursor: definition.steps[0].id,
-        sandbox: definition.sandbox,
+        sandbox: chosenSandbox ?? definition.sandbox,
         steps: definition.steps.map((step) => ({ id: step.id, status: 'pending', attempts: [], note: null })),
       };
       return res.status(201).json({ run: await store.create(run) });

@@ -6,10 +6,12 @@
  * artifacts stay in the project, so the dialog says so.
  *
  * A definition may declare inputs, and the create route rejects a missing
- * required one; the start dialog collects them before the run exists, and a
- * definition with no inputs starts on one click. A failure shows inside the
- * dialog that asked for the action, so it is never hidden behind the overlay;
- * the list banner carries a failure that happened with no dialog open.
+ * required one; the start dialog collects them before the run exists, and it
+ * also asks where the run executes, pre-selected from the definition's own
+ * declaration — the mode is chosen for every run, never defaulted. A failure
+ * shows inside the dialog that asked for the action, so it is never hidden
+ * behind the overlay; the list banner carries a failure that happened with no
+ * dialog open.
  *
  * Each definition carries both actions a person takes on it: start a run, and
  * open its YAML in the editor. The second one lives here because a definition
@@ -24,7 +26,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Icon } from '@/components/icon/Icon';
 import { Input } from '@/components/ui/input';
-import { createWorkflowRun, deleteWorkflowRun, type WorkflowDefinitionSummary, type WorkflowRun } from '@/lib/workflowsApi';
+import { Radio } from '@/components/ui/radio';
+import { createWorkflowRun, deleteWorkflowRun, type WorkflowDefinitionSummary, type WorkflowRun, type WorkflowSandbox } from '@/lib/workflowsApi';
 import { useWorkflowStore } from '@/stores/useWorkflowStore';
 import { describeRunStatus } from '@/lib/workflows/status';
 import type { ProjectRef } from '@/lib/projectContextApi';
@@ -49,9 +52,12 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
   const [error, setError] = useState<string | null>(null);
   // The run whose delete is being confirmed; the dialog asks before anything is removed.
   const [pendingDelete, setPendingDelete] = useState<WorkflowRun | null>(null);
-  // The definition whose start is being set up, once it declares inputs.
+  // The definition whose start is being set up.
   const [startFor, setStartFor] = useState<WorkflowDefinitionSummary | null>(null);
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  // The mode this run executes in, pre-selected from the definition's
+  // declaration and sent with the create so the run records the choice.
+  const [sandbox, setSandbox] = useState<WorkflowSandbox>('worktree');
   // A row with no `id` is a file that does not parse: there is no declared
   // workflow to start a run of, but it is still a file this screen can open.
   const missingRequired = startFor
@@ -71,11 +77,11 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
 
   // Resolves true when the run was created; on a failure the dialog stays open
   // and the message renders inside it.
-  const start = async (definition: WorkflowDefinitionSummary, inputs: Record<string, string>): Promise<boolean> => {
+  const start = async (definition: WorkflowDefinitionSummary, inputs: Record<string, string>, mode: WorkflowSandbox): Promise<boolean> => {
     setBusy(true);
     setError(null);
     try {
-      const run = await createWorkflowRun(project.path, { workflowId: definition.id as string, inputs });
+      const run = await createWorkflowRun(project.path, { workflowId: definition.id as string, inputs, sandbox: mode });
       setRun(project, run);
       onSelect(run.runId);
       setStartFor(null);
@@ -90,11 +96,10 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
 
   const beginStart = (definition: WorkflowDefinitionSummary) => {
     setError(null);
-    if (definition.inputs.length === 0) {
-      void start(definition, {});
-      return;
-    }
+    // The dialog asks for the mode even when the definition declares no input:
+    // where a run executes is a choice, so it is never started without one.
     setInputValues({});
+    setSandbox(definition.sandbox ?? 'worktree');
     setStartFor(definition);
   };
 
@@ -210,6 +215,21 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
             <DialogDescription>{startFor?.name ?? startFor?.id}</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
+            {/* Where the run executes: asked for every run, with the definition's
+                own declaration pre-selected, so the mode is a choice rather than
+                a default the engine applies. */}
+            <div role="radiogroup" aria-label={t('workflows.run.startSandbox')} className="flex flex-col gap-2">
+              <span className="text-muted-foreground">{t('workflows.run.startSandbox')}</span>
+              {(['worktree', 'working-tree'] as const).map((mode) => {
+                const label = mode === 'worktree' ? t('workflows.run.startSandboxWorktree') : t('workflows.run.startSandboxWorkingTree');
+                return (
+                  <label key={mode} className="flex items-center gap-2 text-xs">
+                    <Radio checked={sandbox === mode} onChange={() => setSandbox(mode)} ariaLabel={label} />
+                    <span>{label}</span>
+                  </label>
+                );
+              })}
+            </div>
             {startFor?.inputs.map((input) => (
               <label key={input.name} className="flex flex-col gap-1 text-xs">
                 <span className="text-muted-foreground">{input.description || input.name}</span>
@@ -231,7 +251,7 @@ export const RunList = ({ runs, definitions, selectedRunId, onSelect, onEditDefi
               disabled={busy || missingRequired}
               onClick={() => {
                 if (!startFor) return;
-                void start(startFor, inputValues);
+                void start(startFor, inputValues, sandbox);
               }}
             >
               {t('workflows.run.startConfirm')}

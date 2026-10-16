@@ -72,6 +72,12 @@ describe('createWorkflowRun', () => {
     expect(calls[0].init.method).toBe('POST');
     expect(JSON.parse(String(calls[0].init.body))).toEqual({ workflowId: 'a', inputs: { request: 'x' } });
   });
+
+  it('sends the mode the person chose, so the run records their choice', async () => {
+    responses = [{ status: 201, body: { run: { runId: 'r1', steps: [] } } }];
+    await createWorkflowRun('/Users/me/project', { workflowId: 'a', inputs: {}, sandbox: 'working-tree' });
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ workflowId: 'a', inputs: {}, sandbox: 'working-tree' });
+  });
 });
 
 describe('releaseWorkflowSandbox', () => {

@@ -45,7 +45,7 @@ describe('createWorkflowRuntime', () => {
     await fs.mkdir(path.join(projectPath, '.openchamber/workflows'), { recursive: true });
     await fs.writeFile(
       path.join(projectPath, '.openchamber/workflows/a.yaml'),
-      'id: a\nname: A\nversion: 1\nsteps:\n  - id: first\n    prompt: "do it"\n',
+      'id: a\nname: A\nversion: 1\nsandbox: worktree\nsteps:\n  - id: first\n    prompt: "do it"\n',
     );
     await runtime.store.create({
       runId: '11111111-2222-4333-8444-555555555555',
@@ -88,7 +88,7 @@ describe('createWorkflowRuntime', () => {
     await fs.mkdir(path.join(projectPath, '.openchamber/workflows'), { recursive: true });
     await fs.writeFile(
       path.join(projectPath, '.openchamber/workflows/a.yaml'),
-      'id: a\nname: A\nversion: 1\nsteps:\n  - id: first\n    prompt: "do it"\n    permissions: auto\n',
+      'id: a\nname: A\nversion: 1\nsandbox: worktree\nsteps:\n  - id: first\n    prompt: "do it"\n    permissions: auto\n',
     );
     const runId = '22222222-2222-4333-8444-555555555555';
     await runtime.store.create({

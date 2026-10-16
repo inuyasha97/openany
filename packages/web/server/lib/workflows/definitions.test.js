@@ -9,6 +9,7 @@ const valid = `
 id: sdlc-feature
 name: SDLC, feature work
 version: 3
+sandbox: worktree
 inputs:
   - name: request
     description: What to build
@@ -48,11 +49,17 @@ describe('parseDefinition', () => {
     expect(verify.verify.commands[0].expectExit).toBe(0);
   });
 
-  it('defaults the sandbox to worktree and rejects an unknown one', () => {
+  it('refuses a definition that does not choose a sandbox', () => {
+    const result = parseDefinition(valid.replace('sandbox: worktree\n', ''), { file: 'a.yaml' });
+    expect(result.ok).toBe(false);
+    expect(result.errors).toEqual([{ field: 'sandbox', message: 'is required: choose "worktree" or "working-tree"' }]);
+  });
+
+  it('keeps the declared sandbox and rejects an unknown one', () => {
     expect(parseDefinition(valid, { file: 'a.yaml' }).definition.sandbox).toBe('worktree');
-    const explicit = parseDefinition(`${valid}\nsandbox: working-tree\n`, { file: 'a.yaml' });
+    const explicit = parseDefinition(valid.replace('sandbox: worktree', 'sandbox: working-tree'), { file: 'a.yaml' });
     expect(explicit.definition.sandbox).toBe('working-tree');
-    const bad = parseDefinition(`${valid}\nsandbox: container\n`, { file: 'a.yaml' });
+    const bad = parseDefinition(valid.replace('sandbox: worktree', 'sandbox: container'), { file: 'a.yaml' });
     expect(bad.ok).toBe(false);
     expect(bad.errors).toEqual([{ field: 'sandbox', message: 'must be "worktree" or "working-tree"' }]);
   });

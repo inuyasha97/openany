@@ -251,7 +251,10 @@ export const fetchWorkflowRuns = async (directory: string): Promise<WorkflowRun[
 export const fetchWorkflowRun = async (directory: string, runId: string): Promise<WorkflowRun> =>
   (await request<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}`, directory)).run;
 
-export const createWorkflowRun = async (directory: string, value: { workflowId: string; inputs?: Record<string, string> }): Promise<WorkflowRun> =>
+export const createWorkflowRun = async (
+  directory: string,
+  value: { workflowId: string; inputs?: Record<string, string>; sandbox?: WorkflowSandbox },
+): Promise<WorkflowRun> =>
   (await post<{ run: WorkflowRun }>('/api/workflows/runs', directory, value)).run;
 
 export const runWorkflow = async (directory: string, runId: string): Promise<WorkflowRun> =>
