@@ -1,5 +1,7 @@
 import React from "react";
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import { Icon } from "@/components/icon/Icon";
+import { useTodoStore } from '@/stores/useTodoStore';
 import { WorkingPlaceholder } from "./message/parts/WorkingPlaceholder";
 
 // The floating assistant-status chip that hovers above the composer while the
@@ -34,6 +36,18 @@ export const StatusRow: React.FC<StatusRowProps> = ({
   providerId,
 }) => {
   const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
+
+  // The session's todo list, plus a read on open: the stream only carries a
+  // list when the model touches it, so a session opened later would otherwise
+  // show nothing until the next `todo` call.
+  const todo = useTodoStore((state) => (currentSessionId ? state.bySession.get(currentSessionId) : undefined));
+  React.useEffect(() => {
+    if (currentSessionId) void useTodoStore.getState().load(currentSessionId);
+  }, [currentSessionId]);
+
+  const todoDone = todo?.items.filter((item) => item.status === 'done').length ?? 0;
+  const todoCurrent = todo?.items.find((item) => item.status === 'in_progress')
+    ?? todo?.items.find((item) => item.status === 'pending');
 
   const shouldRenderPlaceholder = !abortActive;
   const hasContent = isWorking;
@@ -70,6 +84,20 @@ export const StatusRow: React.FC<StatusRowProps> = ({
             />
           ) : null}
         </div>
+        {todo && todo.items.length > 0 ? (
+          <>
+            <span className="text-muted-foreground/50" aria-hidden>·</span>
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <Icon name="checkbox-multiple" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              {/* The model's own list: a ratio and the item it is on, so the chip
+                  needs no copy of its own. */}
+              <span className="tabular-nums text-muted-foreground">{todoDone}/{todo.items.length}</span>
+              {todoCurrent ? (
+                <span className="min-w-0 max-w-[24ch] truncate text-muted-foreground/80">{todoCurrent.text}</span>
+              ) : null}
+            </span>
+          </>
+        ) : null}
       </div>
     </div>
   );
