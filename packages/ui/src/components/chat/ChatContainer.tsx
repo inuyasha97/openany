@@ -8,6 +8,7 @@ import { MobileCommentComposerContext, useMobileCommentComposerOwner } from './c
 import { DraftPresetChips } from './DraftPresetChips';
 import { useInputStore } from '@/sync/input-store';
 import { useUIStore } from '@/stores/useUIStore';
+import { useTodoStore } from '@/stores/useTodoStore';
 import { Skeleton } from '@/components/ui/skeleton';
 import ChatEmptyState from './ChatEmptyState';
 import { useGlobalSyncStore } from '@/sync/global-sync-store';
@@ -250,6 +251,12 @@ const ChatViewport = React.memo(({
     onLoadEarlierPrompts,
 }: ChatViewportProps) => {
     const { t } = useI18n();
+    // The stream only carries a todo list when the model touches it, so a
+    // session opened later reads it once from the server. This runs here rather
+    // than in the status row, which only mounts while the session is working.
+    React.useEffect(() => {
+        if (currentSessionId) void useTodoStore.getState().load(currentSessionId);
+    }, [currentSessionId]);
     const promptPreviewsByTurnIdRef = React.useRef<Map<string, Part[]>>(new Map());
     // Cache normalized parts per source array so unchanged messages keep the
     // same reference and the memo below can bail out to the previous map.

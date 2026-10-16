@@ -37,13 +37,9 @@ export const StatusRow: React.FC<StatusRowProps> = ({
 }) => {
   const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
 
-  // The session's todo list, plus a read on open: the stream only carries a
-  // list when the model touches it, so a session opened later would otherwise
-  // show nothing until the next `todo` call.
+  // The session's todo list, read once on open by the chat viewport: the stream
+  // only carries a list when the model touches it.
   const todo = useTodoStore((state) => (currentSessionId ? state.bySession.get(currentSessionId) : undefined));
-  React.useEffect(() => {
-    if (currentSessionId) void useTodoStore.getState().load(currentSessionId);
-  }, [currentSessionId]);
 
   const todoDone = todo?.items.filter((item) => item.status === 'done').length ?? 0;
   const todoCurrent = todo?.items.find((item) => item.status === 'in_progress')
