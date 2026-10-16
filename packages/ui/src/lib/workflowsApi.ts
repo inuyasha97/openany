@@ -261,24 +261,41 @@ export const cancelWorkflowRun = async (directory: string, runId: string): Promi
   (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/cancel`, directory)).run;
 
 /**
+ * What a release answers: the run, and the paths the removal deleted. `deleted`
+ * is `null` when nothing was deleted, which is every release of a checkout that
+ * held no uncommitted work.
+ */
+export interface WorkflowSandboxRelease {
+  run: WorkflowRun;
+  deleted: string[] | null;
+}
+
+/**
  * Remove a finished run's checkout. The branch is left behind, so this is
  * tidy-up, not a merge; the server refuses while the run is still going.
  *
  * A checkout that holds uncommitted work is refused, with the paths in the
  * refusal, because removing it would delete work no commit preserved.
- * `deleteUncommitted` is that deletion asked for on purpose — the caller sends
- * it only after a person has confirmed the count the refusal named.
+ * `deleteUncommitted` is that deletion asked for on purpose, and `confirmed` is
+ * the paths the person was shown — the server deletes only when a fresh status
+ * read is exactly them, and refuses, deleting nothing, when the checkout changed
+ * in between. The answer names the paths it deleted, which are gone from disk by
+ * the time a screen could read the run.
  */
 export const releaseWorkflowSandbox = async (
   directory: string,
   runId: string,
-  options: { deleteUncommitted?: boolean } = {},
-): Promise<WorkflowRun> =>
-  (await post<{ run: WorkflowRun }>(
-    `/api/workflows/runs/${encodeURIComponent(runId)}/sandbox/release`,
-    directory,
-    options.deleteUncommitted === true ? { deleteUncommitted: true } : {},
-  )).run;
+  options: { deleteUncommitted?: boolean; confirmed?: string[] } = {},
+): Promise<WorkflowSandboxRelease> => {
+  const payload: { deleteUncommitted?: boolean; confirmed?: string[] } = {};
+  if (options.deleteUncommitted === true) {
+    payload.deleteUncommitted = true;
+    // Sent only with the decision to delete: a path list on its own would read
+    // as consent nobody gave.
+    if (options.confirmed) payload.confirmed = options.confirmed;
+  }
+  return post<WorkflowSandboxRelease>(`/api/workflows/runs/${encodeURIComponent(runId)}/sandbox/release`, directory, payload);
+};
 
 export const runWorkflowStep = async (directory: string, runId: string, stepId: string): Promise<WorkflowRun> =>
   (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/run`, directory)).run;

@@ -34,7 +34,7 @@ const createApp = (overrides = {}) => {
       confirmStep: async (value) => { calls.push(['confirmStep', value]); return run; },
       verifyStep: async () => run,
       cancelRun: async () => run,
-      releaseSandbox: async (value) => { calls.push(['releaseSandbox', value]); return run; },
+      releaseSandbox: async (value) => { calls.push(['releaseSandbox', value]); return { run, deleted: null }; },
     },
     resolveProjectId: () => 'proj-1',
     projectPathFromId: () => '/tmp/proj',
@@ -169,19 +169,34 @@ describe('workflow routes', () => {
     expect(response.status).toBe(200);
     // The project path is forwarded with the run, because releasing a checkout
     // needs the repository the worktree belongs to. A body that says nothing
-    // about deleting uncommitted work asks for exactly what it always did.
-    expect(calls[0]).toEqual(['releaseSandbox', { projectId: 'proj-1', projectPath: '/tmp/proj', runId: '11111111-2222-4333-8444-555555555555', deleteUncommitted: false }]);
-    expect(response.body).toEqual({ run });
+    // about deleting uncommitted work asks for exactly what it always did, and
+    // confirms nothing.
+    expect(calls[0]).toEqual(['releaseSandbox', {
+      projectId: 'proj-1',
+      projectPath: '/tmp/proj',
+      runId: '11111111-2222-4333-8444-555555555555',
+      deleteUncommitted: false,
+      confirmed: null,
+    }]);
+    // The answer carries what the removal deleted beside the run, because the
+    // paths are gone from disk by the time a screen could read the run.
+    expect(response.body).toEqual({ run, deleted: null });
   });
 
-  it('asks the engine to delete the uncommitted work only when the body says so', async () => {
+  it('asks the engine to delete the uncommitted work only when the body says so, and forwards the paths it confirmed', async () => {
     const { app, calls } = createApp();
     const response = await request(app)
       .post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/sandbox/release')
       .set(SCOPE)
-      .send({ deleteUncommitted: true });
+      .send({ deleteUncommitted: true, confirmed: ['out/one.md', 'notes.txt'] });
     expect(response.status).toBe(200);
-    expect(calls[0]).toEqual(['releaseSandbox', { projectId: 'proj-1', projectPath: '/tmp/proj', runId: '11111111-2222-4333-8444-555555555555', deleteUncommitted: true }]);
+    expect(calls[0]).toEqual(['releaseSandbox', {
+      projectId: 'proj-1',
+      projectPath: '/tmp/proj',
+      runId: '11111111-2222-4333-8444-555555555555',
+      deleteUncommitted: true,
+      confirmed: ['out/one.md', 'notes.txt'],
+    }]);
   });
 
   it('refuses a deleteUncommitted that is not a boolean', async () => {
@@ -197,6 +212,32 @@ describe('workflow routes', () => {
     // A malformed body is answered before the engine is reached, so nothing was
     // asked to delete anything.
     expect(calls).toEqual([]);
+  });
+
+  it('refuses a confirmed list that is not an array of paths', async () => {
+    const { app, calls } = createApp();
+    for (const value of ['out/one.md', 1, ['out/one.md', 2], { path: 'out/one.md' }]) {
+      const response = await request(app)
+        .post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/sandbox/release')
+        .set(SCOPE)
+        .send({ deleteUncommitted: true, confirmed: value });
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'confirmed must be an array of paths or absent' });
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it('answers what the removal deleted, so a screen can say what went', async () => {
+    const { app } = createApp({
+      engine: { releaseSandbox: async () => ({ run: { ...run, worktreeReleasedAt: 42 }, deleted: ['out/one.md'] }) },
+    });
+    const response = await request(app)
+      .post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/sandbox/release')
+      .set(SCOPE)
+      .send({ deleteUncommitted: true, confirmed: ['out/one.md'] });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ run: { ...run, worktreeReleasedAt: 42 }, deleted: ['out/one.md'] });
   });
 
   it('carries the uncommitted paths of a release refusal beside its message', async () => {

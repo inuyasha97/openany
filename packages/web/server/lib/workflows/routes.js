@@ -347,20 +347,38 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     return runId ? engine.cancelRun({ projectId, runId }) : undefined;
   }));
 
-  app.post('/api/workflows/runs/:runId/sandbox/release', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {
+  app.post('/api/workflows/runs/:runId/sandbox/release', parseJsonBody, withProject(async ({ projectId, projectPath, req }, res) => {
     const runId = runIdOf(req, res);
     if (!runId) return undefined;
     // The one thing that may delete uncommitted work is a request that says so,
     // and it says so with a boolean: a truthy string would read as consent the
     // person never gave, so anything that is not a boolean or absent is refused
-    // before the engine is reached.
+    // before the engine is reached. `confirmed` is the paths the person was
+    // shown, and the engine deletes only when a fresh status read is exactly
+    // them; a list that is not paths names nothing and is refused here.
     const deleteUncommitted = req.body?.deleteUncommitted;
     if (deleteUncommitted !== undefined && typeof deleteUncommitted !== 'boolean') {
       const error = new Error('deleteUncommitted must be a boolean or absent');
       error.status = 400;
       throw error;
     }
-    return engine.releaseSandbox({ projectId, projectPath, runId, deleteUncommitted: deleteUncommitted === true });
+    const confirmed = req.body?.confirmed;
+    if (confirmed !== undefined && (!Array.isArray(confirmed) || confirmed.some((entry) => typeof entry !== 'string'))) {
+      const error = new Error('confirmed must be an array of paths or absent');
+      error.status = 400;
+      throw error;
+    }
+    const released = await engine.releaseSandbox({
+      projectId,
+      projectPath,
+      runId,
+      deleteUncommitted: deleteUncommitted === true,
+      confirmed: confirmed ?? null,
+    });
+    // This route answers what the removal deleted beside the run, not the plain
+    // `{ run }` envelope: the deleted paths are gone from disk, so the answer is
+    // the only place a screen can learn what went.
+    return res.json(released);
   }));
 
   app.post('/api/workflows/runs/:runId/steps/:stepId/run', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {

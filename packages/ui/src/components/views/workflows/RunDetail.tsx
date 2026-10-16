@@ -44,9 +44,13 @@ export const RunDetail = ({ run, project, definition, definitionsLoaded, onEditD
   const [releasing, setReleasing] = useState(false);
   // The paths a refusal named, and whether their deletion is being confirmed.
   // Both come from the one refusal, so the count a person confirms is the count
-  // the removal will act on.
+  // the removal will act on — and the server deletes only when its own fresh
+  // read is still exactly that set.
   const [uncommitted, setUncommitted] = useState<string[] | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // What a destructive release deleted, named by the server's answer. The paths
+  // are gone from disk, so this answer is the only place they can be read.
+  const [released, setReleased] = useState<string[] | null>(null);
   const setRun = useWorkflowStore((state) => state.setRun);
 
   // The parent swaps the `run` prop when a person selects another run, without
@@ -59,6 +63,7 @@ export const RunDetail = ({ run, project, definition, definitionsLoaded, onEditD
     setError(null);
     setUncommitted(null);
     setConfirmingDelete(false);
+    setReleased(null);
   }
   const runStatus = describeRunStatus(run.status, t);
 
@@ -89,21 +94,31 @@ export const RunDetail = ({ run, project, definition, definitionsLoaded, onEditD
     setReleasing(true);
     setError(null);
     try {
-      const updated = await releaseWorkflowSandbox(project.path, full.runId, { deleteUncommitted });
+      // The paths a person confirmed travel with the request: the server deletes
+      // only when a fresh read is exactly this set, so a checkout that changed
+      // since the refusal is refused rather than deleted silently.
+      const answer = await releaseWorkflowSandbox(project.path, full.runId, {
+        deleteUncommitted,
+        confirmed: deleteUncommitted ? uncommitted ?? [] : undefined,
+      });
       // The store keeps the truth for the list and the next read; `full` is what
       // this pane renders, so the answer lands there too and the control stops
       // offering a release that has already happened.
-      setRun(project, updated);
-      setFull(updated);
+      setRun(project, answer.run);
+      setFull(answer.run);
       setUncommitted(null);
       setConfirmingDelete(false);
+      setReleased(answer.deleted?.length ? answer.deleted : null);
     } catch (failure) {
-      // A refusal that named the uncommitted work is the offer to delete it. The
-      // paths come from that refusal — not from a second status read, which could
-      // disagree with the read the deletion will make — so what the person
-      // confirms is exactly what the removal acts on.
-      if (failure instanceof WorkflowRequestError && failure.uncommitted?.length) setUncommitted(failure.uncommitted);
+      // A refusal that named the uncommitted work is the offer to delete it, and
+      // one that named none — a status read that failed, say — must clear the
+      // offer: a stale list would otherwise keep stating a count from a checkout
+      // nobody has re-read. The list is always replaced, never kept.
+      setUncommitted(failure instanceof WorkflowRequestError && failure.uncommitted?.length ? failure.uncommitted : null);
       setError(failure instanceof Error ? failure.message : t('workflows.error.actionFailed'));
+      // The pane's strip sits behind the modal, so a failed deletion closes the
+      // dialog: the person has to be somewhere the reason is readable.
+      if (deleteUncommitted) setConfirmingDelete(false);
     } finally {
       setReleasing(false);
     }
@@ -154,6 +169,20 @@ export const RunDetail = ({ run, project, definition, definitionsLoaded, onEditD
         </Button>
       </div>
       {error ? <div role="status" className="px-3 py-2 text-xs text-destructive">{error}</div> : null}
+      {/* What a destructive release deleted, where the person is looking: the
+          paths are gone from disk, so the answer is the only record of them. */}
+      {released && released.length > 0 ? (
+        <div role="status" className="border-b border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          <div>
+            {released.length === 1
+              ? t('workflows.run.releaseDeletedOne')
+              : t('workflows.run.releaseDeletedMany', { count: released.length })}
+          </div>
+          <ul className="mt-1 max-h-24 overflow-y-auto font-mono text-[11px]">
+            {released.map((file) => <li key={file} className="truncate">{file}</li>)}
+          </ul>
+        </div>
+      ) : null}
       <div className="flex min-h-0 flex-1">
         <ol className="w-56 shrink-0 overflow-y-auto border-r border-border py-1">
           {full.steps.map((candidate) => {
@@ -193,7 +222,9 @@ export const RunDetail = ({ run, project, definition, definitionsLoaded, onEditD
             : null)}
       </div>
       {/* The confirmation repeats the count and names every path the refusal
-          named, and it is the only way `deleteUncommitted` is ever sent. */}
+          named, and confirming sends those same paths back: the deletion happens
+          only if the checkout still holds exactly them. This dialog is the only
+          way `deleteUncommitted` is ever sent. */}
       <Dialog open={confirmingDelete} onOpenChange={(open) => { if (!open) setConfirmingDelete(false); }}>
         <DialogContent showCloseButton={false} className="max-w-sm gap-5">
           <DialogHeader>

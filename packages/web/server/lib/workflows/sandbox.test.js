@@ -151,12 +151,99 @@ describe('releaseSandbox', () => {
       .rejects.toThrow(/uncommitted changes/);
     expect(await fs.readFile(path.join(prepared.directory, 'scratch.txt'), 'utf8')).toBe('x');
 
-    // With it, the same read that refused answers what was removed.
-    const released = await releaseSandbox({ run: preparedRun, projectPath: root, git: gitService, deleteUncommitted: true });
+    // Confirming the list the refusal named deletes exactly that set, and the
+    // answer names what went.
+    const released = await releaseSandbox({
+      run: preparedRun,
+      projectPath: root,
+      git: gitService,
+      deleteUncommitted: true,
+      confirmed: ['scratch.txt'],
+    });
     expect(released).toMatchObject({ removed: true, deleted: ['scratch.txt'] });
     await expect(fs.stat(prepared.directory)).rejects.toThrow();
     // The branch is still the work a person merges, so it survives the deletion.
     expect(execFileSync('git', ['branch', '--list', prepared.branch], { cwd: root }).toString()).toContain(prepared.branch);
+  });
+
+  it('refuses a deletion that confirms nothing, and deletes nothing', async () => {
+    const subject = run();
+    const prepared = await prepareSandbox({ run: subject, projectPath: root, git: gitService });
+    const preparedRun = { ...subject, directory: prepared.directory, worktreeBranch: prepared.branch };
+    await fs.writeFile(path.join(prepared.directory, 'scratch.txt'), 'x');
+
+    // A bare flag names no path, so there is no confirmation to act on. The
+    // refusal carries the fresh list, so a screen can offer the count again.
+    await expect(releaseSandbox({ run: preparedRun, projectPath: root, git: gitService, deleteUncommitted: true }))
+      .rejects.toMatchObject({ code: 'conflict', status: 409, details: { uncommitted: ['scratch.txt'] } });
+
+    expect(await fs.readFile(path.join(prepared.directory, 'scratch.txt'), 'utf8')).toBe('x');
+  });
+
+  it('refuses a deletion the checkout no longer matches, naming what changed', async () => {
+    const subject = run();
+    const prepared = await prepareSandbox({ run: subject, projectPath: root, git: gitService });
+    const preparedRun = { ...subject, directory: prepared.directory, worktreeBranch: prepared.branch };
+    await fs.writeFile(path.join(prepared.directory, 'scratch.txt'), 'x');
+
+    // Refused for the two paths the person was shown …
+    await expect(releaseSandbox({ run: preparedRun, projectPath: root, git: gitService }))
+      .rejects.toThrow(/uncommitted changes/);
+    // … and a third appears before the confirmation arrives.
+    await fs.writeFile(path.join(prepared.directory, 'late.txt'), 'y');
+
+    const refusal = await releaseSandbox({
+      run: preparedRun,
+      projectPath: root,
+      git: gitService,
+      deleteUncommitted: true,
+      confirmed: ['scratch.txt'],
+    }).catch((error) => error);
+
+    // Nothing nobody named is deleted: the new path is refused by name, and the
+    // fresh read rides along so the offer can state the count that is real.
+    expect(refusal).toMatchObject({ code: 'conflict', status: 409 });
+    expect(refusal.message).toContain('late.txt');
+    // The order a status read reports paths in is not a fact the screen relies
+    // on, so this asserts the set.
+    expect([...refusal.details.uncommitted].sort()).toEqual(['late.txt', 'scratch.txt']);
+    expect(await fs.readFile(path.join(prepared.directory, 'scratch.txt'), 'utf8')).toBe('x');
+    expect(await fs.readFile(path.join(prepared.directory, 'late.txt'), 'utf8')).toBe('y');
+    expect(await fs.stat(prepared.directory)).toBeTruthy();
+
+    // Confirming the set that is actually there deletes it.
+    const released = await releaseSandbox({
+      run: preparedRun,
+      projectPath: root,
+      git: gitService,
+      deleteUncommitted: true,
+      confirmed: ['late.txt', 'scratch.txt'],
+    });
+    expect(released).toMatchObject({ removed: true });
+    expect([...released.deleted].sort()).toEqual(['late.txt', 'scratch.txt']);
+    await expect(fs.stat(prepared.directory)).rejects.toThrow();
+  });
+
+  it('refuses a deletion that confirms a path the checkout no longer holds', async () => {
+    const subject = run();
+    const prepared = await prepareSandbox({ run: subject, projectPath: root, git: gitService });
+    const preparedRun = { ...subject, directory: prepared.directory, worktreeBranch: prepared.branch };
+    await fs.writeFile(path.join(prepared.directory, 'scratch.txt'), 'x');
+
+    // The person confirmed two paths; one was committed in between, so the
+    // confirmation describes a checkout that is not this one any more.
+    const refusal = await releaseSandbox({
+      run: preparedRun,
+      projectPath: root,
+      git: gitService,
+      deleteUncommitted: true,
+      confirmed: ['scratch.txt', 'gone.txt'],
+    }).catch((error) => error);
+
+    expect(refusal).toMatchObject({ code: 'conflict', status: 409 });
+    expect(refusal.message).toContain('gone.txt');
+    expect(refusal.details).toEqual({ uncommitted: ['scratch.txt'] });
+    expect(await fs.readFile(path.join(prepared.directory, 'scratch.txt'), 'utf8')).toBe('x');
   });
 
   it('refuses to release when the checkout status cannot be read, and removes nothing', async () => {

@@ -445,8 +445,10 @@ export const createWorkflowEngine = ({
      * the directory would delete the only copy. The refusal names the paths — in
      * its message and, as `details.uncommitted`, in the body a screen reads — so
      * the person commits or discards them and asks again. `deleteUncommitted` is
-     * that person deciding otherwise: the release then deletes exactly the paths
-     * that same read saw, and the run is stamped as any release is.
+     * that person deciding otherwise, and `confirmed` is what they were shown:
+     * the removal happens only when a fresh status read is exactly that set, and
+     * answers the paths it deleted as `deleted` beside the run, so a screen can
+     * say what went rather than only that something did.
      *
      * It takes the project's lock for the same reason `cancelRun` refuses while
      * one is held: this writes the whole run. During the first step's
@@ -459,7 +461,7 @@ export const createWorkflowEngine = ({
      * the dead path. Holding the lock refuses that release `busy`, and the lock
      * it holds while removing a checkout refuses the step actions too.
      */
-    releaseSandbox: ({ projectId, projectPath, runId, deleteUncommitted = false }) => withLock(projectId, async () => {
+    releaseSandbox: ({ projectId, projectPath, runId, deleteUncommitted = false, confirmed = null }) => withLock(projectId, async () => {
       const run = await loadRun(projectId, runId);
       if (run.status === 'running' || run.status === 'waiting') {
         throw new WorkflowError('conflict', `run ${runId} is still running`, 409);
@@ -467,13 +469,15 @@ export const createWorkflowEngine = ({
       // A run that never took a checkout — a `working-tree` run, or one that
       // stopped before its first step — has nothing to release. Answering it as
       // it stands keeps `worktreeReleasedAt` meaning "a checkout was removed".
-      if (run.sandbox !== 'worktree' || !run.worktreeBranch || run.worktreeReleasedAt) return run;
-      const { removed } = await releaseRunSandbox({ run, projectPath, git: worktrees, deleteUncommitted });
-      if (!removed) return run;
+      if (run.sandbox !== 'worktree' || !run.worktreeBranch || run.worktreeReleasedAt) return { run, deleted: null };
+      const { removed, deleted } = await releaseRunSandbox({ run, projectPath, git: worktrees, deleteUncommitted, confirmed });
+      if (!removed) return { run, deleted: null };
       run.worktreeReleasedAt = now();
       const saved = await store.write(projectId, run);
       emit(saved);
-      return saved;
+      // The answer is the run plus what the removal deleted, which is the one
+      // fact a screen cannot read off the run: the paths are gone from disk.
+      return { run: saved, deleted: deleted ?? null };
     }),
 
     reconcile: () => reconcileRuns({

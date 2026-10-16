@@ -75,13 +75,13 @@ describe('createWorkflowRun', () => {
 });
 
 describe('releaseWorkflowSandbox', () => {
-  it('posts to the release action and reads the run out of the envelope', async () => {
-    responses = [{ status: 200, body: { run: { runId: 'r1', worktreeReleasedAt: 42 } } }];
-    const run = await releaseWorkflowSandbox('/Users/me/project', 'r1');
+  it('posts to the release action and reads the run and what was deleted out of the answer', async () => {
+    responses = [{ status: 200, body: { run: { runId: 'r1', worktreeReleasedAt: 42 }, deleted: ['out/one.md'] } }];
+    const released = await releaseWorkflowSandbox('/Users/me/project', 'r1');
     expect(calls[0].url).toContain('/api/workflows/runs/r1/sandbox/release');
     expect(calls[0].init.method).toBe('POST');
     expect(headersOf(0).get('x-opencode-directory')).toBe('/Users/me/project');
-    expect(run).toMatchObject({ runId: 'r1', worktreeReleasedAt: 42 });
+    expect(released).toMatchObject({ run: { runId: 'r1', worktreeReleasedAt: 42 }, deleted: ['out/one.md'] });
   });
 
   it('carries the server refusal, so a screen can show it', async () => {
@@ -89,10 +89,16 @@ describe('releaseWorkflowSandbox', () => {
     await expect(releaseWorkflowSandbox('/Users/me/project', 'r1')).rejects.toMatchObject({ status: 409, message: 'run r1 is still running' });
   });
 
-  it('asks the server to delete the uncommitted work only when told to', async () => {
-    responses = [{ status: 200, body: { run: { runId: 'r1', worktreeReleasedAt: 42 } } }];
-    await releaseWorkflowSandbox('/Users/me/project', 'r1', { deleteUncommitted: true });
-    expect(JSON.parse(String(calls[0].init.body))).toEqual({ deleteUncommitted: true });
+  it('sends the deletion and the paths it confirmed together, and only when told to', async () => {
+    responses = [{ status: 200, body: { run: { runId: 'r1', worktreeReleasedAt: 42 }, deleted: ['out/one.md'] } }];
+    await releaseWorkflowSandbox('/Users/me/project', 'r1', { deleteUncommitted: true, confirmed: ['out/one.md'] });
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ deleteUncommitted: true, confirmed: ['out/one.md'] });
+
+    // A release that deletes nothing sends no decision and no list, so the
+    // server reads exactly what it always did.
+    calls = [];
+    await releaseWorkflowSandbox('/Users/me/project', 'r1');
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({});
   });
 
   it('carries the paths a refusal named, so the confirmation can count them', async () => {

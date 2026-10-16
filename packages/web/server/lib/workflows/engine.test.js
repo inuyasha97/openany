@@ -722,7 +722,9 @@ describe('the worktree sandbox', () => {
 
       // The branch is what a person merges, so it is deliberately left behind.
       expect(calls.remove).toEqual([{ directory: root, input: { directory: finished.directory, deleteLocalBranch: false } }]);
-      expect(released.worktreeReleasedAt).toBe(42);
+      expect(released.run.worktreeReleasedAt).toBe(42);
+      // Nothing was deleted, so the answer says nothing was.
+      expect(released.deleted).toBeNull();
       await expect(fs.stat(finished.directory)).rejects.toThrow();
       expect(await store.read('proj-1', run.runId)).toMatchObject({ worktreeReleasedAt: 42 });
     });
@@ -767,12 +769,50 @@ describe('the worktree sandbox', () => {
           details: { uncommitted: ['out/one.md', 'notes.txt'] },
         });
 
-      const released = await engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId, deleteUncommitted: true });
+      const released = await engine.releaseSandbox({
+        projectId: 'proj-1',
+        projectPath: root,
+        runId: run.runId,
+        deleteUncommitted: true,
+        confirmed: ['out/one.md', 'notes.txt'],
+      });
 
-      expect(released.worktreeReleasedAt).toBe(42);
+      expect(released.run.worktreeReleasedAt).toBe(42);
+      // What the removal deleted rides back beside the run, so a screen can say
+      // what went instead of only that something did.
+      expect(released.deleted).toEqual(['out/one.md', 'notes.txt']);
       expect(calls.remove).toEqual([{ directory: root, input: { directory: finished.directory, deleteLocalBranch: false } }]);
       await expect(fs.stat(finished.directory)).rejects.toThrow();
       expect(await store.read('proj-1', run.runId)).toMatchObject({ worktreeReleasedAt: 42 });
+    });
+
+    it('refuses a deletion whose confirmation no longer matches the checkout', async () => {
+      const calls = { create: [], remove: [] };
+      const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+      await store.write('proj-1', { ...run, sandbox: 'worktree' });
+      const started = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+      const finished = await store.write('proj-1', { ...started, status: 'done' });
+      // The person confirmed `notes.txt`; a second file appeared between that
+      // refusal and this request, so the confirmation is stale.
+      calls.status = { isClean: false, files: [{ path: 'notes.txt' }, { path: 'late.md' }] };
+
+      await expect(engine.releaseSandbox({
+        projectId: 'proj-1',
+        projectPath: root,
+        runId: run.runId,
+        deleteUncommitted: true,
+        confirmed: ['notes.txt'],
+      })).rejects.toMatchObject({
+        code: 'conflict',
+        status: 409,
+        message: expect.stringContaining('late.md'),
+        details: { uncommitted: ['notes.txt', 'late.md'] },
+      });
+
+      // Nothing nobody named was deleted, and the run is not stamped released.
+      expect(calls.remove).toEqual([]);
+      expect((await store.read('proj-1', run.runId)).worktreeReleasedAt).toBeUndefined();
+      expect(await fs.stat(finished.directory).then(() => true)).toBe(true);
     });
 
     it('releases a checkout whose work is committed', async () => {
@@ -785,7 +825,8 @@ describe('the worktree sandbox', () => {
 
       const released = await engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId });
 
-      expect(released.worktreeReleasedAt).toBe(42);
+      expect(released.run.worktreeReleasedAt).toBe(42);
+      expect(released.deleted).toBeNull();
       expect(calls.remove).toEqual([{ directory: root, input: { directory: finished.directory, deleteLocalBranch: false } }]);
     });
 
@@ -842,7 +883,7 @@ describe('the worktree sandbox', () => {
       // run is not stamped as if one had been released.
       const released = await engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId });
 
-      expect(released.worktreeReleasedAt).toBeUndefined();
+      expect(released.run.worktreeReleasedAt).toBeUndefined();
       expect(calls.remove).toEqual([]);
       expect((await store.read('proj-1', run.runId)).worktreeReleasedAt).toBeUndefined();
     });
@@ -861,7 +902,7 @@ describe('the worktree sandbox', () => {
 
       const released = await engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId });
 
-      expect(released.worktreeReleasedAt).toBe(7);
+      expect(released.run.worktreeReleasedAt).toBe(7);
       expect(calls.remove).toEqual([]);
     });
   });

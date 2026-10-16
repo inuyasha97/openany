@@ -97,17 +97,21 @@ const uncommittedPaths = async (git, directory) => {
  * Remove a run's checkout.
  *
  * `deleteUncommitted` is the person's own decision, taken through a control that
- * names how many files it will delete: with it, the paths this call's single
- * status read saw are the paths it deletes, and it answers them as `deleted` so
- * the caller can say what went. Without it — the default, and every caller that
- * does not ask — a dirty checkout is refused and nothing is removed.
+ * names how many files it will delete; `confirmed` is that naming — the paths
+ * the person was shown. Because the removal deletes the whole directory, the
+ * deletion is allowed only when a fresh status read is exactly the confirmed
+ * set: a file that appeared between the refusal and the confirmation, or one
+ * that is no longer uncommitted, means the confirmation describes a different
+ * checkout than this one, so the release refuses and names what changed instead
+ * of deleting something nobody named. A flag without a list confirms nothing and
+ * is refused the same way, with the fresh paths so a screen can offer them.
  *
  * The override changes what happens to a dirty answer, never what a failed read
  * means: `uncommittedPaths` still throws, so a status read that failed for any
  * reason other than a missing repository refuses the release either way. A clean
  * checkout is read once and removed exactly as before, answering no `deleted`.
  */
-export const releaseSandbox = async ({ run, projectPath, git, deleteUncommitted = false }) => {
+export const releaseSandbox = async ({ run, projectPath, git, deleteUncommitted = false, confirmed = null }) => {
   if (run.sandbox !== 'worktree' || !run.worktreeBranch || !run.directory || run.directory === projectPath) {
     return { removed: false };
   }
@@ -126,6 +130,27 @@ export const releaseSandbox = async ({ run, projectPath, git, deleteUncommitted 
       409,
       { uncommitted: dirty },
     );
+  }
+  if (dirty.length > 0) {
+    // The paths are a set, not a sequence: two reads of one unchanged checkout
+    // may report them in a different order, and that is not a change.
+    const agreed = new Set(Array.isArray(confirmed) ? confirmed.filter((file) => typeof file === 'string') : []);
+    const appeared = dirty.filter((file) => !agreed.has(file));
+    const gone = [...agreed].filter((file) => !dirty.includes(file));
+    if (appeared.length > 0 || gone.length > 0) {
+      const changes = [
+        appeared.length > 0 ? `not confirmed but now uncommitted: ${appeared.slice(0, 20).join(', ')}` : null,
+        gone.length > 0 ? `confirmed but no longer uncommitted: ${gone.slice(0, 20).join(', ')}` : null,
+      ].filter(Boolean).join('; ');
+      throw new WorkflowError(
+        'conflict',
+        `the run's checkout changed since the deletion was confirmed, so nothing was deleted; ${changes}`,
+        409,
+        // The fresh read rides along so a screen replaces the list it confirmed
+        // — which is now wrong — with the one this refusal was made from.
+        { uncommitted: dirty },
+      );
+    }
   }
   // `removeWorktree(projectPath, { directory })`: the first argument is the
   // project the worktree belongs to, the second names the checkout to remove
