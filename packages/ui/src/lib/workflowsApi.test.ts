@@ -88,6 +88,20 @@ describe('releaseWorkflowSandbox', () => {
     responses = [{ status: 409, body: { error: 'run r1 is still running' } }];
     await expect(releaseWorkflowSandbox('/Users/me/project', 'r1')).rejects.toMatchObject({ status: 409, message: 'run r1 is still running' });
   });
+
+  it('asks the server to delete the uncommitted work only when told to', async () => {
+    responses = [{ status: 200, body: { run: { runId: 'r1', worktreeReleasedAt: 42 } } }];
+    await releaseWorkflowSandbox('/Users/me/project', 'r1', { deleteUncommitted: true });
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ deleteUncommitted: true });
+  });
+
+  it('carries the paths a refusal named, so the confirmation can count them', async () => {
+    responses = [{ status: 409, body: { error: "the run's checkout has uncommitted changes", uncommitted: ['out/one.md', 'notes.txt'] } }];
+    await expect(releaseWorkflowSandbox('/Users/me/project', 'r1')).rejects.toMatchObject({
+      status: 409,
+      uncommitted: ['out/one.md', 'notes.txt'],
+    });
+  });
 });
 
 describe('confirmWorkflowStep', () => {

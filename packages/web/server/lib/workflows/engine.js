@@ -18,11 +18,18 @@ import { prepareSandbox, releaseSandbox as releaseRunSandbox } from './sandbox.j
 import { runVerifiers as defaultRunChecks, recheckArtifacts as defaultRecheckArtifacts } from './verifiers.js';
 
 export class WorkflowError extends Error {
-  constructor(code, message, status) {
+  /**
+   * Structured facts a caller needs to act on the refusal, beside the message a
+   * person reads. The routes put them in the error body; the release's refusal
+   * carries the uncommitted paths so a screen can state what a deletion would
+   * remove without reading the checkout again.
+   */
+  constructor(code, message, status, details) {
     super(message);
     this.name = 'WorkflowError';
     this.code = code;
     this.status = status ?? (code === 'not-found' ? 404 : code === 'busy' || code === 'conflict' ? 409 : code === 'unavailable' ? 503 : 400);
+    if (details) this.details = details;
   }
 }
 
@@ -435,8 +442,11 @@ export const createWorkflowEngine = ({
      *
      * A dirty checkout is refused too: the engine writes no commit, so a step
      * whose prompt asked for none has left its output only there, and removing
-     * the directory would delete the only copy. The refusal names the paths, so
-     * the person commits or discards them and asks again.
+     * the directory would delete the only copy. The refusal names the paths — in
+     * its message and, as `details.uncommitted`, in the body a screen reads — so
+     * the person commits or discards them and asks again. `deleteUncommitted` is
+     * that person deciding otherwise: the release then deletes exactly the paths
+     * that same read saw, and the run is stamped as any release is.
      *
      * It takes the project's lock for the same reason `cancelRun` refuses while
      * one is held: this writes the whole run. During the first step's
@@ -449,7 +459,7 @@ export const createWorkflowEngine = ({
      * the dead path. Holding the lock refuses that release `busy`, and the lock
      * it holds while removing a checkout refuses the step actions too.
      */
-    releaseSandbox: ({ projectId, projectPath, runId }) => withLock(projectId, async () => {
+    releaseSandbox: ({ projectId, projectPath, runId, deleteUncommitted = false }) => withLock(projectId, async () => {
       const run = await loadRun(projectId, runId);
       if (run.status === 'running' || run.status === 'waiting') {
         throw new WorkflowError('conflict', `run ${runId} is still running`, 409);
@@ -458,7 +468,7 @@ export const createWorkflowEngine = ({
       // stopped before its first step — has nothing to release. Answering it as
       // it stands keeps `worktreeReleasedAt` meaning "a checkout was removed".
       if (run.sandbox !== 'worktree' || !run.worktreeBranch || run.worktreeReleasedAt) return run;
-      const { removed } = await releaseRunSandbox({ run, projectPath, git: worktrees });
+      const { removed } = await releaseRunSandbox({ run, projectPath, git: worktrees, deleteUncommitted });
       if (!removed) return run;
       run.worktreeReleasedAt = now();
       const saved = await store.write(projectId, run);

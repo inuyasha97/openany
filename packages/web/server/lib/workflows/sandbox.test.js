@@ -139,6 +139,26 @@ describe('releaseSandbox', () => {
     await expect(fs.stat(prepared.directory)).rejects.toThrow();
   });
 
+  it('deletes the uncommitted work it names, but only when the release asks it to', async () => {
+    const subject = run();
+    const prepared = await prepareSandbox({ run: subject, projectPath: root, git: gitService });
+    const preparedRun = { ...subject, directory: prepared.directory, worktreeBranch: prepared.branch };
+    await fs.writeFile(path.join(prepared.directory, 'scratch.txt'), 'x');
+
+    // Without the flag the guard refuses exactly as it did before it could
+    // delete, and the work is still there.
+    await expect(releaseSandbox({ run: preparedRun, projectPath: root, git: gitService }))
+      .rejects.toThrow(/uncommitted changes/);
+    expect(await fs.readFile(path.join(prepared.directory, 'scratch.txt'), 'utf8')).toBe('x');
+
+    // With it, the same read that refused answers what was removed.
+    const released = await releaseSandbox({ run: preparedRun, projectPath: root, git: gitService, deleteUncommitted: true });
+    expect(released).toMatchObject({ removed: true, deleted: ['scratch.txt'] });
+    await expect(fs.stat(prepared.directory)).rejects.toThrow();
+    // The branch is still the work a person merges, so it survives the deletion.
+    expect(execFileSync('git', ['branch', '--list', prepared.branch], { cwd: root }).toString()).toContain(prepared.branch);
+  });
+
   it('refuses to release when the checkout status cannot be read, and removes nothing', async () => {
     const subject = run();
     const prepared = await prepareSandbox({ run: subject, projectPath: root, git: gitService });
@@ -156,6 +176,26 @@ describe('releaseSandbox', () => {
 
     expect(removals).toEqual([]);
     expect(await fs.stat(prepared.directory)).toBeTruthy();
+  });
+
+  it('refuses even when asked to delete, when the status read failed for another reason', async () => {
+    const subject = run();
+    const prepared = await prepareSandbox({ run: subject, projectPath: root, git: gitService });
+    const preparedRun = { ...subject, directory: prepared.directory, worktreeBranch: prepared.branch };
+    const removals = [];
+    const git = {
+      getStatus: async () => { throw new Error('the status read failed'); },
+      removeWorktree: async (...args) => { removals.push(args); return gitService.removeWorktree(...args); },
+    };
+
+    // The override may delete what a read saw; it may not turn a read that said
+    // nothing into a deletion.
+    await expect(releaseSandbox({ run: preparedRun, projectPath: root, git, deleteUncommitted: true }))
+      .rejects.toMatchObject({ name: 'WorkflowError', code: 'conflict', status: 409, message: expect.stringContaining('could not be read') });
+
+    expect(removals).toEqual([]);
+    expect(await fs.stat(prepared.directory)).toBeTruthy();
+    await releaseSandbox({ run: preparedRun, projectPath: root, git: gitService });
   });
 
   it('releases when the status read fails because the checkout is gone', async () => {

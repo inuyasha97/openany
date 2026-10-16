@@ -748,6 +748,33 @@ describe('the worktree sandbox', () => {
       expect(await fs.stat(finished.directory).then(() => true)).toBe(true);
     });
 
+    it('names the uncommitted paths in the refusal, and removes them when the release is asked to', async () => {
+      const calls = { create: [], remove: [] };
+      const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });
+      await store.write('proj-1', { ...run, sandbox: 'worktree' });
+      const started = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId: run.runId, stepId: 'first' });
+      const finished = await store.write('proj-1', { ...started, status: 'done' });
+      calls.status = { isClean: false, files: [{ path: 'out/one.md' }, { path: 'notes.txt' }] };
+
+      // The refusal carries the same paths its message names, so a screen that
+      // has to state a count does not read the checkout a second time and
+      // cannot disagree with the read the removal will make.
+      await expect(engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId }))
+        .rejects.toMatchObject({
+          code: 'conflict',
+          status: 409,
+          message: expect.stringContaining('out/one.md'),
+          details: { uncommitted: ['out/one.md', 'notes.txt'] },
+        });
+
+      const released = await engine.releaseSandbox({ projectId: 'proj-1', projectPath: root, runId: run.runId, deleteUncommitted: true });
+
+      expect(released.worktreeReleasedAt).toBe(42);
+      expect(calls.remove).toEqual([{ directory: root, input: { directory: finished.directory, deleteLocalBranch: false } }]);
+      await expect(fs.stat(finished.directory)).rejects.toThrow();
+      expect(await store.read('proj-1', run.runId)).toMatchObject({ worktreeReleasedAt: 42 });
+    });
+
     it('releases a checkout whose work is committed', async () => {
       const calls = { create: [], remove: [] };
       const { engine, store, run, root } = await buildEngine({ overrides: { worktrees: fakeWorktrees(calls) } });

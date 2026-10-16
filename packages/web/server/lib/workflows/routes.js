@@ -22,7 +22,11 @@ const parseJsonBody = express.json({ limit: '1mb' });
 
 const respondWithError = (res, error, fallback) => {
   const status = Number.isInteger(error?.status) ? error.status : error?.code === 'ENOENT' ? 404 : 500;
-  return res.status(status).json({ error: error?.message ?? fallback });
+  // `details` is a refusal's structured half — the release's uncommitted paths,
+  // for one — and it rides beside the message so a screen can act on the same
+  // facts the refusal was made from. It is never a second answer: the status and
+  // the message stay the refusal's.
+  return res.status(status).json({ error: error?.message ?? fallback, ...(error?.details ?? {}) });
 };
 
 // The browser transport percent-encodes a directory hint and marks it with
@@ -345,7 +349,18 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
 
   app.post('/api/workflows/runs/:runId/sandbox/release', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {
     const runId = runIdOf(req, res);
-    return runId ? engine.releaseSandbox({ projectId, projectPath, runId }) : undefined;
+    if (!runId) return undefined;
+    // The one thing that may delete uncommitted work is a request that says so,
+    // and it says so with a boolean: a truthy string would read as consent the
+    // person never gave, so anything that is not a boolean or absent is refused
+    // before the engine is reached.
+    const deleteUncommitted = req.body?.deleteUncommitted;
+    if (deleteUncommitted !== undefined && typeof deleteUncommitted !== 'boolean') {
+      const error = new Error('deleteUncommitted must be a boolean or absent');
+      error.status = 400;
+      throw error;
+    }
+    return engine.releaseSandbox({ projectId, projectPath, runId, deleteUncommitted: deleteUncommitted === true });
   }));
 
   app.post('/api/workflows/runs/:runId/steps/:stepId/run', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {

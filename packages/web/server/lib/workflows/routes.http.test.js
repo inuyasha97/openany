@@ -168,9 +168,47 @@ describe('workflow routes', () => {
     const response = await request(app).post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/sandbox/release').set(SCOPE).send({});
     expect(response.status).toBe(200);
     // The project path is forwarded with the run, because releasing a checkout
-    // needs the repository the worktree belongs to.
-    expect(calls[0]).toEqual(['releaseSandbox', { projectId: 'proj-1', projectPath: '/tmp/proj', runId: '11111111-2222-4333-8444-555555555555' }]);
+    // needs the repository the worktree belongs to. A body that says nothing
+    // about deleting uncommitted work asks for exactly what it always did.
+    expect(calls[0]).toEqual(['releaseSandbox', { projectId: 'proj-1', projectPath: '/tmp/proj', runId: '11111111-2222-4333-8444-555555555555', deleteUncommitted: false }]);
     expect(response.body).toEqual({ run });
+  });
+
+  it('asks the engine to delete the uncommitted work only when the body says so', async () => {
+    const { app, calls } = createApp();
+    const response = await request(app)
+      .post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/sandbox/release')
+      .set(SCOPE)
+      .send({ deleteUncommitted: true });
+    expect(response.status).toBe(200);
+    expect(calls[0]).toEqual(['releaseSandbox', { projectId: 'proj-1', projectPath: '/tmp/proj', runId: '11111111-2222-4333-8444-555555555555', deleteUncommitted: true }]);
+  });
+
+  it('refuses a deleteUncommitted that is not a boolean', async () => {
+    const { app, calls } = createApp();
+    for (const value of ['yes', 1, null, {}]) {
+      const response = await request(app)
+        .post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/sandbox/release')
+        .set(SCOPE)
+        .send({ deleteUncommitted: value });
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: 'deleteUncommitted must be a boolean or absent' });
+    }
+    // A malformed body is answered before the engine is reached, so nothing was
+    // asked to delete anything.
+    expect(calls).toEqual([]);
+  });
+
+  it('carries the uncommitted paths of a release refusal beside its message', async () => {
+    const refusal = Object.assign(new Error("the run's checkout has uncommitted changes"), {
+      status: 409,
+      details: { uncommitted: ['out/one.md', 'notes.txt'] },
+    });
+    const { app } = createApp({ engine: { releaseSandbox: async () => { throw refusal; } } });
+    const response = await request(app).post('/api/workflows/runs/11111111-2222-4333-8444-555555555555/sandbox/release').set(SCOPE).send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: "the run's checkout has uncommitted changes", uncommitted: ['out/one.md', 'notes.txt'] });
   });
 
   it('refuses to release a worktree while the run is still going', async () => {

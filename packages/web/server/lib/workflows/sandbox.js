@@ -93,7 +93,21 @@ const uncommittedPaths = async (git, directory) => {
   }
 };
 
-export const releaseSandbox = async ({ run, projectPath, git }) => {
+/**
+ * Remove a run's checkout.
+ *
+ * `deleteUncommitted` is the person's own decision, taken through a control that
+ * names how many files it will delete: with it, the paths this call's single
+ * status read saw are the paths it deletes, and it answers them as `deleted` so
+ * the caller can say what went. Without it — the default, and every caller that
+ * does not ask — a dirty checkout is refused and nothing is removed.
+ *
+ * The override changes what happens to a dirty answer, never what a failed read
+ * means: `uncommittedPaths` still throws, so a status read that failed for any
+ * reason other than a missing repository refuses the release either way. A clean
+ * checkout is read once and removed exactly as before, answering no `deleted`.
+ */
+export const releaseSandbox = async ({ run, projectPath, git, deleteUncommitted = false }) => {
   if (run.sandbox !== 'worktree' || !run.worktreeBranch || !run.directory || run.directory === projectPath) {
     return { removed: false };
   }
@@ -101,16 +115,21 @@ export const releaseSandbox = async ({ run, projectPath, git }) => {
   // its output only in this checkout — and the removal below deletes the
   // directory. Refusing while it is dirty, and naming the paths, is what keeps a
   // release from deleting work no commit preserved; the person commits or
-  // discards them and asks again.
+  // discards them, or confirms the deletion the paths name.
   const dirty = await uncommittedPaths(git, run.directory);
-  if (dirty.length > 0) {
+  if (dirty.length > 0 && !deleteUncommitted) {
     const shown = dirty.slice(0, 20);
     const more = dirty.length - shown.length;
-    throw new WorkflowError('conflict', `the run's checkout has uncommitted changes; commit or discard them before releasing the checkout: ${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`, 409);
+    throw new WorkflowError(
+      'conflict',
+      `the run's checkout has uncommitted changes; commit or discard them before releasing the checkout: ${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`,
+      409,
+      { uncommitted: dirty },
+    );
   }
   // `removeWorktree(projectPath, { directory })`: the first argument is the
   // project the worktree belongs to, the second names the checkout to remove
   // (`service.js:5118`). The branch is deliberately left behind.
   await git.removeWorktree(projectPath, { directory: run.directory, deleteLocalBranch: false });
-  return { removed: true };
+  return dirty.length > 0 ? { removed: true, deleted: dirty } : { removed: true };
 };

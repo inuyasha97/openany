@@ -156,14 +156,22 @@ export interface WorkflowDefinition {
   file: string;
 }
 
-/** A refusal from the workflow routes: the server's own message, and the status beside it. */
+/**
+ * A refusal from the workflow routes: the server's own message, and the status
+ * beside it. A refusal that carries structured facts — the release's
+ * `uncommitted` paths, which a screen must count and name before it may ask for
+ * their deletion — keeps them here rather than leaving the screen to parse the
+ * message or read the checkout again.
+ */
 export class WorkflowRequestError extends Error {
   readonly status: number;
+  readonly uncommitted: string[] | null;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, uncommitted: string[] | null = null) {
     super(message);
     this.name = 'WorkflowRequestError';
     this.status = status;
+    this.uncommitted = uncommitted;
   }
 }
 
@@ -181,9 +189,13 @@ const request = async <T>(path: string, directory: string, init: RequestInit = {
     ...init,
     headers: { 'x-opencode-directory': directory, ...(init.headers ?? {}) },
   });
-  const body = await response.json().catch(() => null) as (T & { error?: string }) | null;
+  const body = await response.json().catch(() => null) as (T & { error?: string; uncommitted?: string[] }) | null;
   if (!response.ok) {
-    throw new WorkflowRequestError(body?.error ?? `The request failed with ${response.status}`, response.status);
+    throw new WorkflowRequestError(
+      body?.error ?? `The request failed with ${response.status}`,
+      response.status,
+      Array.isArray(body?.uncommitted) ? body.uncommitted : null,
+    );
   }
   if (!body) throw new WorkflowRequestError('The server answered with no body', response.status);
   return body;
@@ -251,9 +263,22 @@ export const cancelWorkflowRun = async (directory: string, runId: string): Promi
 /**
  * Remove a finished run's checkout. The branch is left behind, so this is
  * tidy-up, not a merge; the server refuses while the run is still going.
+ *
+ * A checkout that holds uncommitted work is refused, with the paths in the
+ * refusal, because removing it would delete work no commit preserved.
+ * `deleteUncommitted` is that deletion asked for on purpose — the caller sends
+ * it only after a person has confirmed the count the refusal named.
  */
-export const releaseWorkflowSandbox = async (directory: string, runId: string): Promise<WorkflowRun> =>
-  (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/sandbox/release`, directory)).run;
+export const releaseWorkflowSandbox = async (
+  directory: string,
+  runId: string,
+  options: { deleteUncommitted?: boolean } = {},
+): Promise<WorkflowRun> =>
+  (await post<{ run: WorkflowRun }>(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/sandbox/release`,
+    directory,
+    options.deleteUncommitted === true ? { deleteUncommitted: true } : {},
+  )).run;
 
 export const runWorkflowStep = async (directory: string, runId: string, stepId: string): Promise<WorkflowRun> =>
   (await post<{ run: WorkflowRun }>(`/api/workflows/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/run`, directory)).run;
