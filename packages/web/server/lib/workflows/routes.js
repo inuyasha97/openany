@@ -378,7 +378,11 @@ export const registerWorkflowRoutes = (app, { workflowsRuntime }) => {
     // This route answers what the removal deleted beside the run, not the plain
     // `{ run }` envelope: the deleted paths are gone from disk, so the answer is
     // the only place a screen can learn what went.
-    return res.json(released);
+    res.json(released);
+    // Answered here, so the wrapper around this handler must not answer the
+    // `{ run }` envelope too: a second `res.json` over sent headers throws, and
+    // the error path throws again and takes the connection with it.
+    return undefined;
   }));
 
   app.post('/api/workflows/runs/:runId/steps/:stepId/run', parseJsonBody, withProject(({ projectId, projectPath, req }, res) => {

@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
@@ -181,6 +182,60 @@ describe('workflow routes', () => {
     // The answer carries what the removal deleted beside the run, because the
     // paths are gone from disk by the time a screen could read the run.
     expect(response.body).toEqual({ run, deleted: null });
+  });
+
+  // Release is the one route that answers outside the `{ run }` envelope, and
+  // the `withProject` wrapper answers for every handler that does not return
+  // `undefined`. A handler that answers itself and returns its response object
+  // is answered a second time with `res.json({ run: <Response> })`: express 5.2.1
+  // stringifies the response object it was handed, throws on the cycle, and the
+  // catch then throws `ERR_HTTP_HEADERS_SENT` over sent headers, which finalhandler
+  // turns into a destroyed socket. The 200 still reaches the client, so a
+  // one-request test cannot see it: both requests below ride one keep-alive
+  // socket, and the second one only answers if the first left the connection
+  // alive.
+  it('answers a release once, leaving the connection for the next request', async () => {
+    const { app } = createApp();
+    const server = await new Promise((resolve) => {
+      const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+    });
+    const connections = [];
+    server.on('connection', (socket) => connections.push(socket));
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    const release = () => new Promise((resolve, reject) => {
+      const call = http.request({
+        host: '127.0.0.1',
+        port: server.address().port,
+        path: `/api/workflows/runs/${run.runId}/sandbox/release`,
+        method: 'POST',
+        agent,
+        headers: { ...SCOPE, 'content-type': 'application/json', 'content-length': 2 },
+      }, (response) => {
+        const chunks = [];
+        response.on('data', (chunk) => chunks.push(chunk));
+        response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString() }));
+      });
+      call.on('error', reject);
+      call.end('{}');
+    });
+    try {
+      const first = await release();
+      expect(first.status).toBe(200);
+      expect(JSON.parse(first.body)).toEqual({ run, deleted: null });
+      // The stalled `withProject` tail throws after the first answer is out, so
+      // the second request is the one that meets the wreckage.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const second = await release();
+      expect(second.status).toBe(200);
+      expect(JSON.parse(second.body)).toEqual({ run, deleted: null });
+      // Both requests over one connection: the first answer went out without
+      // anyone destroying the socket under it.
+      expect(connections).toHaveLength(1);
+    } finally {
+      agent.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it('asks the engine to delete the uncommitted work only when the body says so, and forwards the paths it confirmed', async () => {
