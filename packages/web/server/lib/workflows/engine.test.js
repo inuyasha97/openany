@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,6 +27,11 @@ steps:
 
 const definition = parseDefinition(definitionText, { file: 'two-step.yaml' }).definition;
 
+// The hash a run carries is the one the create route writes: the parsed
+// definition, stringified. A fixture run that did not carry it would be a run
+// from before runs recorded one, which is a different case.
+const hashOf = (parsed) => createHash('sha256').update(JSON.stringify(parsed)).digest('hex');
+
 // One engine per test, each with its own project directory; the suite removes
 // them afterwards so a run never leaves `wf-engine-*` directories behind.
 const roots = [];
@@ -34,7 +40,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
 });
 
-const buildEngine = async ({ overrides = {} } = {}) => {
+const buildEngine = async ({ overrides = {}, workflowHash = hashOf(definition) } = {}) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-engine-'));
   roots.push(root);
   const run = {
@@ -43,7 +49,7 @@ const buildEngine = async ({ overrides = {} } = {}) => {
     directory: root,
     workflowId: 'two-step',
     workflowVersion: 1,
-    workflowHash: 'hash',
+    workflowHash,
     inputs: { request: 'the thing' },
     status: 'idle',
     cursor: 'first',
@@ -161,7 +167,10 @@ describe('startStep', () => {
   });
 
   it('never marks a step done without a person, whatever the verifiers say', async () => {
-    const { engine, root, runId } = await buildEngine({ overrides: { definitions: { read: async () => autoDefinition } } });
+    const { engine, root, runId } = await buildEngine({
+      workflowHash: hashOf(autoDefinition),
+      overrides: { definitions: { read: async () => autoDefinition } },
+    });
     await fs.writeFile(path.join(root, 'out/a.md'), 'x');
     const run = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
     expect(run.steps[0].status).toBe('waiting_confirm');
@@ -206,6 +215,7 @@ describe('startStep', () => {
 
   it('runs a step whose host carries no auto-accept toggle', async () => {
     const { engine, root, runId } = await buildEngine({
+      workflowHash: hashOf(autoPermissionsDefinition),
       overrides: { definitions: { read: async () => autoPermissionsDefinition }, host: hostWithoutAutoAccept() },
     });
     await fs.writeFile(path.join(root, 'out/a.md'), 'x');
@@ -321,6 +331,7 @@ steps:
     session: reuse
 `, { file: 'two-step.yaml' }).definition;
     const { engine, root, runId, prompts } = await buildEngine({
+      workflowHash: hashOf(threeSteps),
       overrides: { definitions: { read: async () => threeSteps }, stepIds: ['first', 'second', 'third'] },
     });
     await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
@@ -585,6 +596,123 @@ describe('verifyStep', () => {
   });
 });
 
+describe('a definition that changed underneath the run', () => {
+  // Version 2 of the same workflow: same id, same step ids, a different file.
+  const editedDefinition = parseDefinition(`
+id: two-step
+name: Two step
+version: 2
+sandbox: worktree
+inputs:
+  - name: request
+    required: true
+steps:
+  - id: first
+    prompt: "Do {{request}}"
+    verify:
+      artifacts: ["out/*.md"]
+  - id: second
+    prompt: "Check it another way"
+    session: reuse
+`, { file: 'two-step.yaml' }).definition;
+
+  // The engine re-reads the definition on every advance, so a reader the test
+  // can edit stands in for the file being edited between two steps.
+  const editableDefinitions = (initial) => {
+    const reader = { current: initial, read: async () => reader.current };
+    return reader;
+  };
+
+  it('blocks a step when the definition changed under the run', async () => {
+    const definitions = editableDefinitions(definition);
+    const { engine, root, runId, prompts, store } = await buildEngine({ overrides: { definitions } });
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    definitions.current = editedDefinition;
+
+    const next = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'second' });
+
+    expect(next.steps[1].status).toBe('blocked');
+    // The note says what happened and what to do about it, not a code.
+    expect(next.steps[1].note).toMatch(/changed since this run started/);
+    expect(next.steps[1].note).toMatch(/restore the definition/);
+    expect(next.steps[1].note).toMatch(/start a new run/);
+    expect(next.status).toBe('waiting');
+    // Nothing was dispatched against the definition the run did not start with,
+    // and the block is on disk, not only in the answer.
+    expect(prompts).toHaveLength(1);
+    expect((await store.read('proj-1', runId)).steps[1]).toMatchObject({ status: 'blocked', note: next.steps[1].note });
+  });
+
+  it('refuses a continued prompt and a re-check for the same reason', async () => {
+    const definitions = editableDefinitions(definition);
+    const { engine, root, runId, prompts } = await buildEngine({ overrides: { definitions } });
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    definitions.current = editedDefinition;
+
+    const continued = await engine.continueStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first', text: 'tighten it' });
+    expect(continued.steps[0].status).toBe('blocked');
+    expect(continued.steps[0].note).toMatch(/changed since this run started/);
+    expect(prompts).toHaveLength(1);
+
+    const verified = await engine.verifyStep({ projectId: 'proj-1', runId, stepId: 'first' });
+    expect(verified.steps[0].status).toBe('blocked');
+    expect(verified.steps[0].note).toMatch(/changed since this run started/);
+  });
+
+  it('runs the step again once the definition is back, because the block is not a tombstone', async () => {
+    const definitions = editableDefinitions(definition);
+    const { engine, root, runId, prompts } = await buildEngine({ overrides: { definitions } });
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+    definitions.current = editedDefinition;
+    await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'second' });
+    definitions.current = definition;
+
+    const restored = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'second' });
+
+    expect(restored.steps[1].status).toBe('waiting_confirm');
+    expect(prompts).toHaveLength(2);
+  });
+
+  it('leaves a finished run alone, whatever the definition says now', async () => {
+    const definitions = editableDefinitions(editedDefinition);
+    const { engine, store, run, runId, root } = await buildEngine({ overrides: { definitions } });
+    await store.write(run.projectId, {
+      ...run,
+      status: 'done',
+      cursor: null,
+      steps: run.steps.map((step) => ({ ...step, status: 'done' })),
+    });
+
+    const calls = [
+      () => engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' }),
+      () => engine.continueStep({ projectId: 'proj-1', runId, stepId: 'first', text: 'more' }),
+      () => engine.verifyStep({ projectId: 'proj-1', runId, stepId: 'first' }),
+    ];
+    for (const call of calls) await expect(call()).rejects.toMatchObject({ code: 'conflict' });
+
+    const saved = await store.read('proj-1', runId);
+    expect(saved.status).toBe('done');
+    expect(saved.steps.map((step) => step.status)).toEqual(['done', 'done']);
+    expect(saved.steps.every((step) => step.note === null)).toBe(true);
+  });
+
+  it('blocks nothing for a run that carries no hash, because there is nothing to compare', async () => {
+    const definitions = editableDefinitions(editedDefinition);
+    const { engine, store, run, runId, root, prompts } = await buildEngine({ overrides: { definitions } });
+    // A run written before runs recorded a hash has no such field on disk.
+    await store.write(run.projectId, { ...run, workflowHash: undefined });
+    await fs.writeFile(path.join(root, 'out/a.md'), 'x');
+
+    const started = await engine.startStep({ projectId: 'proj-1', projectPath: root, runId, stepId: 'first' });
+
+    expect(started.steps[0].status).toBe('waiting_confirm');
+    expect(prompts).toHaveLength(1);
+  });
+});
+
 describe('the worktree sandbox', () => {
   // Every checkout the fake hands out lives under the same temp root the engine
   // fixtures use, so `afterEach` removes them too.
@@ -622,6 +750,7 @@ describe('the worktree sandbox', () => {
       setAutoAccept: async (...args) => { calls.autoAccept.push(args); },
     };
     const { engine, store, run, root } = await buildEngine({
+      workflowHash: hashOf(autoPermissionsDefinition),
       overrides: {
         worktrees,
         host,

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +14,11 @@ vi.mock('../git/index.js', () => ({
 }));
 import * as gitIndex from '../git/index.js';
 import { createWorkflowRuntime } from './runtime.js';
+
+// The hash a run carries is the one the create route writes: the parsed
+// definition, stringified. The engine re-reads and re-hashes on every advance,
+// so a fixture with any other value is a run whose definition has changed.
+const hashOf = (parsed) => createHash('sha256').update(JSON.stringify(parsed)).digest('hex');
 
 const createRuntime = async (overrides = {}) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wf-runtime-'));
@@ -47,13 +53,14 @@ describe('createWorkflowRuntime', () => {
       path.join(projectPath, '.openchamber/workflows/a.yaml'),
       'id: a\nname: A\nversion: 1\nsandbox: worktree\nsteps:\n  - id: first\n    prompt: "do it"\n',
     );
+    const definition = await runtime.definitions.read('proj-1', 'a');
     await runtime.store.create({
       runId: '11111111-2222-4333-8444-555555555555',
       projectId: 'proj-1',
       directory: projectPath,
       workflowId: 'a',
       workflowVersion: 1,
-      workflowHash: 'h',
+      workflowHash: hashOf(definition),
       inputs: {},
       status: 'idle',
       cursor: 'first',
@@ -90,6 +97,7 @@ describe('createWorkflowRuntime', () => {
       path.join(projectPath, '.openchamber/workflows/a.yaml'),
       'id: a\nname: A\nversion: 1\nsandbox: worktree\nsteps:\n  - id: first\n    prompt: "do it"\n    permissions: auto\n',
     );
+    const definition = await runtime.definitions.read('proj-1', 'a');
     const runId = '22222222-2222-4333-8444-555555555555';
     await runtime.store.create({
       runId,
@@ -97,7 +105,7 @@ describe('createWorkflowRuntime', () => {
       directory: projectPath,
       workflowId: 'a',
       workflowVersion: 1,
-      workflowHash: 'h',
+      workflowHash: hashOf(definition),
       inputs: {},
       status: 'idle',
       cursor: 'first',

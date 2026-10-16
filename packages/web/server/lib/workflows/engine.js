@@ -12,6 +12,7 @@
  * ids currently executing, and `runUntilStop` stops at the first stop, so a
  * second click answers `busy` instead of starting a second attempt.
  */
+import { createHash } from 'node:crypto';
 import { substituteInputs } from './prompts.js';
 import { reconcileRuns as defaultReconcile } from './resume.js';
 import { prepareSandbox, releaseSandbox as releaseRunSandbox } from './sandbox.js';
@@ -118,6 +119,32 @@ export const createWorkflowEngine = ({
     return definition;
   };
 
+  /**
+   * A run executes the definition it was created from, and that definition is
+   * re-read on every advance — an edit between two steps would otherwise change
+   * what the run is doing halfway through, silently. So the freshly parsed
+   * definition is hashed the way the create route hashes it and compared with
+   * the hash the run carries. A run written before runs recorded a hash has
+   * nothing to compare and is left to run as it always did.
+   */
+  const definitionHash = (definition) => createHash('sha256').update(JSON.stringify(definition)).digest('hex');
+
+  /**
+   * Stop a step whose run is no longer on the workflow it began with, in the
+   * shape the missing-input and worktree failures use: the step is `blocked`,
+   * the run waits, and the note names what happened and the ways forward. The
+   * step is not settled, so restoring the definition lets it run again.
+   */
+  const blockIfDefinitionChanged = async ({ projectId, run, step, definition }) => {
+    if (!run.workflowHash || definitionHash(definition) === run.workflowHash) return null;
+    step.status = 'blocked';
+    step.note = `the workflow definition ${run.workflowId} changed since this run started, so the run cannot continue on the definition it began with: restore the definition, or start a new run`;
+    run.status = 'waiting';
+    const saved = await store.write(projectId, run);
+    emit(saved);
+    return saved;
+  };
+
   const findStep = (run, stepId) => {
     const step = run.steps.find((entry) => entry.id === stepId);
     if (!step) throw new WorkflowError('not-found', `step ${stepId} is not part of the run`, 404);
@@ -154,6 +181,9 @@ export const createWorkflowEngine = ({
     const declared = definition.steps.find((entry) => entry.id === stepId);
     if (!declared) throw new WorkflowError('not-found', `step ${stepId} is not declared by ${run.workflowId}`, 404);
     const step = assertStepIsOpen(findStep(run, stepId));
+
+    const changed = await blockIfDefinitionChanged({ projectId, run, step, definition });
+    if (changed) return changed;
 
     const { text, missing } = substituteInputs(declared.prompt, run.inputs ?? {});
     if (missing.length > 0) {
@@ -384,6 +414,8 @@ export const createWorkflowEngine = ({
         const definition = await loadStepDefinition(projectId, run);
         const declared = definition.steps.find((entry) => entry.id === stepId);
         const step = findStep(run, stepId);
+        const changed = await blockIfDefinitionChanged({ projectId, run, step, definition });
+        if (changed) return changed;
         const sessionId = step.attempts.at(-1)?.sessionId;
         if (!declared || !sessionId) throw new WorkflowError('conflict', `step ${stepId} has no session to continue`, 409);
         return runPromptInSession({ projectId, run, step, declared, sessionId, text: trimmed });
@@ -402,6 +434,8 @@ export const createWorkflowEngine = ({
       // checks stays available where the answer still matters (`waiting_confirm`,
       // `needs_work`).
       const step = assertStepIsOpen(findStep(run, stepId));
+      const changed = await blockIfDefinitionChanged({ projectId, run, step, definition });
+      if (changed) return changed;
       const attempt = step.attempts.at(-1);
       if (!declared || !attempt) throw new WorkflowError('conflict', `step ${stepId} has not run yet`, 409);
       attempt.verify = await runChecks({ step: declared, directory: run.directory });

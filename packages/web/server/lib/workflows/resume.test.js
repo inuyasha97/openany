@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,10 @@ import { recheckArtifacts, runVerifiers } from './verifiers.js';
 
 let root;
 let store;
+
+// The hash a run carries is the one the create route writes: the parsed
+// definition, stringified. The engine re-reads and re-hashes on every advance.
+const hashOf = (parsed) => createHash('sha256').update(JSON.stringify(parsed)).digest('hex');
 
 const baseRun = (overrides = {}) => ({
   runId: '11111111-2222-4333-8444-555555555555',
@@ -273,11 +278,15 @@ describe('reconcileRuns and the session of an interrupted step', () => {
   });
 
   it('lets a step whose turn ended before the restart be confirmed', async () => {
-    await store.create(baseRun());
+    const definition = { id: 'two-step', version: 1, steps: [{ id: 'first', prompt: 'x' }, { id: 'second', prompt: 'y' }] };
+    // The run carries the hash of the definition the engine will read, the way a
+    // run created through the route does: this test is about reopening an
+    // interrupted step, not about a definition that changed.
+    await store.create(baseRun({ workflowHash: hashOf(definition) }));
     await reconcileRuns(deps({ now: () => 42 }));
     const engine = createWorkflowEngine({
       store,
-      definitions: { read: async () => ({ id: 'two-step', version: 1, steps: [{ id: 'first', prompt: 'x' }, { id: 'second', prompt: 'y' }] }) },
+      definitions: { read: async () => definition },
       host: { createSession: async () => ({ id: 'session-1' }), prompt: async () => true, getSessionStatus: async () => ({ busy: false }), listSessions: async () => [{ id: 'session-9' }], renameSession: async () => {}, setModel: async () => {}, setAutoAccept: async () => {} },
       runChecks: async () => ({ ok: true, artifacts: [], commands: [] }),
       now: () => 42,
